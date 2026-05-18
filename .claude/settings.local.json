@@ -9,7 +9,14 @@
       "Bash(/home/florian/.bun/bin/bun build *)",
       "Bash(echo \"build exit: $?\")",
       "Bash(/home/florian/.bun/bin/bun run *)",
-      "Bash(echo \"exit: $?\")"
+      "Bash(echo \"exit: $?\")",
+      "Bash(env -u TMUX /home/florian/.bun/bin/bun run src/index.ts)",
+      "Bash(env TMUX=test /home/florian/.bun/bin/bun run src/index.ts --no-tmux-guard --attach 9999)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(tmux new-window *)",
+      "Bash(tmux send-keys *)",
+      "Bash(tmux capture-pane *)"
     ]
   }
 }
