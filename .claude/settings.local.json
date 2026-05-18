@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"new URL\\\\|fetch.*\\\\`http\" /home/florian/Gin-AI/projects/opentmux/src --include=\"*.ts\")",
+      "Bash(bun --version)",
+      "Bash(~/.bun/bin/bun --version)",
+      "Read(//mnt/nfs/Florian/Gin-AI/projects/opentmux/src/bin/**)",
+      "Bash(/home/florian/.bun/bin/bun install *)",
+      "Bash(/home/florian/.bun/bin/bun build *)",
+      "Bash(echo \"build exit: $?\")",
+      "Bash(/home/florian/.bun/bin/bun run *)",
+      "Bash(echo \"exit: $?\")"
+    ]
+  }
+}
