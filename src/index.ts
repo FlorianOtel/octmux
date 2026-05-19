@@ -1,20 +1,44 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { createInterface } from "node:readline";
 import { filterEvent } from "./events.ts";
+import { findFreePort, spawnOpencodeServer, type ServerHandle } from "./server-lifecycle.ts";
 
 // ---------------------------------------------------------------------------
-// Arg parsing — only --attach <port> for Phase 0
+// Arg parsing — Phase 2: help, version, attach vs auto-spawn, tmux guard
 // ---------------------------------------------------------------------------
 
-const attachIdx = process.argv.indexOf("--attach");
-const port = attachIdx !== -1 ? parseInt(process.argv[attachIdx + 1], 10) : NaN;
+const args = process.argv.slice(2);
 
-if (isNaN(port)) {
-  console.error("Usage: octmux --attach <port>");
+if (args.includes("--help") || args.includes("-h")) {
+  console.log(`octmux — text REPL UI for opencode
+
+Usage:
+  octmux                    auto-spawn opencode server, enter REPL
+  octmux --attach <port>    attach to a running server on <port>
+  octmux --help             show this help
+  octmux --version          show version
+
+Flags:
+  --no-tmux-guard           allow running outside tmux (scripts / CI)`);
+  process.exit(0);
+}
+
+if (args.includes("--version")) {
+  console.log("0.0.0");
+  process.exit(0);
+}
+
+const noTmuxGuard = args.includes("--no-tmux-guard");
+const attachIdx = args.indexOf("--attach");
+const attachPort = attachIdx !== -1 ? parseInt(args[attachIdx + 1], 10) : NaN;
+
+if (!process.env.TMUX && !noTmuxGuard) {
+  console.error("octmux must run inside tmux.\nStart a tmux session first, or pass --no-tmux-guard to override.");
   process.exit(1);
 }
 
-const baseUrl = `http://127.0.0.1:${port}`;
+let baseUrl: string;
+let serverHandle: ServerHandle | null = null;
 
 // ---------------------------------------------------------------------------
 // Health probe — mirrors opentmux isOpencodeHealthy pattern
@@ -36,23 +60,38 @@ async function isOpencodeHealthy(url: string): Promise<boolean> {
   }
 }
 
-if (!(await isOpencodeHealthy(baseUrl))) {
-  console.error(`health: failed — no opencode server responding on port ${port}`);
-  process.exit(1);
+if (!isNaN(attachPort)) {
+  // Attach mode: connect to an existing server
+  baseUrl = `http://127.0.0.1:${attachPort}`;
+  if (!(await isOpencodeHealthy(baseUrl))) {
+    console.error(`health: failed — no opencode server responding on port ${attachPort}`);
+    process.exit(1);
+  }
+} else {
+  // Auto-spawn mode: find a free port and start the server
+  const port = await findFreePort(4096, 4106);
+  if (port === null) {
+    console.error("no free port available in [4096, 4106]");
+    process.exit(1);
+  }
+  console.log(`spawning opencode server on port ${port}…`);
+  try {
+    serverHandle = await spawnOpencodeServer(port);
+  } catch (err) {
+    console.error(`failed to spawn opencode server: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+  baseUrl = serverHandle.url;
+  console.log(`opencode server ready on port ${port}`);
 }
 
-console.log("health: ok");
-
-// ---------------------------------------------------------------------------
-// SDK smoke test — list sessions and print the count
-// ---------------------------------------------------------------------------
-
 const client = createOpencodeClient({ baseUrl });
-const result = await client.session.list({});
 
-// The SDK uses a fields-style result; data may be undefined on error.
-const sessions = result.data ?? [];
-console.log(`sessions: ${sessions.length}`);
+// Graceful shutdown on external SIGTERM (e.g. systemd / tmux kill-pane)
+process.on("SIGTERM", async () => {
+  await serverHandle?.dispose();
+  process.exit(0);
+});
 
 // ---------------------------------------------------------------------------
 // Session setup — create a new session for this REPL invocation
@@ -75,6 +114,10 @@ let resolveIdle: (() => void) | null = null;
 // Track if we're currently generating (for Ctrl-C handling).
 let isGenerating = false;
 
+// Double-Ctrl-C exit guard: first Ctrl-C warns, second exits within 3s.
+let pendingExit = false;
+let pendingExitTimer: ReturnType<typeof setTimeout> | null = null;
+
 const eventStream = await client.global.event({});
 
 const sseLoop = (async () => {
@@ -94,11 +137,22 @@ const sseLoop = (async () => {
     } else if (replEvent.kind === "session-idle") {
       // End of assistant turn: newline + unblock the REPL.
       isGenerating = false;
+      pendingExit = false;
+      if (pendingExitTimer) { clearTimeout(pendingExitTimer); pendingExitTimer = null; }
       process.stdout.write("\n");
       resolveIdle?.();
       resolveIdle = null;
     } else if (replEvent.kind === "part-removed") {
       // buffer already invalidated in filterEvent(); no display change
+    } else if (replEvent.kind === "session-status") {
+      if (replEvent.status === "retry") {
+        process.stdout.write("[retrying…]\n");
+      }
+      // busy and idle are covered by "generating" and "session-idle"
+    } else if (replEvent.kind === "permission-asked") {
+      await respondPermission(replEvent.permID, replEvent.title);
+    } else if (replEvent.kind === "question-asked") {
+      await respondQuestion(replEvent.reqID, replEvent.questions);
     }
   }
 })();
@@ -121,22 +175,87 @@ function waitForIdle(): Promise<void> {
   });
 }
 
+async function respondPermission(permID: string, title: string): Promise<void> {
+  return new Promise((resolve) => {
+    rl.question(`? Allow: ${title}\n  y=once  a=always  n=reject: `, async (ans) => {
+      const response =
+        ans.trim().toLowerCase() === "a" ? "always" :
+        ans.trim().toLowerCase() === "n" ? "reject" :
+        "once";
+      await client.postSessionIdPermissionsPermissionId({
+        path: { id: sessionID, permissionID: permID },
+        body: { response },
+      });
+      resolve();
+    });
+  });
+}
+
+async function respondQuestion(
+  reqID: string,
+  questions: Array<{
+    question: string; options: Array<{ label: string; description: string }>;
+    multiple?: boolean; custom?: boolean;
+  }>
+): Promise<void> {
+  const answers: string[][] = [];
+  for (const q of questions) {
+    process.stdout.write(`\n? ${q.question}\n`);
+    q.options.forEach((opt, i) => {
+      process.stdout.write(`  ${i + 1}. ${opt.label} — ${opt.description}\n`);
+    });
+    const ans = await new Promise<string>((resolve) =>
+      rl.question(q.multiple ? "  Enter numbers (comma-separated): " : "  Enter number: ", resolve)
+    );
+    const picked = ans.split(",").map((s) => {
+      const n = parseInt(s.trim(), 10);
+      return isNaN(n) || n < 1 || n > q.options.length
+        ? q.options[0].label
+        : q.options[n - 1].label;
+    });
+    answers.push(picked);
+  }
+  const resp = await fetch(`${baseUrl}/question/${reqID}/reply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answers }),
+  });
+  if (!resp.ok) {
+    process.stderr.write(`[question reply failed: ${resp.statusText}]\n`);
+  }
+}
+
 // EOF (Ctrl-D)
 rl.on("close", async () => {
   process.stdout.write("\n");
+  await serverHandle?.dispose();
   process.exit(0);
 });
 
-// Ctrl-C: abort generation if active, else exit
+// Ctrl-C: abort generation if active; otherwise warn on first press, exit on second within 3s.
 rl.on("SIGINT", async () => {
   if (isGenerating) {
+    // During generation: abort only, never exit.
     process.stdout.write("\n[aborted]\n");
     isGenerating = false;
+    pendingExit = false;
+    if (pendingExitTimer) { clearTimeout(pendingExitTimer); pendingExitTimer = null; }
     await client.session.abort({ path: { id: sessionID } });
     // session.idle will fire after abort and resolve idlePromise
-  } else {
+  } else if (pendingExit) {
+    // Second Ctrl-C within 3s: exit.
+    if (pendingExitTimer) { clearTimeout(pendingExitTimer); pendingExitTimer = null; }
     process.stdout.write("\n");
+    await serverHandle?.dispose();
     process.exit(0);
+  } else {
+    // First Ctrl-C when idle: warn and arm 3s reset timer.
+    pendingExit = true;
+    process.stdout.write("\n(Press Ctrl-C again to exit)\n");
+    pendingExitTimer = setTimeout(() => {
+      pendingExit = false;
+      pendingExitTimer = null;
+    }, 3000);
   }
 });
 

@@ -2,8 +2,8 @@
 title: "octmux — Implementation Plan"
 created_at: 2026-05-18--21-58
 created_by: Claude Code (Claude Sonnet 4.6 1M)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-19--13-08
+updated_by: Claude Code (Actor, Claude Haiku 4.5)
+updated_at: 2026-05-19--15-37
 context: >
   octmux is a text-only barebones REPL UI for OpenCode that mimics the Claude
   Code CLI feel: text REPL, one bottom status line, Emacs-style line edits,
@@ -88,6 +88,51 @@ One source file per concern. Grow organically; do not pre-explode.
 
 ## Implementation log (reverse chronological — newest at top)
 
+### 2026-05-19--15-37 — Phase 2: Auto-spawn server + tmux guard
+
+**Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+
+**What shipped:**
+- src/server-lifecycle.ts (new): findFreePort (TCP bind probe, range [4096, 4106]),
+  findOpencodeBin (~/.opencode/bin/opencode fallback), waitForHealth (200ms poll +
+  10s deadline), spawnOpencodeServer (Bun.spawn + proc.unref + dispose handle).
+- src/index.ts: --help, --version, --no-tmux-guard flags; tmux guard
+  (process.env.TMUX check); auto-spawn vs --attach branch for baseUrl resolution;
+  SIGTERM handler; serverHandle?.dispose() wired to rl.on("close") and SIGINT
+  double-Ctrl-C exit path. Removed Phase 0 debug output (health: ok, sessions count).
+- Ctrl-C behavior: single Ctrl-C during generation aborts (unchanged from Phase 1.5).
+  Single Ctrl-C when idle now prints "(Press Ctrl-C again to exit)" — double Ctrl-C
+  within 3s exits with dispose. Retroactively correct for attach mode (serverHandle
+  is null → dispose() is a no-op).
+- Phase 1.5 streaming/modal/abort behavior unchanged.
+
+**Suggested next steps for Phase 3:** raw-mode input replaces readline.
+  respondPermission/respondQuestion will need the raw-mode single-keypress path.
+
+---
+
+### 2026-05-19--15-03 — Phase 1.5c+1.5d: Status display + interactive modals
+
+**Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+
+**What shipped:**
+- events.ts: added "permission-asked" (handles both v1 "permission.updated" and v2
+  "permission.asked") and "question-asked" (v2, cast via unknown) event kinds.
+  "session-status" retry now surfaced to index.ts (was previously returned but ignored).
+- index.ts: respondPermission() — inline y/a/n prompt → client.postSessionIdPermissionsPermissionId().
+  respondQuestion() — numbered options prompt → raw fetch /question/{id}/reply.
+  SSE loop now handles all 8 ReplEvent kinds.
+- Build check passed; TypeScript clean with zero errors.
+
+**Why dual permission handler:** opencode server may fire v1 "permission.updated" or v2
+  "permission.asked" depending on session type; handle both for safety.
+
+**Graceful degradation:** respondQuestion() fetch failures write to stderr and resolve (don't crash the REPL).
+
+**Suggested next steps for Phase 3:** raw-mode input layer replaces readline;
+  respondPermission/respondQuestion will need to use the raw-mode single-keypress path.
+
+---
 
 ### 2026-05-19--13-08 — Phase 1.5b: True streaming via `message.part.delta`
 
@@ -324,7 +369,7 @@ proven; no UI, no streaming yet. Phase 1 can assume the SDK works.
 
 ### Phase 1 — Hello-world REPL with streaming (1 day)
 
-**Status:** planned.
+**Status:** ✓ shipped — see log 2026-05-18--22-31
 
 **Goal:** type a prompt, hit Enter, watch the response stream in. Ctrl-C to
 quit. **No** raw mode (use Node `readline`). **No** slash commands. **No**
@@ -366,15 +411,42 @@ status line.
 **Out of scope:** tool-call rendering (print `[tool: read]` stub), reasoning
 blocks, multi-line input, history, status line, server spawn, slash commands.
 
-**Handoff to Phase 2:** REPL loop and SSE dispatcher are working;
-auto-spawning the server is the only remaining piece before octmux is usable
-without a separate `opencode serve` terminal.
+**Handoff to Phase 1.5:** REPL loop and SSE dispatcher are working;
+Phase 1.5 adds streaming polish (indicator, abort, permission/question modals) on top of the Phase 1 readline skeleton.
+
+---
+
+### Phase 1.5 — Streaming UX + interactive modals (½ day)
+
+**Status:** ✓ shipped — see log 2026-05-19--15-03 (1.5c+1.5d), 2026-05-19--13-08 (1.5b), 2026-05-19--10-38 (1.5a)
+
+**What was built (4 sub-phases):**
+
+- **1.5a** — switch to `session.promptAsync()` (204 immediately); `isGenerating` flag;
+  `[generating…]` indicator on first `message.part.updated` len=0 event; Ctrl-C during
+  generation calls `session.abort()` instead of exiting.
+- **1.5b** — true streaming via `message.part.delta` — a separate v2-style event type
+  not in the v1 SDK `Event` union; cast via `unknown`; chunks arrive ~100–200ms apart.
+  Replaced the accumulated-slice approach.
+- **1.5c** — `session-status: retry` now prints `[retrying…]`; abort already wired.
+- **1.5d** — `permission.updated` (v1) + `permission.asked` (v2, cast via unknown) →
+  inline `? Allow: <title>  y=once  a=always  n=reject:` prompt → `postSessionIdPermissionsPermissionId()`.
+  `question.asked` (v2, cast via unknown) → numbered-options prompt → raw `fetch()` to
+  `POST /question/{reqID}/reply`. Without 1.5d, any agent tool that needs a permission
+  or user input hangs the session silently.
+
+**Key discovery:** `message.part.delta` is a v2 event type that the server fires for
+all sessions regardless of SDK version. Same cast-via-unknown pattern applies to
+`permission.asked` and `question.asked`. The v1 `Event` union omits all three.
+
+**ReplEvent kinds after Phase 1.5:** `text-delta`, `session-idle`, `error`,
+`generating`, `session-status`, `part-removed`, `permission-asked`, `question-asked` (8 total).
 
 ---
 
 ### Phase 2 — Auto-spawn server + tmux guard (1 day)
 
-**Status:** planned.
+**Status:** ✓ shipped — see log 2026-05-19--15-37
 
 **Goal:** default mode launches its own server with port rotation; refuses
 outside tmux unless overridden.

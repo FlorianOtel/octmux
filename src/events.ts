@@ -6,6 +6,7 @@ import type {
   EventSessionError,
   EventSessionStatus,
   EventMessagePartRemoved,
+  EventPermissionUpdated,
 } from "@opencode-ai/sdk";
 
 // Normalised events the REPL cares about; all others are dropped.
@@ -15,7 +16,12 @@ export type ReplEvent =
   | { kind: "error"; message: string }
   | { kind: "generating" }
   | { kind: "session-status"; status: "idle" | "busy" | "retry" }
-  | { kind: "part-removed"; partId: string };
+  | { kind: "part-removed"; partId: string }
+  | { kind: "permission-asked"; permID: string; sessionID: string; title: string; permType: string }
+  | { kind: "question-asked"; reqID: string; sessionID: string; questions: Array<{
+      question: string; header: string; options: Array<{ label: string; description: string }>;
+      multiple?: boolean; custom?: boolean;
+    }> };
 
 // Track user message IDs so we don't echo the user's own input back to them.
 // opencode fires message.part.updated for user messages too — we skip them.
@@ -93,6 +99,53 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | null {
     if (e.properties.sessionID !== sessionID) return null;
     seenPartIDs.delete(e.properties.partID);
     return { kind: "part-removed", partId: e.properties.partID };
+  }
+
+  // v1 event type: permission.updated
+  if (event.type === "permission.updated") {
+    const e = event as EventPermissionUpdated;
+    if (e.properties.sessionID !== sessionID) return null;
+    return {
+      kind: "permission-asked",
+      permID: e.properties.id,
+      sessionID: e.properties.sessionID,
+      title: e.properties.title,
+      permType: e.properties.type,
+    };
+  }
+
+  // v2 event type (not in v1 union): permission.asked
+  if (event.type === "permission.asked") {
+    const e = event as unknown as { properties: {
+      id: string; sessionID: string; permission: string; patterns: string[];
+    }};
+    if (e.properties.sessionID !== sessionID) return null;
+    return {
+      kind: "permission-asked",
+      permID: e.properties.id,
+      sessionID: e.properties.sessionID,
+      title: e.properties.permission,
+      permType: e.properties.permission,
+    };
+  }
+
+  // v2 event type (not in v1 union): question.asked
+  if (event.type === "question.asked") {
+    const e = event as unknown as { properties: {
+      id: string; sessionID: string;
+      questions: Array<{
+        question: string; header: string;
+        options: Array<{ label: string; description: string }>;
+        multiple?: boolean; custom?: boolean;
+      }>;
+    }};
+    if (e.properties.sessionID !== sessionID) return null;
+    return {
+      kind: "question-asked",
+      reqID: e.properties.id,
+      sessionID: e.properties.sessionID,
+      questions: e.properties.questions,
+    };
   }
 
   return null;
