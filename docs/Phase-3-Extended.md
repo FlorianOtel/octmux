@@ -2,6 +2,8 @@
 title: "octmux — Phase 3 Extended: Ink-based rendering layer"
 created_at: 2026-05-19--14-00
 created_by: Claude (Opus 4.7, chat planning session)
+updated_by: Claude Code (Actor, Claude Haiku 4.5)
+updated_at: 2026-05-20--00-10
 parent_plan: docs/Implementation-plan.md
 context: >
   Phase 3 shipped a custom raw-mode input layer (LineEditor) plus an ANSI
@@ -19,6 +21,25 @@ context: >
   This doc is structured to be implemented piece-wise across separate CC
   sessions; each sub-phase is independently shippable and verifies in
   isolation.
+---
+
+## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-20--00-10 — Phase 3E.1: Bootstrap Ink + React under Bun
+
+**Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+
+**What shipped:**
+- `package.json`: added `ink@^5.0.0`, `react@^18.3.1` as deps; `@types/react@^18.3.0` as devDep; also added `react-devtools-core@^7.0.1` as optional dep (required for Ink 5.x compile support).
+- `tsconfig.json`: added `"jsx": "react-jsx"`, `"jsxImportSource": "react"` to compilerOptions.
+- `src/index.ts.phase2.bak`: copy of the Phase 2 readline REPL (safety net for in-progress session).
+- `src/index.tsx`: replaced Phase 2 REPL with 20-line Ink hello-world demo — bordered single-line box "octmux — Ink hello", auto-exits after 2 s. Both `bun run dev` and `dist/octmux` binary verified working (exit code 0).
+- Build scripts updated: `dev`, `build`, `compile` now reference `src/index.tsx` instead of `src/index.ts`.
+
+**What changed in this doc:** Phase 3E.1 status flipped to ✓ shipped; Implementation log section added; frontmatter updated with editor/timestamp.
+
+**Suggested next steps for 3E.2:** `src/input.ts` does not exist (Phase 3 was never committed). 3E.2 must create `src/editor.ts` from scratch as a pure LineEditor state machine. All LineEditor buffer ops (insert, backspace, Emacs bindings, history, kill ring) must be written new. Then build `src/components/PromptInput.tsx` on top. The Phase-3-Extended.md spec for 3E.2 is accurate; just substitute "create from scratch" for "rename from src/input.ts".
+
 ---
 
 # octmux — Phase 3 Extended: Ink migration
@@ -124,7 +145,7 @@ should be able to complete the next phase without external context.
 
 ### Phase 3E.1 — Bootstrap Ink + React under Bun (½ day)
 
-**Status:** planned.
+**Status:** ✓ shipped — see log 2026-05-20--00-10
 
 **Goal:** prove Ink works under Bun for both `bun run dev` and
 `bun build --compile`, before touching any existing code.
