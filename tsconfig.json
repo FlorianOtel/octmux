@@ -5,7 +5,9 @@
     "moduleResolution": "bundler",
     "types": ["bun"],
     "strict": true,
-    "noEmit": true
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
   },
   "include": ["src"]
 }
