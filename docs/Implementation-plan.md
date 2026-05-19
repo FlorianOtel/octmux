@@ -139,21 +139,6 @@ True streaming was missing; fixed in Phase 1.5b above.
 
 ---
 
-### 2026-05-18--23-34 — Phase 2: Auto-spawn server + tmux guard
-
-**Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
-
-**What shipped:**
-- `src/server-lifecycle.ts` created: `findFreePort`, `findOpencodeBin`, `waitForHealth`, `spawnOpencodeServer`.
-- `src/index.ts`: added `--help`, `--version` flags; tmux guard; auto-spawn branch; SIGINT/SIGTERM → `dispose()`.
-- Smoke tests pass: TypeScript clean, `--help`, `--version`, tmux guard exit-1, health-fail exit-1.
-
-**What changed in this doc:** Phase 2 status → ✓ shipped; frontmatter `updated_at` refreshed.
-
-**Suggested next steps for Phase 3:** server lifecycle solved end-to-end. Phase 3 is pure UX — raw-mode input layer in `src/input.ts`.
-
----
-
 ### 2026-05-18--23-20 — Phase 1: Post-ship debugging + streaming investigation
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6 1M, interactive session)
