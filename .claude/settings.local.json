@@ -1,22 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Bash(grep -r \"new URL\\\\|fetch.*\\\\`http\" /home/florian/Gin-AI/projects/opentmux/src --include=\"*.ts\")",
-      "Bash(bun --version)",
-      "Bash(~/.bun/bin/bun --version)",
-      "Read(//mnt/nfs/Florian/Gin-AI/projects/opentmux/src/bin/**)",
-      "Bash(/home/florian/.bun/bin/bun install *)",
       "Bash(/home/florian/.bun/bin/bun build *)",
-      "Bash(echo \"build exit: $?\")",
-      "Bash(/home/florian/.bun/bin/bun run *)",
       "Bash(echo \"exit: $?\")",
-      "Bash(env -u TMUX /home/florian/.bun/bin/bun run src/index.ts)",
-      "Bash(env TMUX=test /home/florian/.bun/bin/bun run src/index.ts --no-tmux-guard --attach 9999)",
+      "Bash(curl -s -X POST http://127.0.0.1:4096/session -H 'Content-Type: application/json' -d '{\"title\":\"phase15-verify\"}')",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(gh api *)",
+      "WebFetch(domain:deepwiki.com)",
+      "Read(//home/florian/.local/share/opencode/**)",
+      "Read(//home/florian/**)",
       "Bash(git add *)",
-      "Bash(git commit *)",
-      "Bash(tmux new-window *)",
-      "Bash(tmux send-keys *)",
-      "Bash(tmux capture-pane *)"
+      "Bash(git commit -m ' *)"
     ]
   }
 }
