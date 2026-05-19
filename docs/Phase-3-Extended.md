@@ -3,7 +3,7 @@ title: "octmux — Phase 3 Extended: Ink-based rendering layer"
 created_at: 2026-05-19--14-00
 created_by: Claude (Opus 4.7, chat planning session)
 updated_by: Claude Code (Actor, Claude Haiku 4.5)
-updated_at: 2026-05-20--00-10
+updated_at: 2026-05-20--00-34
 parent_plan: docs/Implementation-plan.md
 context: >
   Phase 3 shipped a custom raw-mode input layer (LineEditor) plus an ANSI
@@ -24,6 +24,32 @@ context: >
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-20--00-34 — Phase 3E.2: LineEditor state machine + PromptInput component
+
+**Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+
+**What shipped:**
+- `src/editor.ts` (new): pure LineEditor EventEmitter state machine ported from
+  `1f81dae:src/input.ts` on DECSTBM-dead-end branch. I/O stripped: no start()/stop(),
+  no escape-sequence parser, no modal helpers. All buffer ops made public. New methods:
+  moveUpRow(), moveDownRow(), loadText(), getText(), isAtTopRow(), isAtBottomRow(),
+  enterOnLastRow(). Events kept: "changed", "submit".
+- `src/components/PromptInput.tsx` (new): Ink component rendering multi-line buffer
+  with cursor. useInput dispatcher covers full Emacs binding table from 3E.2 spec.
+  Double-Esc (within 500ms) clears buffer. Paste arrives as single input string via
+  Ink 5.x (no manual bracketed-paste parsing needed).
+- `src/components/Rule.tsx` (new): horizontal rule with optional embedded title.
+- `src/index.tsx`: updated to 3E.2 harness (history list + Rule + PromptInput + Rule).
+  Both bun run dev and bun run compile verified.
+
+**What changed in this doc:** Phase 3E.2 status → ✓ shipped; log entry prepended.
+
+**Suggested next steps for 3E.3:** Build src/app.tsx (<App> with <Static> scrollback
+  above, Rule + PromptInput + Rule + StatusLine stub below). src/index.tsx becomes real
+  entry with Phase 2 arg parsing; session label is "local-harness" until 3E.4.
+
+---
 
 ### 2026-05-20--00-10 — Phase 3E.1: Bootstrap Ink + React under Bun
 
@@ -218,7 +244,7 @@ intact — they're just not currently being called from `src/index.ts`.
 
 ### Phase 3E.2 — LineEditor as state container + `<PromptInput>` (1 day)
 
-**Status:** planned.
+**Status:** ✓ shipped — see log 2026-05-20--00-34
 
 **Goal:** strip all I/O from LineEditor; build a `<PromptInput>` Ink
 component that renders the buffer and dispatches Ink key events to
