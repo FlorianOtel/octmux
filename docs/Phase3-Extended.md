@@ -2,8 +2,8 @@
 title: "octmux — Phase 3 Extended: Ink-based rendering layer"
 created_at: 2026-05-19--14-00
 created_by: Claude (Opus 4.7, chat planning session)
-updated_by: Claude Code (Actor, Claude Haiku 4.5)
-updated_at: 2026-05-20--00-34
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-05-20--10-45
 parent_plan: docs/Implementation-plan.md
 context: >
   Phase 3 shipped a custom raw-mode input layer (LineEditor) plus an ANSI
@@ -24,6 +24,89 @@ context: >
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-20--10-45 — Keybinding fixes, keybindings.ts, LLM wiring, UX polish
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6)
+
+**What shipped:**
+
+**Keybinding bug fixes — three Ink 5 quirks discovered and resolved:**
+
+The Phase 3E.2 dispatch table in this doc (and the initial `PromptInput.tsx`
+implementation) had three bugs rooted in non-obvious Ink 5 behaviour. All three
+were diagnosed by reading `node_modules/ink/build/parse-keypress.js` and
+`use-input.js` directly. Full details in `docs/Troubleshooting.md` entry
+2026-05-20--10-45.
+
+1. **Backspace → `key.delete`, not `key.backspace`**: Modern terminals send
+   `\x7f` for Backspace; Ink maps it to `key.delete`. Fix: check
+   `key.backspace || key.delete`. The original check `if (key.backspace)` never
+   fired on any modern terminal.
+
+2. **Alt-Enter → `key.return=false, key.meta=false, input='\r'`**: Ink strips
+   the `\x1b` prefix from `\x1b\r`, leaving a bare CR with no flags. Fix:
+   `else if (input === '\r' || input === '\n')` placed after the `key.return`
+   branch. The original check `key.return && key.meta` never fired.
+
+3. **Ctrl-X → `(key.ctrl=true, input="x")`**: Ink converts control bytes to
+   their letter name. Fix: `key.ctrl && input === "a"` etc. The original
+   `input === "\x01"` checks never matched.
+
+**`src/keybindings.ts` (new file):**
+All key dispatch was extracted from `PromptInput.tsx` into a standalone
+`src/keybindings.ts` module exporting `handleKey(input, key, editor, lastEscTime)`.
+The file has three header sections documenting each Ink 5 quirk with byte-level
+detail and source references, plus a full annotated binding table. `PromptInput.tsx`
+is now a thin wrapper that calls `handleKey` in its `useInput` handler.
+
+**`src/index.tsx` — full LLM wiring (phases 3E.3 + 3E.4 implemented inline):**
+Rather than building `src/app.tsx` + `<Static>` scrollback as a separate phase,
+the full opencode integration was wired directly in `src/index.tsx`:
+- Top-level arg parsing: `--help`, `--version`, `--attach <port>`,
+  `--no-tmux-guard`, tmux guard.
+- Server lifecycle: `findFreePort` + `spawnOpencodeServer` (auto-spawn mode) or
+  `isOpencodeHealthy` health check (attach mode). `SIGTERM` handler disposes
+  the server process.
+- Module-level `await`: `client.session.create({})`, `client.global.event({})`.
+- SSE loop: `for await` over `eventStream.stream` in a `useEffect`. Dispatches
+  `text-delta`, `generating`, `session-idle`, `error`, and `permission-asked`
+  (auto-approved as "once" — placeholder for a future PermissionModal).
+- Streaming display: `streamBufRef` (a `useRef`) accumulates text-delta chunks
+  without per-chunk re-renders; `setStreamBuf` (state) triggers display update.
+  On `session-idle`, text is committed to `history` as an `"assistant"` entry.
+- `handleSubmit`: calls `client.session.promptAsync` and adds the user text to
+  `history` immediately (no laggy wait for first SSE event).
+- Double-press Ctrl-C: first press shows a 500 ms "Press Ctrl-C again to exit"
+  warning; second press disposes server and exits. `render()` called with
+  `exitOnCtrlC: false`.
+
+**`src/components/Rule.tsx` — right-align support:**
+Added `align?: "left" | "right"` prop (default "left"). Right-aligned title:
+4 trailing dashes, fill on the left, spaces around the title text. The top rule
+in the harness uses `align="right"`.
+
+**`src/index.tsx` — UX polish:**
+- Typed `HistoryEntry`: `{ role: "user" | "assistant" | "error"; text: string }`.
+- User history entries rendered with `<Text inverse>` (flipped fg/bg). Error
+  entries rendered red.
+- `[generating…]` placeholder shown while `isGenerating && !streamBuf`.
+- Bottom `<Box>` uses `marginBottom={4}` to keep the prompt 4 lines above the
+  terminal edge.
+
+**Note on 3E.2 dispatch table below:** The table under "Phase 3E.2 spec"
+lists Ctrl bindings as `input === "\x01"` etc. — those checks are wrong for
+Ink 5 (QUIRK 3 above). The authoritative binding table is in `src/keybindings.ts`.
+
+**What changed in this doc:** log entry prepended; frontmatter updated.
+
+**Next steps:** The harness is feature-complete for basic LLM interaction.
+Phase 3E.3 (`src/app.tsx` with `<Static>`) is no longer blocking — it can
+be added later as a refactor if scrollback overflow becomes an issue. Phase
+3E.5 (mouse wheel scroll + Ctrl-C-during-generation recall) and 3E.6
+(cleanup + parent-plan updates) remain on the roadmap.
+
+---
 
 ### 2026-05-20--00-34 — Phase 3E.2: LineEditor state machine + PromptInput component
 

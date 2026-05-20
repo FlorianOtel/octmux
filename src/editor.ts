@@ -70,7 +70,9 @@ export class LineEditor extends EventEmitter {
     this.lines = [""];
     this.row = 0;
     this.col = 0;
-    this.emit("submit", text);
+    // "changed" clears the visible buffer; "submit" only fires for non-empty input
+    this.emit("changed");
+    if (text.trim()) this.emit("submit", text);
   }
 
   clearBuffer(): void {
