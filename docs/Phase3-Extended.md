@@ -3,7 +3,7 @@ title: "octmux — Phase 3 Extended: Ink-based rendering layer"
 created_at: 2026-05-19--14-00
 created_by: Claude (Opus 4.7, chat planning session)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-20--16-36
+updated_at: 2026-05-20--17-40
 parent_plan: docs/Implementation-plan.md
 context: >
   Phase 3 shipped a custom raw-mode input layer (LineEditor) plus an ANSI
@@ -24,6 +24,44 @@ context: >
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-20--17-40 — Phase 3E.6: Cleanup + doc updates
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6)
+
+**What shipped:**
+- `src/index.ts.phase2.bak` deleted (leftover safety copy from 3E.1).
+- `README.md` rewritten: Architecture section explains the Ink Static/dynamic layout model and why bottom-anchor is automatic; Key bindings table documents all Emacs and navigation bindings; tmux configuration subsection covers `mouse on`, `extended-keys on`, `terminal-features extkeys`, and clarifies that text selection still works (alternate scroll mode does not intercept clicks).
+- `docs/Implementation-plan.md` updated: locked decision #3 rewritten to Ink language; Phase 3 Extended inserted as a new Phase plan entry between Phase 3 and Phase 4; Phase 3 status changed to "superseded"; consolidated log entry prepended; frontmatter refreshed.
+- This doc: 3E.6 status → ✓ shipped; log entry prepended; frontmatter refreshed.
+
+**Bug fixes included in this session (not 3E.6-spec but landed here):**
+- `stdin.ref is not a function` crash on startup: the `Transform`-stream-as-stdin approach was dropped entirely. Mouse tracking now uses `DECSET 1007` (alternate scroll mode) instead of `?1000h` (button-event mode). Wheel events arrive as arrow keys to Ink's normal input path; no Transform stream or TTY-proxy needed. Text selection restored.
+- Two blank lines between turns not rendering: `measureText("")` returns `{width:0, height:0}` so `<Text>{""}</Text>` was a zero-height Yoga node. Fixed to `<Text>{" "}</Text>`.
+
+**What changed in this doc:** 3E.6 status → ✓ shipped; all sub-phases now ✓; Phase 3 Extended is complete.
+
+---
+
+### 2026-05-20--15-55 — Phase 3E.4 + 3E.5: Modals, mouse scroll, Ctrl-C recall, UX anchoring
+
+**Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+
+**What shipped:**
+
+- **Terminal clear + bottom anchor** (`src/index.tsx`): On startup, clears the screen and positions the cursor so the input area anchors at the bottom. Uses `\x1b[2J\x1b[H` + `rows - 7` newlines to pre-fill space above the dynamic area.
+- **4-line status area** (`src/app.tsx`): `marginBottom={3}` on the bottom Box makes StatusLine(1) + 3 blank lines = 4 lines reserved for status. Phase 4 will fill the 3 blank lines with model/tokens/cost/orchestra badge.
+- **Turn spacing** (`src/app.tsx`): Each scrollback entry is followed by 2 blank lines, separating operator input from LLM output visually.
+- **PermissionModal** (`src/components/PermissionModal.tsx`): Inline y/a/n prompt replaces the auto-approve placeholder in app.tsx. `y`=once, `a`=always, `n`=reject.
+- **QuestionModal** (`src/components/QuestionModal.tsx`): Numbered-options prompt for `question.asked` events. Accepts digit keys, advances through multi-question flows, POSTs answers to `/question/{reqID}/reply`.
+- **Mouse wheel scroll** (`src/hooks/useMouseScroll.ts`, `src/index.tsx`, `src/app.tsx`): `attachMouseStream` intercepts SGR mouse sequences on stdin, fires wheel callbacks, passes cleaned bytes to Ink. Wheel-up = `editor.histPrev()`, wheel-down = `editor.histNext()`. SGR mode enabled on start, disabled on exit.
+- **Ctrl-C semantics** (`src/app.tsx`): Three cases: (1) generating → `session.abort()` + `editor.loadText(lastSubmitted)`; (2) idle non-empty buffer → `editor.clearBuffer()`; (3) idle empty buffer → double-press exit guard (preserved from 3E.3).
+- **`baseUrl` prop** (`src/app.tsx`, `src/index.tsx`): Added to AppProps so QuestionModal can POST answers without reimporting lifecycle state.
+- **`onWheelRegister` prop** (`src/app.tsx`, `src/index.tsx`): Callback for App to register its wheel handler with the index.tsx dispatcher.
+
+**What changed in this doc:** log entry prepended; 3E.4 and 3E.5 status → ✓ shipped; frontmatter updated_by and updated_at refreshed.
+
+---
 
 ### 2026-05-20--16-36 — Feature: history draft preservation in LineEditor
 
@@ -692,7 +730,7 @@ and on session-idle that buffer flushes into Static as an assistant entry.
 
 ### Phase 3E.4 — SSE integration: full Phase 1.5/3 parity under Ink (1–1½ days)
 
-**Status:** planned.
+**Status:** ✓ shipped — see log 2026-05-20--15-55
 
 **Goal:** wire the opencode client and SSE event stream into `<App>` so
 the existing Phase 1.5/3 behavior is fully restored under Ink:
@@ -865,7 +903,7 @@ Ctrl-C-during-generation recall of the last submission.
 
 ### Phase 3E.5 — Mouse-wheel scroll + Ctrl-C recall (½ day)
 
-**Status:** planned.
+**Status:** ✓ shipped — see log 2026-05-20--15-55
 
 **Goal:** add the two new UX features that motivated Phase 3 Extended in
 the first place — mouse wheel acts like Up/Down arrow keys (history nav),
@@ -1032,7 +1070,7 @@ the parent implementation plan.
 
 ### Phase 3E.6 — Cleanup + parent-plan update (½ day)
 
-**Status:** planned.
+**Status:** ✓ shipped — see log 2026-05-20--17-40
 
 **Goal:** remove dead code, document the new architecture, flip
 status in the parent implementation plan, prepare a clean baseline for

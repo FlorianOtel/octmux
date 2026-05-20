@@ -1,4 +1,4 @@
-import { Box, Static, Text, useStdout, useInput, useApp } from "ink";
+import { Box, Static, Text, useStdout, useInput } from "ink";
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { LineEditor } from "./editor.ts";
@@ -6,6 +6,16 @@ import { filterEvent } from "./events.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
 import { StatusLine } from "./components/StatusLine.tsx";
+import { PermissionModal } from "./components/PermissionModal.tsx";
+import { QuestionModal } from "./components/QuestionModal.tsx";
+
+type QuestionType = {
+  question: string;
+  header: string;
+  options: Array<{ label: string; description: string }>;
+  multiple?: boolean;
+  custom?: boolean;
+};
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
@@ -17,6 +27,7 @@ type AppProps = {
   sessionLabel: string;
   eventStream: AsyncIterable<{ payload: unknown }>;
   onExit: () => Promise<void>;
+  baseUrl: string;
 };
 
 let nextId = 0;
@@ -27,6 +38,9 @@ export function App(props: AppProps) {
   const [streamBuf, setStreamBuf] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [ctrlcPending, setCtrlcPending] = useState(false);
+  const [permission, setPermission] = useState<{ permID: string; title: string } | null>(null);
+  const [question, setQuestion] = useState<{ reqID: string; questions: QuestionType[] } | null>(null);
+  const [lastSubmitted, setLastSubmitted] = useState<string>("");
 
   const streamBufRef = useRef("");
   const lastCtrlCRef = useRef<number>(0);
@@ -58,6 +72,7 @@ export function App(props: AppProps) {
           streamBufRef.current = "";
           setStreamBuf("");
           setIsGenerating(false);
+          setLastSubmitted("");
           if (text.trim()) {
             setHistory(h => [...h, { id: nextId++, role: "assistant", text }]);
           }
@@ -69,20 +84,32 @@ export function App(props: AppProps) {
           setHistory(h => [...h, { id: nextId++, role: "error", text: `[error] ${ev.message}` }]);
 
         } else if (ev.kind === "permission-asked") {
-          // Auto-approve in the harness; a PermissionModal replaces this in 3E.4.
-          await props.client.postSessionIdPermissionsPermissionId({
-            path: { id: props.sessionID, permissionID: ev.permID },
-            body: { response: "once" },
-          }).catch(() => {});
+          setPermission({ permID: ev.permID, title: ev.title });
+
+        } else if (ev.kind === "question-asked") {
+          setQuestion({ reqID: ev.reqID, questions: ev.questions });
         }
       }
     })();
     return () => { cancelled = true; };
   }, [props.client, props.sessionID, props.eventStream]);
 
-  // Double-press Ctrl-C: first press shows a 500ms warning; second exits.
+  // Ctrl-C: three cases.
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
+      if (isGenerating) {
+        // Abort in-flight request; restore last prompt for editing.
+        props.client.session.abort({ path: { id: props.sessionID } }).catch(() => {});
+        editor.loadText(lastSubmitted);
+        setIsGenerating(false);
+        return;
+      }
+      if (editor.getText().trim()) {
+        // Non-empty idle buffer: clear it (don't exit, don't prompt).
+        editor.clearBuffer();
+        return;
+      }
+      // Empty buffer: double-press to exit.
       const now = Date.now();
       if (now - lastCtrlCRef.current < 500) {
         if (ctrlcTimerRef.current) clearTimeout(ctrlcTimerRef.current);
@@ -99,6 +126,7 @@ export function App(props: AppProps) {
   // Send submitted text to the LLM; add to history immediately so the UI
   // doesn't feel laggy while waiting for the first SSE event.
   const handleSubmit = useCallback(async (text: string) => {
+    setLastSubmitted(text);
     setHistory(h => [...h, { id: nextId++, role: "user", text }]);
     try {
       await props.client.session.promptAsync({
@@ -115,23 +143,48 @@ export function App(props: AppProps) {
     }
   }, [props.client, props.sessionID]);
 
+  const handlePermission = useCallback(async (answer: "once" | "always" | "reject") => {
+    if (!permission) return;
+    await props.client.postSessionIdPermissionsPermissionId({
+      path: { id: props.sessionID, permissionID: permission.permID },
+      body: { response: answer },
+    }).catch(() => {});
+    setPermission(null);
+  }, [permission, props.client, props.sessionID]);
+
+  const handleQuestion = useCallback(async (answers: string[][]) => {
+    if (!question) return;
+    await fetch(`${props.baseUrl}/question/${question.reqID}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answers }),
+    }).catch(() => {});
+    setQuestion(null);
+  }, [question, props.baseUrl]);
+
   return (
     <>
       <Static items={history}>
         {(item) => (
-          <Text key={item.id}
-            inverse={item.role === "user"}
-            color={item.role === "error" ? "red" : undefined}>
-            {item.role === "user" ? `> ${item.text}` : item.text}
-          </Text>
+          <Box key={item.id} flexDirection="column">
+            <Text
+              inverse={item.role === "user"}
+              color={item.role === "error" ? "red" : undefined}>
+              {item.role === "user" ? `> ${item.text}` : item.text}
+            </Text>
+            <Text>{" "}</Text>
+            <Text>{" "}</Text>
+          </Box>
         )}
       </Static>
       {isGenerating && !streamBuf && <Text dimColor>[generating…]</Text>}
       {streamBuf && <Text>{streamBuf}</Text>}
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}
-      <Box flexDirection="column">
+      {permission && <PermissionModal title={permission.title} onAnswer={handlePermission} />}
+      {question && <QuestionModal questions={question.questions} onAnswer={handleQuestion} />}
+      <Box flexDirection="column" marginBottom={3}>
         <Rule title={props.sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={isGenerating} onSubmit={handleSubmit} />
+        <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question} onSubmit={handleSubmit} />
         <Rule width={w} />
         <StatusLine />
       </Box>

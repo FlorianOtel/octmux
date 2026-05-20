@@ -2,8 +2,8 @@
 title: "octmux — Implementation Plan"
 created_at: 2026-05-18--21-58
 created_by: Claude Code (Claude Sonnet 4.6 1M)
-updated_by: Claude Code (Actor, Claude Haiku 4.5)
-updated_at: 2026-05-19--15-37
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-05-20--17-40
 context: >
   octmux is a text-only barebones REPL UI for OpenCode that mimics the Claude
   Code CLI feel: text REPL, one bottom status line, Emacs-style line edits,
@@ -39,8 +39,11 @@ itself.
    - Default — auto-spawn `opencode serve --port <free>` per tmux window.
      Port range `[4096, 4106]` (mirrors opentmux).
    - Flag — `--attach <port>` connects to an existing server.
-3. **Input layer:** custom raw-mode stdin handler. Emacs bindings, multi-line,
-   bracketed paste, Esc-interrupt, double-Esc clear. No readline, no Ink.
+3. **Input layer:** Ink (React for CLI) for region composition and resize/repaint.
+   `LineEditor` state machine (`src/editor.ts`) preserved as a pure buffer/history
+   container; Ink's `useInput` hook drives it. Bottom-anchor via Ink's
+   Static-above-dynamic layout. All Emacs bindings, multi-line, bracketed paste,
+   history, double-Esc clear preserved. No readline.
 4. **Slash commands:** full set with interactive UX.
    - Local with custom UX: `/exit`, `/clear`, `/help`, `/model`, `/agents`.
    - All other `/foo` forwarded to `POST /session/{id}/command` (orchestra
@@ -87,6 +90,24 @@ One source file per concern. Grow organically; do not pre-explode.
   per global doc rules (timestamp = `date +"%Y-%m-%d--%H-%M"`).
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-20--17-40 — Phase 3 Extended: Ink rendering layer (3E.1–3E.6)
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6 + Actor Claude Haiku 4.5, across multiple sessions)
+
+**What shipped:**
+- **3E.1** — Ink + React installed under Bun; `tsconfig.json` JSX support; hello-world proof that `bun run dev` and `bun build --compile` both work with Ink + Yoga WASM.
+- **3E.2** — `src/editor.ts` (pure `LineEditor` state machine, all I/O stripped); `src/components/PromptInput.tsx` (Ink wrapper with full Emacs binding table); `src/components/Rule.tsx` (horizontal rule with optional title + right-align); `src/keybindings.ts` (all key dispatch in one place, three Ink 5 quirks documented).
+- **3E.3** — `src/app.tsx` (`<App>` with `<Static>` scrollback + full SSE loop); `src/components/StatusLine.tsx` (`[idle]` stub); `src/index.tsx` slimmed to lean entry (~110 lines). Draft preservation added to `LineEditor` (`_draft` field).
+- **3E.4** — `src/components/PermissionModal.tsx` (y/a/n inline modal); `src/components/QuestionModal.tsx` (numbered-options modal); permission and question events wired into `<App>` replacing the auto-approve placeholder; `baseUrl` prop added.
+- **3E.5** — Alternate scroll mode (`DECSET 1007`) maps wheel events to arrow keys without intercepting clicks, preserving text selection. Ctrl-C during generation: `session.abort()` + `editor.loadText(lastSubmitted)`. Ctrl-C on non-empty idle buffer: `clearBuffer()` (no exit prompt). Turn spacing: two blank lines after each scrollback entry.
+- **3E.6** — Deleted `src/index.ts.phase2.bak`; README rewritten (Architecture, key bindings table, tmux config); this doc updated (locked decision #3, Phase 3 Extended phase entry); `docs/Phase3-Extended.md` log completed.
+
+**What changed in this doc:** locked decision #3 updated to Ink; Phase 3 Extended inserted into Phase plan; Phase 3 status updated; log entry prepended; frontmatter refreshed.
+
+**Suggested next steps for Phase 4:** `src/components/StatusLine.tsx` is already plumbed and renders `[idle]`. Phase 4 creates `src/state.ts` (model, tokens, cost, mode, orchestra badge) and feeds it into StatusLine props. The 4-line status area below the bottom rule is already reserved (`marginBottom={3}` on the bottom Box = StatusLine + 3 blank lines).
+
+---
 
 ### 2026-05-19--15-37 — Phase 2: Auto-spawn server + tmux guard
 
@@ -489,7 +510,7 @@ pure UX work on the input layer — no server changes.
 
 ### Phase 3 — Custom raw-mode input layer (2–3 days) — **core UX phase**
 
-**Status:** planned.
+**Status:** ✓ superseded — replaced by Phase 3 Extended (Ink migration). See log 2026-05-20--17-40 and `docs/Phase3-Extended.md`.
 
 **Goal:** replace `readline` with our own input handler so typing feels like
 Claude Code.
@@ -536,6 +557,14 @@ gracefully if open-paste sequence never arrives.
 
 **Handoff to Phase 4:** input layer is feature-complete; Phase 4 layers the
 status line, switches to async streaming, and wires Esc-to-abort.
+
+---
+
+### Phase 3 Extended — Ink rendering layer (3E.1–3E.6)
+
+**Status:** ✓ shipped — see log 2026-05-20--17-40 and `docs/Phase3-Extended.md`.
+
+All six sub-phases shipped. octmux is a working REPL: type a prompt, Enter submits to the LLM, streaming response displays in `<Static>` scrollback above the anchored input area, Ctrl-C Ctrl-C exits. Permission and question modals are real Ink components. Mouse wheel navigates history. Ctrl-C during generation aborts and restores the last submitted text.
 
 ---
 

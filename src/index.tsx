@@ -78,6 +78,22 @@ const session   = await client.session.create({});
 const sessionID = session.data!.id;
 const eventStream = await client.global.event({});
 
+// ─── Terminal setup ─────────────────────────────────────────────────────────
+
+// Alternate scroll mode: wheel events arrive as ↑/↓ arrow keys.
+// Does NOT intercept button clicks, so text selection keeps working.
+process.stdout.write("\x1b[?1007h");
+process.on("exit", () => { try { process.stdout.write("\x1b[?1007l"); } catch {} });
+
+// Clear terminal and position cursor so the input area anchors at the bottom.
+// Dynamic area minimum height:
+//   Rule(1) + Input(1) + Rule(1) + StatusLine(1) + marginBottom(3) = 7 lines.
+// The 4-line status area = StatusLine(1) + 3 reserved blank lines.
+const _rows = process.stdout.rows ?? 24;
+process.stdout.write('\x1b[2J\x1b[H'); // clear entire screen, cursor home
+const _pad = Math.max(0, _rows - 7);
+if (_pad > 0) process.stdout.write('\n'.repeat(_pad));
+
 // ─── Render ───────────────────────────────────────────────────────────────────
 
 render(
@@ -87,6 +103,7 @@ render(
     sessionLabel={sessionID.slice(0, 8)}
     eventStream={eventStream.stream}
     onExit={async () => { await serverHandle?.dispose(); }}
+    baseUrl={baseUrl}
   />,
   { exitOnCtrlC: false }
 );
