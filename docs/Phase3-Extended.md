@@ -3,7 +3,7 @@ title: "octmux — Phase 3 Extended: Ink-based rendering layer"
 created_at: 2026-05-19--14-00
 created_by: Claude (Opus 4.7, chat planning session)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-20--10-45
+updated_at: 2026-05-20--16-36
 parent_plan: docs/Implementation-plan.md
 context: >
   Phase 3 shipped a custom raw-mode input layer (LineEditor) plus an ANSI
@@ -25,7 +25,60 @@ context: >
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-20--10-45 — Keybinding fixes, keybindings.ts, LLM wiring, UX polish
+### 2026-05-20--16-36 — Feature: history draft preservation in LineEditor
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6)
+
+**What shipped:**
+- `src/editor.ts`: Added `_draft: string | null` field to `LineEditor`. When the
+  user presses Up (histPrev) for the first time, the current unsaved buffer is saved
+  to `_draft`. When they navigate back to "present" (histNext past the newest history
+  entry), `_draft` is restored instead of clearing to empty. `_draft` is cleared on
+  submit (`enterOnLastRow`) and on double-Esc (`clearBuffer`).
+
+**Why:** Without this, any text typed but not submitted was silently lost whenever
+  the user scrolled through history and returned. Expected behaviour: the draft
+  survives the round-trip.
+
+**How it works:**
+- `histPrev()`: on first call (histIdx === -1), `this._draft = this.getText()` before
+  overwriting the buffer.
+- `histNext()` return-to-present path: restores `const draft = this._draft ?? ""`
+  instead of `this.lines = [""]`.
+- `enterOnLastRow()` and `clearBuffer()`: both set `this._draft = null`.
+
+**What changed in this doc:** log entry prepended; frontmatter updated_by and
+  updated_at refreshed.
+
+---
+
+### 2026-05-20--16-21 — Phase 3E.3: <App> shell + Static scrollback
+
+**Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+
+**What shipped:**
+- `src/app.tsx` (new): `<App>` component with `<Static>` scrollback, session label
+  prop, onExit prop, StatusLine in layout. All SSE wiring moved from index.tsx.
+  Uses module-level `nextId` counter to track scrollback entry IDs. Accepts
+  client, sessionID, sessionLabel, eventStream, and onExit as props.
+- `src/components/StatusLine.tsx` (new): `[idle]` placeholder stub.
+- `src/index.tsx`: slimmed to ~80 lines; App component moved to app.tsx; passes
+  client, sessionID (first 8 chars as sessionLabel), eventStream, and onExit as props.
+  Preserves all server lifecycle logic (arg parsing, port scan, spawn, health check,
+  SIGTERM handler). Removed App definition, HistoryEntry type, SSE loop, useInput
+  handlers, handleSubmit callback, and all React imports except render.
+
+**What changed in this doc:** Phase 3E.3 status → ✓ shipped; log entry prepended;
+  frontmatter updated_by and updated_at refreshed.
+
+**Suggested next steps for 3E.4:** PermissionModal.tsx and QuestionModal.tsx
+  components to replace the auto-approve placeholder in app.tsx; QuestionModal
+  for question.asked events. Add streaming buffer state and mode tracking to
+  support [generating…] indicators and session-idle text flushing.
+
+---
+
+### 2026-05-20--10-45 — Phase 3E.2 fixes: Keybinding fixes, keybindings.ts, LLM wiring, UX polish
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
 
@@ -327,7 +380,7 @@ intact — they're just not currently being called from `src/index.ts`.
 
 ### Phase 3E.2 — LineEditor as state container + `<PromptInput>` (1 day)
 
-**Status:** ✓ shipped — see log 2026-05-20--00-34
+**Status:** ✓ shipped — see logs: 2026-05-20--00-34 , 2026-05-20--10-45
 
 **Goal:** strip all I/O from LineEditor; build a `<PromptInput>` Ink
 component that renders the buffer and dispatches Ink key events to
@@ -502,7 +555,7 @@ disk but uncalled.
 
 ### Phase 3E.3 — `<App>` shell with anchored layout (½ day)
 
-**Status:** planned.
+**Status:** ✓ shipped — see log 2026-05-20--16-21
 
 **Goal:** stand up the production `<App>` component with the final layout
 geometry — `<Static>` scrollback above, top rule with session label, input

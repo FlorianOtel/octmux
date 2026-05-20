@@ -8,6 +8,8 @@ export class LineEditor extends EventEmitter {
   private killRing = "";
   private history: string[] = [];
   private histIdx = -1;
+  // Unsaved draft saved when user starts navigating history; restored on return to present.
+  private _draft: string | null = null;
 
   // -----------------------------------------------------------------------
   // Public read-only accessors (for Renderer)
@@ -66,6 +68,7 @@ export class LineEditor extends EventEmitter {
     if (text.trim()) {
       this.history.push(text);
       this.histIdx = -1;
+      this._draft = null;
     }
     this.lines = [""];
     this.row = 0;
@@ -80,6 +83,7 @@ export class LineEditor extends EventEmitter {
     this.row = 0;
     this.col = 0;
     this.histIdx = -1;
+    this._draft = null;
     this.emit("changed");
   }
 
@@ -166,15 +170,30 @@ export class LineEditor extends EventEmitter {
   // History navigation
   histPrev(): void {
     if (this.history.length === 0) return;
-    if (this.histIdx === -1) this.histIdx = this.history.length - 1;
-    else if (this.histIdx > 0) this.histIdx--;
+    if (this.histIdx === -1) {
+      this._draft = this.getText();   // save unsaved draft before entering history
+      this.histIdx = this.history.length - 1;
+    } else if (this.histIdx > 0) {
+      this.histIdx--;
+    }
     this._loadHistory();
   }
 
   histNext(): void {
     if (this.histIdx === -1) return;
-    if (this.histIdx < this.history.length - 1) { this.histIdx++; this._loadHistory(); }
-    else { this.histIdx = -1; this.lines = [""]; this.row = 0; this.col = 0; this.emit("changed"); }
+    if (this.histIdx < this.history.length - 1) {
+      this.histIdx++;
+      this._loadHistory();
+    } else {
+      // Return to present: restore draft instead of clearing
+      const draft = this._draft ?? "";
+      this._draft = null;
+      this.histIdx = -1;
+      this.lines = draft ? draft.split("\n") : [""];
+      this.row = this.lines.length - 1;
+      this.col = this.lines[this.row].length;
+      this.emit("changed");
+    }
   }
 
   // Buffer manipulation
