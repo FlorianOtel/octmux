@@ -45,6 +45,9 @@ export function App(props: AppProps) {
   const streamBufRef = useRef("");
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Batches setStreamBuf calls so Ink repaints at most ~20×/sec instead of
+  // once per SSE chunk (which can be 20-50 chunks/sec → visible flicker).
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { stdout } = useStdout();
   const w = stdout?.columns ?? 80;
@@ -59,15 +62,22 @@ export function App(props: AppProps) {
         if (!ev) continue;
 
         if (ev.kind === "text-delta") {
-          // Accumulate via ref (no re-render per chunk) then flush to state.
+          // Accumulate via ref; flush to state at most once per 50 ms so Ink
+          // doesn't repaint the whole screen on every incoming SSE chunk.
           streamBufRef.current += ev.text;
-          setStreamBuf(streamBufRef.current);
+          if (!flushTimerRef.current) {
+            flushTimerRef.current = setTimeout(() => {
+              setStreamBuf(streamBufRef.current);
+              flushTimerRef.current = null;
+            }, 50);
+          }
 
         } else if (ev.kind === "generating") {
           setIsGenerating(true);
 
         } else if (ev.kind === "session-idle") {
-          // Turn complete: commit the streamed text to history and reset.
+          // Turn complete: flush any pending debounce, commit text to history, reset.
+          if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
           const text = streamBufRef.current;
           streamBufRef.current = "";
           setStreamBuf("");
@@ -78,6 +88,7 @@ export function App(props: AppProps) {
           }
 
         } else if (ev.kind === "error") {
+          if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
           streamBufRef.current = "";
           setStreamBuf("");
           setIsGenerating(false);
@@ -91,7 +102,10 @@ export function App(props: AppProps) {
         }
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+    };
   }, [props.client, props.sessionID, props.eventStream]);
 
   // Ctrl-C: three cases.

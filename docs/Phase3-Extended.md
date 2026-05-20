@@ -3,7 +3,7 @@ title: "octmux — Phase 3 Extended: Ink-based rendering layer"
 created_at: 2026-05-19--14-00
 created_by: Claude (Opus 4.7, chat planning session)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-20--17-40
+updated_at: 2026-05-20--19-00
 parent_plan: docs/Implementation-plan.md
 context: >
   Phase 3 shipped a custom raw-mode input layer (LineEditor) plus an ANSI
@@ -24,6 +24,45 @@ context: >
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-20--19-00 — UX papercuts: cursor rendering, navigation, streaming flicker
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6)
+
+**What shipped:**
+
+- **Cursor on wrapped lines fixed** (`src/components/PromptInput.tsx`): The cursor
+  row was rendered as `<Box flexDirection="row">` containing three sibling `<Text>`
+  children (before, cursor char, after). When `prefix + before` hit the terminal
+  width, Yoga could not wrap the cursor character to the next terminal row inside
+  the flex row → cursor disappeared. Fixed by replacing the `<Box>` wrapper with a
+  single parent `<Text>` containing a nested `<Text inverse>` for the cursor char.
+  Ink 5 supports nested `<Text>` with per-section styling and treats the content as
+  one text flow — Yoga wraps the full line correctly regardless of length.
+
+- **Navigation garbling on line 2+ fixed** (`src/components/PromptInput.tsx`): The
+  same `<Box>` vs `<Text>` element-type flip was the root cause. Non-cursor rows were
+  `<Text key={i}>` but the cursor row was `<Box key={i}>`. When the cursor moved to
+  another row, React saw the same key with a different type → unmount + remount → Ink
+  partial-update diffing produced corrupted terminal output. With the nested-`<Text>`
+  fix both cases are always `<Text>` at the same key; React diffs in-place, no
+  garbling.
+
+- **Streaming flicker reduced** (`src/app.tsx`): `setStreamBuf` was called on every
+  incoming SSE text-delta event, causing a full Ink screen repaint per chunk (~20-50
+  repaints/sec → visible flicker). Added a 50 ms debounce timer (`flushTimerRef`):
+  the ref accumulates text as before; the state update is batched at most once per
+  50 ms (~20 repaints/sec → smooth). The timer is flushed immediately on
+  `session-idle` and `error` events (so the final text always commits), and cancelled
+  in the `useEffect` cleanup.
+
+**Future work noted:** A typed `StreamItem` union (`text | thinking | tool-use |
+tool-result`) with a `<StreamingView>` component will replace the raw `streamBuf`
+string for the per-kind styling and ON/OFF toggles needed when thinking blocks and
+tool calls are enabled. The 50 ms debounce is compatible — same pattern with an array
+push instead of string concat.
+
+---
 
 ### 2026-05-20--17-40 — Phase 3E.6: Cleanup + doc updates
 

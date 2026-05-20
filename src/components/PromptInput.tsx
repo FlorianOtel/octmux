@@ -38,12 +38,12 @@ export function PromptInput({ editor, disabled = false, onSubmit }: Props) {
           const before = line.slice(0, cursorCol);
           const cursorChar = line[cursorCol] ?? " ";
           const after = line.slice(cursorCol + 1);
+          // Nested <Text> keeps the same element type as non-cursor rows so React
+          // diffs in-place (no unmount/remount on row change → no garbled redraw).
+          // A single Text flow also lets Yoga wrap the full line correctly, so the
+          // cursor char stays visible even when text wraps past the terminal width.
           return (
-            <Box key={i}>
-              <Text>{prefix}{before}</Text>
-              <Text inverse>{cursorChar}</Text>
-              <Text>{after}</Text>
-            </Box>
+            <Text key={i}>{prefix}{before}<Text inverse>{cursorChar}</Text>{after}</Text>
           );
         }
         return <Text key={i}>{prefix}{line}</Text>;
