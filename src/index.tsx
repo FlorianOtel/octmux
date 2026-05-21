@@ -122,7 +122,7 @@ if (multiPane) {
 }
 
 // ─── Terminal clear + cursor anchor ──────────────────────────────────────────────────
-// Chrome height: Rule(1) + Input(1) + Rule(1) + StatusLine(1) + marginBottom(3) = 7 lines.
+// Chrome height: Rule(1) + Input(1) + Rule(1) + StatusLine(1) + marginBottom(2) = 6 lines.
 // Use tmux to get the accurate pane height — process.stdout.rows may lag SIGWINCH
 // from pane splits and pane-border-status title bars.
 let _rows: number;
@@ -136,7 +136,7 @@ if (process.env.TMUX) {
   _rows = process.stdout.rows ?? 24;
 }
 process.stdout.write('\x1b[2J\x1b[H'); // clear entire screen, cursor home
-const _pad = Math.max(0, _rows - 7);
+const _pad = Math.max(0, _rows - 6);
 if (_pad > 0) process.stdout.write('\n'.repeat(_pad));
 
 // ─── Render ───────────────────────────────────────────────────────────────────

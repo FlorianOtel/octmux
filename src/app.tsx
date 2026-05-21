@@ -160,7 +160,7 @@ export function App(props: AppProps) {
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}
       {permission && <PermissionModal title={permission.title} onAnswer={handlePermission} />}
       {question && <QuestionModal questions={question.questions} onAnswer={handleQuestion} />}
-      <Box flexDirection="column" marginBottom={3}>
+      <Box flexDirection="column" marginBottom={2}>
         <Rule title={props.sessionLabel} width={w} align="right" />
         <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question} onSubmit={handleSubmit} />
         <Rule width={w} />
