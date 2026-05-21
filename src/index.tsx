@@ -4,6 +4,8 @@ import { findFreePort, spawnOpencodeServer, type ServerHandle } from "./server-l
 import { App } from "./app.tsx";
 import { Visibility } from "./renderer/visibility.ts";
 import { StdoutRenderer } from "./renderer/stdout.ts";
+import { TmuxPaneRenderer } from "./renderer/tmux-pane.ts";
+import type { Renderer } from "./renderer/types.ts";
 
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
 
@@ -19,7 +21,8 @@ Usage:
   octmux --version          show version
 
 Flags:
-  --no-tmux-guard           allow running outside tmux (scripts / CI)`);
+  --no-tmux-guard           allow running outside tmux (scripts / CI)
+  --multi-pane              split into tmux panes (thinking + tool side panes)`);
   process.exit(0);
 }
 
@@ -31,9 +34,16 @@ if (args.includes("--version")) {
 const noTmuxGuard = args.includes("--no-tmux-guard");
 const attachIdx   = args.indexOf("--attach");
 const attachPort  = attachIdx !== -1 ? parseInt(args[attachIdx + 1], 10) : NaN;
+const multiPane   = args.includes("--multi-pane");
+const originPaneId = process.env.TMUX_PANE ?? "";
 
 if (!process.env.TMUX && !noTmuxGuard) {
   console.error("octmux must run inside tmux.\nStart a tmux session first, or pass --no-tmux-guard to override.");
+  process.exit(1);
+}
+
+if (multiPane && !process.env.TMUX_PANE) {
+  console.error("octmux --multi-pane requires running inside tmux (TMUX_PANE not set).");
   process.exit(1);
 }
 
@@ -71,7 +81,7 @@ if (!isNaN(attachPort)) {
   baseUrl = serverHandle.url;
 }
 
-process.on("SIGTERM", async () => { await serverHandle?.dispose(); process.exit(0); });
+process.on("SIGTERM", async () => { await serverHandle?.dispose(); await renderer.dispose(); process.exit(0); });
 
 // ─── SDK: client / session / event stream ────────────────────────────────────
 
@@ -98,7 +108,15 @@ if (_pad > 0) process.stdout.write('\n'.repeat(_pad));
 
 // ─── Render ───────────────────────────────────────────────────────────────────
 
-const renderer = new StdoutRenderer(new Visibility());
+const visibility = new Visibility();
+let renderer: Renderer;
+if (multiPane) {
+  const tmuxRenderer = new TmuxPaneRenderer(visibility);
+  await tmuxRenderer.setup(originPaneId);
+  renderer = tmuxRenderer;
+} else {
+  renderer = new StdoutRenderer(visibility);
+}
 
 render(
   <App
