@@ -77,7 +77,13 @@ export function App(props: AppProps) {
               setProcTimes(p => p.tools === null ? { ...p, tools: Date.now() } : p);
           }
           else if (ev.kind === "block-delta")  renderer.appendToBlock(ev.partID, ev.text);
-          else if (ev.kind === "block-end")    renderer.endBlock(ev.partID, ev.status);
+          else if (ev.kind === "block-end") {
+            renderer.endBlock(ev.partID, ev.status);
+            if (ev.role === "thinking") setProcTimes(p => ({ ...p, thinking: null }));
+            // Clear tools on tool-result end (normal path) or tool-call error (no result follows).
+            else if (ev.role === "tool-result" || (ev.role === "tool-call" && ev.status === "error"))
+              setProcTimes(p => ({ ...p, tools: null }));
+          }
           else if (ev.kind === "error")        { renderer.commitError(ev.message); setIsGenerating(false); }
           else if (ev.kind === "generating")   setIsGenerating(true);
           else if (ev.kind === "session-idle") {
