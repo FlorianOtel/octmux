@@ -1,10 +1,11 @@
 import { Box, Static, Text, useStdout, useInput } from "ink";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { LineEditor } from "./editor.ts";
 import { filterEvent, type ReplEvent } from "./events.ts";
-import { formatLine, type Role } from "./blocks.ts";
-import { Visibility, parseShowCommand } from "./renderer/visibility.ts";
+import { formatLine } from "./blocks.ts";
+import { parseShowCommand } from "./renderer/visibility.ts";
+import type { Renderer } from "./renderer/types.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
 import { StatusLine } from "./components/StatusLine.tsx";
@@ -21,8 +22,6 @@ type QuestionType = {
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
-type CommittedLine = { id: number; role: Role; ansi: string };
-
 type AppProps = {
   client: Client;
   sessionID: string;
@@ -30,80 +29,35 @@ type AppProps = {
   eventStream: AsyncIterable<{ payload: unknown }>;
   onExit: () => Promise<void>;
   baseUrl: string;
+  renderer: Renderer;
 };
 
-let nextId = 0;
-
 export function App(props: AppProps) {
+  const { renderer } = props;
   const [editor] = useState(() => new LineEditor());
-  const [committed, setCommitted] = useState<CommittedLine[]>([]);
-  const [tail, setTail] = useState<{ role: Role; text: string } | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [ctrlcPending, setCtrlcPending] = useState(false);
   const [permission, setPermission] = useState<{ permID: string; title: string } | null>(null);
   const [question, setQuestion] = useState<{ reqID: string; questions: QuestionType[] } | null>(null);
   const [lastSubmitted, setLastSubmitted] = useState<string>("");
-  const [vis] = useState(() => new Visibility());
 
-  const tailBufRef = useRef<string>("");
-  const activeBlockRef = useRef<{ partID: string; role: Role } | null>(null);
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { stdout } = useStdout();
   const w = stdout?.columns ?? 80;
 
-  function flushTail() {
-    if (tailBufRef.current && activeBlockRef.current) {
-      const role = activeBlockRef.current.role;
-      setCommitted(prev => [...prev, {
-        id: nextId++,
-        role,
-        ansi: formatLine(role, tailBufRef.current, false),
-      }]);
-      tailBufRef.current = "";
-    }
-    setTail(null);
-    // Deliberately do NOT clear activeBlockRef here — kept for transition detection
-    // in handleBlockDelta. Callers that end a turn reset it explicitly.
-  }
+  // Subscribe to renderer state — new array reference on every commit means React detects changes.
+  const committed = useSyncExternalStore(
+    (cb) => { renderer.on("changed", cb); return () => renderer.off("changed", cb); },
+    () => renderer.getCommitted(),
+  );
+  const tail = useSyncExternalStore(
+    (cb) => { renderer.on("changed", cb); return () => renderer.off("changed", cb); },
+    () => renderer.getTail(),
+  );
 
-  function handleBlockDelta(ev: { partID: string; role: Role; text: string }) {
-    if (!vis.isVisible(ev.role)) {
-      vis.increment(ev.role);
-      return;
-    }
-    // Switching blocks: flush the prior tail and add a 2-line visual separator.
-    // NOTE for 3U.5: this separator must NOT be forwarded to side-pane FIFOs.
-    // The TmuxPaneRenderer should omit blank-separator lines when writing to FIFOs —
-    // each pane contains only its own role's content; leading/trailing blanks would be wrong.
-    if (activeBlockRef.current && activeBlockRef.current.partID !== ev.partID) {
-      flushTail();
-      setCommitted(prev => [...prev,
-        { id: nextId++, role: "text", ansi: " " },
-        { id: nextId++, role: "text", ansi: " " },
-      ]);
-    }
-    activeBlockRef.current = { partID: ev.partID, role: ev.role };
-    tailBufRef.current += ev.text;
-
-    // Split off complete lines and commit them to Static.
-    let buf = tailBufRef.current;
-    let nl = buf.indexOf("\n");
-    const newCommits: CommittedLine[] = [];
-    while (nl !== -1) {
-      const line = buf.slice(0, nl);
-      newCommits.push({ id: nextId++, role: ev.role, ansi: formatLine(ev.role, line, false) });
-      buf = buf.slice(nl + 1);
-      nl = buf.indexOf("\n");
-    }
-    tailBufRef.current = buf;
-
-    if (newCommits.length > 0) setCommitted(prev => [...prev, ...newCommits]);
-    setTail(buf ? { role: ev.role, text: buf } : null);
-  }
-
-  // SSE loop: runs for the lifetime of the component.
+  // SSE loop: thin translation layer — all rendering delegated to renderer.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -113,66 +67,37 @@ export function App(props: AppProps) {
         if (!evRaw) continue;
         const evList: ReplEvent[] = Array.isArray(evRaw) ? evRaw : [evRaw];
         for (const ev of evList) {
-
-        if (ev.kind === "block-delta") {
-          handleBlockDelta(ev);
-
-        } else if (ev.kind === "block-end") {
-          if (vis.isVisible(ev.role)) flushTail();
-
-        } else if (ev.kind === "generating") {
-          setIsGenerating(true);
-
-        } else if (ev.kind === "session-idle") {
-          flushTail();
-          // Two blank lines after each turn (restores Phase3-Extended spacing).
-          // Reset activeBlockRef so the next turn's first block has no prior transition.
-          activeBlockRef.current = null;
-          setCommitted(prev => [...prev,
-            { id: nextId++, role: "text", ansi: " " },
-            { id: nextId++, role: "text", ansi: " " },
-          ]);
-          setIsGenerating(false);
-          setLastSubmitted("");
-
-        } else if (ev.kind === "error") {
-          flushTail();
-          activeBlockRef.current = null;
-          setIsGenerating(false);
-          setCommitted(prev => [...prev, {
-            id: nextId++,
-            role: "error",
-            ansi: formatLine("error", ev.message, true),
-          }]);
-
-        } else if (ev.kind === "permission-asked") {
-          setPermission({ permID: ev.permID, title: ev.title });
-
-        } else if (ev.kind === "question-asked") {
-          setQuestion({ reqID: ev.reqID, questions: ev.questions });
-        }
+          if      (ev.kind === "block-start")  renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName });
+          else if (ev.kind === "block-delta")  renderer.appendToBlock(ev.partID, ev.text);
+          else if (ev.kind === "block-end")    renderer.endBlock(ev.partID, ev.status);
+          else if (ev.kind === "error")        { renderer.commitError(ev.message); setIsGenerating(false); }
+          else if (ev.kind === "generating")   setIsGenerating(true);
+          else if (ev.kind === "session-idle") {
+            renderer.commitTurnEnd();
+            setIsGenerating(false);
+            setLastSubmitted("");
+          }
+          else if (ev.kind === "permission-asked") setPermission({ permID: ev.permID, title: ev.title });
+          else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
         }
       }
     })();
     return () => { cancelled = true; };
-  }, [props.client, props.sessionID, props.eventStream]);
+  }, [props.client, props.sessionID, props.eventStream, renderer]);
 
   // Ctrl-C: three cases.
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       if (isGenerating) {
-        // Abort in-flight request; restore last prompt for editing.
         props.client.session.abort({ path: { id: props.sessionID } }).catch(() => {});
         editor.loadText(lastSubmitted);
         setIsGenerating(false);
         return;
       }
       if (editor.getText().trim()) {
-        // Non-empty idle buffer: clear it (don't exit, don't prompt).
         editor.clearBuffer();
         return;
       }
-      // Empty buffer: double-press to exit.
       const now = Date.now();
       if (now - lastCtrlCRef.current < 500) {
         if (ctrlcTimerRef.current) clearTimeout(ctrlcTimerRef.current);
@@ -186,28 +111,15 @@ export function App(props: AppProps) {
     }
   });
 
-  // Send submitted text to the LLM; add to committed immediately so the UI
-  // doesn't feel laggy while waiting for the first SSE event.
   const handleSubmit = useCallback(async (text: string) => {
-    const showResult = parseShowCommand(text, vis);
+    const showResult = parseShowCommand(text, renderer.visibility);
     if (showResult.handled) {
-      setCommitted(prev => [...prev,
-        { id: nextId++, role: "user", ansi: formatLine("user", text, true) },
-        { id: nextId++, role: "text", ansi: " " },
-        { id: nextId++, role: "text", ansi: " " },
-        { id: nextId++, role: "text", ansi: `→ ${showResult.reply ?? ""}` },
-        { id: nextId++, role: "text", ansi: " " },
-        { id: nextId++, role: "text", ansi: " " },
-      ]);
+      renderer.commitUserInput(text);
+      renderer.commitSystemMessage(showResult.reply ?? "");
       return;
     }
     setLastSubmitted(text);
-    // User line followed by 2 blank lines (restores Phase3-Extended spacing before AI response).
-    setCommitted(prev => [...prev,
-      { id: nextId++, role: "user", ansi: formatLine("user", text, true) },
-      { id: nextId++, role: "text", ansi: " " },
-      { id: nextId++, role: "text", ansi: " " },
-    ]);
+    renderer.commitUserInput(text);
     try {
       await props.client.session.promptAsync({
         path: { id: props.sessionID },
@@ -215,13 +127,9 @@ export function App(props: AppProps) {
       });
     } catch (err) {
       setIsGenerating(false);
-      setCommitted(prev => [...prev, {
-        id: nextId++,
-        role: "error",
-        ansi: formatLine("error", `[send error] ${err instanceof Error ? err.message : String(err)}`, true),
-      }]);
+      renderer.commitError(`[send error] ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [props.client, props.sessionID]);
+  }, [props.client, props.sessionID, renderer]);
 
   const handlePermission = useCallback(async (answer: "once" | "always" | "reject") => {
     if (!permission) return;
@@ -256,7 +164,7 @@ export function App(props: AppProps) {
         <Rule title={props.sessionLabel} width={w} align="right" />
         <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question} onSubmit={handleSubmit} />
         <Rule width={w} />
-        <StatusLine vis={vis} />
+        <StatusLine vis={renderer.visibility} />
       </Box>
     </>
   );

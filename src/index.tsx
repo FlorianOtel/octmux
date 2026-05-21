@@ -2,6 +2,8 @@ import { render } from "ink";
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { findFreePort, spawnOpencodeServer, type ServerHandle } from "./server-lifecycle.ts";
 import { App } from "./app.tsx";
+import { Visibility } from "./renderer/visibility.ts";
+import { StdoutRenderer } from "./renderer/stdout.ts";
 
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
 
@@ -96,14 +98,17 @@ if (_pad > 0) process.stdout.write('\n'.repeat(_pad));
 
 // ─── Render ───────────────────────────────────────────────────────────────────
 
+const renderer = new StdoutRenderer(new Visibility());
+
 render(
   <App
     client={client}
     sessionID={sessionID}
     sessionLabel={sessionID.slice(0, 8)}
     eventStream={eventStream.stream}
-    onExit={async () => { await serverHandle?.dispose(); }}
+    onExit={async () => { await serverHandle?.dispose(); await renderer.dispose(); }}
     baseUrl={baseUrl}
+    renderer={renderer}
   />,
   { exitOnCtrlC: false }
 );
