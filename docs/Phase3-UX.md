@@ -2,7 +2,7 @@
 title: "octmux — Phase 3-UX: Block-typed renderer + tmux multi-pane"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
-updated_at: 2026-05-21--12-55
+updated_at: 2026-05-21--16-00
 updated_by: Claude Code (Claude Haiku 4.5)
 parent_plan: docs/Phase3-Extended.md
 context: >
@@ -31,6 +31,29 @@ context: >
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-21 — Phase 3U.5
+
+**Implemented by:** Claude Code (Claude Haiku 4.5)
+
+**What shipped:**
+- `src/renderer/fifo.ts` (new): `makeFifo(role, pid)` creates a named FIFO in `/tmp`,
+  opens it with O_RDWR|O_NONBLOCK (avoids blocking without reader), swallows EPIPE errors
+- `src/renderer/tmux-pane.ts` (new): `TmuxPaneRenderer extends EventEmitter implements Renderer`;
+  `setup(originPaneId)` spawns three side panes via `tmux split-window` (thinking right,
+  tool-call right-of-thinking, tool-result below tool-call), labels them with `select-pane -T`,
+  returns focus to origin; `appendToBlock` routes side roles to FIFOs (raw formatLine output,
+  no blank separators), non-side to main StdoutRenderer; `dispose` kills panes and removes FIFOs;
+  events and getCommitted/getTail delegate to internal StdoutRenderer for app.tsx compatibility
+- `src/index.tsx`: `--multi-pane` flag; origin pane ID capture; conditional renderer
+  construction; SIGTERM disposes renderer
+
+**What changed in this doc:** Phase 3U.5 status ☐ → ✓
+
+**Suggested next steps:** Phase 3U.6 — cleanup (remove text-delta from ReplEvent union,
+update README with --multi-pane docs + tmux.conf snippet, update parent Implementation-plan.md).
+
+---
 
 ### 2026-05-21 — Phase 3U.4
 
@@ -1065,7 +1088,7 @@ blocks to dedicated tmux panes via FIFOs. `<App>` is untouched in
 
 ### Phase 3U.5 — TmuxPaneRenderer: multi-pane layout via FIFOs (1½–2 days)
 
-**Status:** ☐ pending
+**Status:** ✓ complete
 
 **Goal:** add a second `Renderer` implementation that spawns dedicated
 tmux panes for non-text roles (thinking, tool-call, tool-result) and
