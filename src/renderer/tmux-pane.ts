@@ -7,19 +7,29 @@ import { StdoutRenderer, type CommittedLine } from "./stdout.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer } from "./types.ts";
 
-// Roles that route to dedicated side panes. Text + user + error stay in the main pane.
-const SIDE_ROLES: Role[] = ["thinking", "tool-call", "tool-result"];
+// Maps each side role to the pane key it streams into.
+// tool-call and tool-result share one "tools" pane so the full
+// call → result sequence is visible in a single scrollback buffer.
+const PANE_KEY: Partial<Record<Role, string>> = {
+  thinking:      "thinking",
+  "tool-call":   "tools",
+  "tool-result": "tools",
+};
+
+const SIDE_ROLES: Role[] = Object.keys(PANE_KEY) as Role[];
 
 export class TmuxPaneRenderer extends EventEmitter implements Renderer {
   readonly kind = "tmux-pane" as const;
   readonly visibility: Visibility;
 
   private _main: StdoutRenderer;
-  private _fifos      = new Map<Role, FifoHandle>();
-  private _paneIds    = new Map<Role, string>();
+  // Keyed by pane key ("thinking", "tools") — at most 2 entries.
+  private _fifos      = new Map<string, FifoHandle>();
+  private _paneIds    = new Map<string, string>();
   private _openBlocks = new Map<string, Role>();
   // Per-role line buffers: accumulate partial chunks; flush complete lines with \n
   // so tail -f output is immediately visible (no stdio line-buffering delay).
+  // tool-call and tool-result have distinct ANSI prefixes even in the same pane.
   private _lineBufs   = new Map<Role, string>();
 
   constructor(visibility: Visibility) {
@@ -30,28 +40,38 @@ export class TmuxPaneRenderer extends EventEmitter implements Renderer {
   }
 
   async setup(originPaneId: string): Promise<void> {
-    type SplitSpec = { role: Role; dir: "-h" | "-v" };
+    // Layout: main | thinking (right), thinking | tools (below thinking).
+    // Two panes instead of three — tool-call and tool-result share "tools".
+    type SplitSpec = { key: string; dir: "-h" | "-v"; splitFrom: string };
     const plan: SplitSpec[] = [
-      { role: "thinking",    dir: "-h" },
-      { role: "tool-call",   dir: "-h" },
-      { role: "tool-result", dir: "-v" },
+      { key: "thinking", dir: "-h", splitFrom: originPaneId },
     ];
 
-    let prevPaneId = originPaneId;
-    for (const { role, dir } of plan) {
-      const fifo = makeFifo(role, process.pid);
-      this._fifos.set(role, fifo);
-      this._lineBufs.set(role, "");
-      // tail -f (lowercase) follows the regular temp file by fd — reliable and immediate.
-      const id = execFileSync("tmux", [
-        "split-window", dir, "-t", prevPaneId,
-        "-P", "-F", "#{pane_id}",
-        `tail -f ${fifo.path}`,
-      ]).toString().trim();
-      this._paneIds.set(role, id);
-      execFileSync("tmux", ["select-pane", "-t", id, "-T", role]);
-      prevPaneId = id;
-    }
+    // Create thinking pane first so we can split below it for tools.
+    const thinkingFifo = makeFifo("thinking", process.pid);
+    this._fifos.set("thinking", thinkingFifo);
+    this._lineBufs.set("thinking", "");
+    const thinkingId = execFileSync("tmux", [
+      "split-window", "-h", "-t", originPaneId,
+      "-P", "-F", "#{pane_id}",
+      `tail -f ${thinkingFifo.path}`,
+    ]).toString().trim();
+    this._paneIds.set("thinking", thinkingId);
+    execFileSync("tmux", ["select-pane", "-t", thinkingId, "-T", "thinking"]);
+
+    // Tools pane: split below thinking.
+    const toolsFifo = makeFifo("tools", process.pid);
+    this._fifos.set("tools", toolsFifo);
+    this._lineBufs.set("tool-call", "");
+    this._lineBufs.set("tool-result", "");
+    const toolsId = execFileSync("tmux", [
+      "split-window", "-v", "-t", thinkingId,
+      "-P", "-F", "#{pane_id}",
+      `tail -f ${toolsFifo.path}`,
+    ]).toString().trim();
+    this._paneIds.set("tools", toolsId);
+    execFileSync("tmux", ["select-pane", "-t", toolsId, "-T", "tools"]);
+
     execFileSync("tmux", ["select-pane", "-t", originPaneId]);
   }
 
@@ -70,10 +90,10 @@ export class TmuxPaneRenderer extends EventEmitter implements Renderer {
       this.visibility.increment(role);
       return;
     }
-    if (this._isSideRole(role)) {
+    const paneKey = PANE_KEY[role];
+    if (paneKey) {
       // Accumulate in line buffer; write complete lines with \n so tail flushes immediately.
-      // NOTE: blank separator lines are NOT forwarded to side panes (see §3U.5 in Phase3-UX.md).
-      const fifo = this._fifos.get(role);
+      const fifo = this._fifos.get(paneKey);
       if (!fifo) return;
       let buf = (this._lineBufs.get(role) ?? "") + text;
       let nl = buf.indexOf("\n");
@@ -90,8 +110,9 @@ export class TmuxPaneRenderer extends EventEmitter implements Renderer {
 
   endBlock(partID: string, status?: "ok" | "error"): void {
     const role = this._openBlocks.get(partID);
-    if (role && this._isSideRole(role)) {
-      const fifo = this._fifos.get(role);
+    const paneKey = role ? PANE_KEY[role] : undefined;
+    if (role && paneKey) {
+      const fifo = this._fifos.get(paneKey);
       if (fifo) {
         // Flush any remaining partial line.
         const buf = this._lineBufs.get(role) ?? "";
@@ -111,8 +132,8 @@ export class TmuxPaneRenderer extends EventEmitter implements Renderer {
   commitError(m: string):         void { this._main.commitError(m); }
 
   async dispose(): Promise<void> {
-    for (const [role, fifo] of this._fifos) {
-      const paneId = this._paneIds.get(role);
+    for (const [paneKey, fifo] of this._fifos) {
+      const paneId = this._paneIds.get(paneKey);
       if (paneId) try { execFileSync("tmux", ["kill-pane", "-t", paneId]); } catch {}
       fifo.close();
     }

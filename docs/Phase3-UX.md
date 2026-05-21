@@ -2,7 +2,7 @@
 title: "octmux — Phase 3-UX: Block-typed renderer + tmux multiplex (panes + windows)"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
-updated_at: 2026-05-21--14-00
+updated_at: 2026-05-21--14-15
 updated_by: Claude Code (Claude Sonnet 4.6)
 parent_plan: docs/Phase3-Extended.md
 context: >
@@ -55,13 +55,17 @@ context: >
   with mutual-exclusion check; three-way renderer construction (window, pane, stdout). Guard reuses the
   TTY-comparison stale-env detection from 3U.5 for both multiplex modes.
 
-**Post-implementation fix — tool window consolidation:**
-`tool-call` and `tool-result` now share a single `<session>-tools` window instead of separate windows.
-A `WINDOW_KEY` map (`tool-call` → `"tools"`, `tool-result` → `"tools"`, `thinking` → `"thinking"`) drives
-window routing; `_fifos` and `_windowIds` are keyed by window key, not Role. Per-role line buffers remain
-Role-keyed since the two tool roles carry distinct ANSI prefixes. `_ensureWindow(windowKey)` is idempotent
-— the second tool role to fire for an existing window key is a no-op. At most two windows open per session:
-`<session>-thinking` and `<session>-tools`.
+**Post-implementation fix — tool consolidation (both renderers):**
+`tool-call` and `tool-result` now share a single `tools` sink instead of separate sinks in both renderers.
+A `WINDOW_KEY` / `PANE_KEY` map (`tool-call` → `"tools"`, `tool-result` → `"tools"`, `thinking` →
+`"thinking"`) drives routing; `_fifos` and `_windowIds`/`_paneIds` are keyed by sink key, not Role.
+Per-role line buffers remain Role-keyed since the two tool roles carry distinct ANSI prefixes.
+
+For `TmuxWindowRenderer`: `_ensureWindow(windowKey)` is idempotent — the second tool role to fire is a
+no-op. At most two windows open per session: `<session>-thinking` and `<session>-tools`.
+
+For `TmuxPaneRenderer`: `setup()` now creates 2 panes instead of 3 — `thinking` (horizontal split from
+origin) and `tools` (vertical split below thinking), giving a layout of `main | thinking / tools`.
 
 **Key design choices:**
 - Lazy spawn on first use — sessions with no thinking blocks get no thinking window, sessions with no tool
