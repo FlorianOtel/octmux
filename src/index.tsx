@@ -1,5 +1,6 @@
 import { render } from "ink";
 import { execFileSync } from "node:child_process";
+import { readlinkSync } from "node:fs";
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { findFreePort, spawnOpencodeServer, type ServerHandle } from "./server-lifecycle.ts";
 import { App } from "./app.tsx";
@@ -44,12 +45,35 @@ if (!process.env.TMUX && !noTmuxGuard) {
 }
 
 if (multiPane) {
-  if (!process.env.TMUX) {
-    console.error("octmux --multi-pane requires running inside tmux (TMUX not set).\nUse --no-tmux-guard only for single-pane mode.");
+  if (!process.env.TMUX || !process.env.TMUX_PANE) {
+    console.error("octmux --multi-pane requires running inside a tmux pane (TMUX/TMUX_PANE not set).");
     process.exit(1);
   }
-  if (!process.env.TMUX_PANE) {
-    console.error("octmux --multi-pane: TMUX_PANE not set — cannot determine the origin pane.\nRun from inside a tmux pane, not a script.");
+  // TMUX/TMUX_PANE can be inherited by child terminals launched from within tmux.
+  // Verify we're actually running in the tmux-managed PTY for this pane, not a
+  // fresh terminal that just inherited the env.
+  // TMUX/TMUX_PANE are inherited by child terminals launched from within tmux.
+  // Verify by reading the process's stdin symlink from /proc and comparing to
+  // the PTY that tmux has assigned to this pane. Stale-env terminals have a
+  // different PTY than the tmux pane from which the env vars were inherited.
+  try {
+    const myTty   = readlinkSync("/proc/self/fd/0");           // e.g. /dev/pts/5
+    // -p is a flag (print to stdout); format string is the last positional arg.
+    const paneTty = execFileSync("tmux", [
+      "display-message", "-p", "-t", process.env.TMUX_PANE, "#{pane_tty}",
+    ], { encoding: "utf8" }).trim();                           // e.g. /dev/pts/5
+    if (myTty !== paneTty) {
+      console.error(
+        `octmux --multi-pane: TMUX_PANE env is stale (inherited from tmux, not running inside it).\n` +
+        `  This process stdin: ${myTty}\n` +
+        `  Pane ${process.env.TMUX_PANE} PTY:  ${paneTty}\n` +
+        `Run octmux from inside an actual tmux pane.`
+      );
+      process.exit(1);
+    }
+  } catch {
+    // /proc/self/fd/0 unavailable or tmux query failed — fail safe.
+    console.error("octmux --multi-pane: could not verify tmux pane context. Run from inside a tmux pane.");
     process.exit(1);
   }
 }
