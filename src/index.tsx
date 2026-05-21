@@ -43,9 +43,15 @@ if (!process.env.TMUX && !noTmuxGuard) {
   process.exit(1);
 }
 
-if (multiPane && !process.env.TMUX_PANE) {
-  console.error("octmux --multi-pane requires running inside tmux (TMUX_PANE not set).");
-  process.exit(1);
+if (multiPane) {
+  if (!process.env.TMUX) {
+    console.error("octmux --multi-pane requires running inside tmux (TMUX not set).\nUse --no-tmux-guard only for single-pane mode.");
+    process.exit(1);
+  }
+  if (!process.env.TMUX_PANE) {
+    console.error("octmux --multi-pane: TMUX_PANE not set — cannot determine the origin pane.\nRun from inside a tmux pane, not a script.");
+    process.exit(1);
+  }
 }
 
 // ─── Server lifecycle ─────────────────────────────────────────────────────────
@@ -116,7 +122,7 @@ if (multiPane) {
 }
 
 // ─── Terminal clear + cursor anchor ──────────────────────────────────────────────────
-// Chrome height: Rule(1) + Input(1) + StatusLine(1) + marginBottom(3) = 6 lines.
+// Chrome height: Rule(1) + Input(1) + Rule(1) + StatusLine(1) + marginBottom(3) = 7 lines.
 // Use tmux to get the accurate pane height — process.stdout.rows may lag SIGWINCH
 // from pane splits and pane-border-status title bars.
 let _rows: number;
@@ -130,7 +136,7 @@ if (process.env.TMUX) {
   _rows = process.stdout.rows ?? 24;
 }
 process.stdout.write('\x1b[2J\x1b[H'); // clear entire screen, cursor home
-const _pad = Math.max(0, _rows - 6);
+const _pad = Math.max(0, _rows - 7);
 if (_pad > 0) process.stdout.write('\n'.repeat(_pad));
 
 // ─── Render ───────────────────────────────────────────────────────────────────
