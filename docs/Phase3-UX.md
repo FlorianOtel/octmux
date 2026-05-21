@@ -2,8 +2,8 @@
 title: "octmux — Phase 3-UX: Block-typed renderer + tmux multi-pane"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
-updated_at: 2026-05-21--16-00
-updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-05-21--13-35
+updated_by: Claude Code (Claude Sonnet 4.6)
 parent_plan: docs/Phase3-Extended.md
 context: >
   Phase 3 Extended shipped Ink-based rendering with a single growing
@@ -32,21 +32,45 @@ context: >
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-21 — Phase 3U.5
+### 2026-05-21 — Phase 3U.5 (+ post-implementation fixes)
 
-**Implemented by:** Claude Code (Claude Haiku 4.5)
+**Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6)
 
 **What shipped:**
-- `src/renderer/fifo.ts` (new): `makeFifo(role, pid)` creates a named FIFO in `/tmp`,
-  opens it with O_RDWR|O_NONBLOCK (avoids blocking without reader), swallows EPIPE errors
+- `src/renderer/fifo.ts` (new): `makeFifo(role, pid)` — regular temp file
+  (`/tmp/octmux-PID-ROLE.log`, O_WRONLY|O_APPEND) instead of named FIFO. Initial
+  implementation used O_RDWR FIFOs; libuv's event loop registered the fd for readability
+  and silently consumed data before `tail` could read it. Regular files have no such issue.
 - `src/renderer/tmux-pane.ts` (new): `TmuxPaneRenderer extends EventEmitter implements Renderer`;
-  `setup(originPaneId)` spawns three side panes via `tmux split-window` (thinking right,
-  tool-call right-of-thinking, tool-result below tool-call), labels them with `select-pane -T`,
-  returns focus to origin; `appendToBlock` routes side roles to FIFOs (raw formatLine output,
-  no blank separators), non-side to main StdoutRenderer; `dispose` kills panes and removes FIFOs;
-  events and getCommitted/getTail delegate to internal StdoutRenderer for app.tsx compatibility
-- `src/index.tsx`: `--multi-pane` flag; origin pane ID capture; conditional renderer
-  construction; SIGTERM disposes renderer
+  `setup(originPaneId)` spawns three side panes (thinking right, tool-call right-of-thinking,
+  tool-result below tool-call) via `tmux split-window`, labels with `select-pane -T`, returns
+  focus to origin. `appendToBlock` accumulates per-role line buffer and writes complete lines
+  with `\n` to each role's log file (raw `formatLine` output, no blank separators) so `tail -f`
+  flushes immediately during streaming. Non-side roles delegate to internal `StdoutRenderer`.
+  `dispose` kills panes and removes log files. Events and `getCommitted`/`getTail` delegate to
+  the internal `StdoutRenderer` for `app.tsx` compatibility.
+- `src/index.tsx`: `--multi-pane` flag; conditional renderer construction; SIGTERM disposes
+  renderer. Guard uses `/proc/self/fd/0` readlink vs `tmux display-message -p -t $TMUX_PANE
+  "#{pane_tty}"` to detect stale-env terminals (TMUX/TMUX_PANE are inherited by child
+  terminals launched from within tmux; env-var checks alone are insufficient).
+- `src/renderer/visibility.ts`: `hiddenSummary()` now returns a cached reference rebuilt
+  only on mutations — prevents React's `useSyncExternalStore` from entering an infinite
+  re-render loop when the snapshot function returns a new array reference on every call.
+- `src/app.tsx`: two-bar chrome restored (top Rule + bottom Rule framing the PromptInput);
+  `marginBottom={2}` (bottom Rule at position 4 from screen bottom); startup padding uses
+  `tmux display-message -p "#{pane_height}"` for the accurate post-split pane height.
+- `~/.tmux.conf`: recreated with correct content (no leading whitespace); sourced to activate
+  `pane-border-status top` and pane title formatting for `--multi-pane` mode.
+
+**Key bugs found and fixed post-implementation:**
+1. `useSyncExternalStore` infinite loop: `hiddenSummary()` returned new array every call.
+2. FIFO data consumed by libuv: O_RDWR fd monitored for readability by event loop. Fixed
+   by switching to regular append-mode temp files + `tail -f`.
+3. Chrome garbling in multi-pane: terminal clear happened before pane splits; Rule width
+   based on pre-split terminal width caused line wrapping. Fixed by clearing after setup()
+   and reading pane height from tmux.
+4. `--multi-pane` guard bypassed by stale env: TMUX/TMUX_PANE inherited from parent tmux
+   session into fresh terminals. Fixed by TTY comparison via /proc.
 
 **What changed in this doc:** Phase 3U.5 status ☐ → ✓
 
