@@ -12,7 +12,6 @@ import type { Role } from "./blocks.ts";
 
 // Normalised events the REPL cares about; all others are dropped.
 export type ReplEvent =
-  | { kind: "text-delta"; text: string }                               // compat alias — preserved
   | { kind: "block-start"; partID: string; role: Role; toolName?: string }
   | { kind: "block-delta"; partID: string; role: Role; text: string }
   | { kind: "block-end";   partID: string; role: Role; status?: "ok" | "error" }
@@ -71,11 +70,6 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     if (!role) return null; // part not yet tracked (user part or unknown type)
 
     const blockDelta: ReplEvent = { kind: "block-delta", partID: e.properties.partID, role, text: e.properties.delta };
-
-    // Preserve text-delta compat alias so app.tsx streaming is unchanged.
-    if (role === "text" && e.properties.field === "text") {
-      return [blockDelta, { kind: "text-delta", text: e.properties.delta }];
-    }
     return blockDelta;
   }
 

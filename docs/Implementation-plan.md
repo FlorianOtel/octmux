@@ -3,7 +3,7 @@ title: "octmux — Implementation Plan"
 created_at: 2026-05-18--21-58
 created_by: Claude Code (Claude Sonnet 4.6 1M)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-20--17-40
+updated_at: 2026-05-21--15-30
 context: >
   octmux is a text-only barebones REPL UI for OpenCode that mimics the Claude
   Code CLI feel: text REPL, one bottom status line, Emacs-style line edits,
@@ -44,25 +44,51 @@ itself.
    container; Ink's `useInput` hook drives it. Bottom-anchor via Ink's
    Static-above-dynamic layout. All Emacs bindings, multi-line, bracketed paste,
    history, double-Esc clear preserved. No readline.
-4. **Slash commands:** full set with interactive UX.
-   - Local with custom UX: `/exit`, `/clear`, `/help`, `/model`, `/agents`.
+4. **Output layer + pane scope.** Output is a typed block model (`text` / `thinking`
+   / `tool-call` / `tool-result` / `user` / `error`) with a `Renderer` interface.
+   **Ink's responsibility is strictly bounded to the single origin pane's interactive
+   chrome** — input editor, rules, status line, and modals. Ink does not own
+   multi-pane/multi-window layout. The default `StdoutRenderer` writes ANSI-formatted
+   lines via `<Static>` at line granularity; the terminal handles layout for streamed
+   content. **tmux is the pane manager and framing engine** — pane/window creation,
+   geometry, titles, focus, resize, detach/reattach. octmux issues no `set-option`
+   or `set-window-option` commands except for `automatic-rename off` (needed to
+   prevent tmux renaming `new-window` constructs to the running command).
+   `TmuxPaneRenderer` (`--multi-pane`) and `TmuxWindowRenderer` (`--multi-window`,
+   recommended default for SSH/TTY) are the two multiplex backends, both routing
+   `tool-call` and `tool-result` to a shared `"tools"` sink. **opentmux is the
+   future cross-pane coherence layer** — built on the role → log-file → tmux-construct
+   contract that Phase 3-UX establishes.
+5. **Slash commands:** full set with interactive UX.
+   - Local with custom UX: `/exit`, `/clear`, `/help`, `/model`, `/agents`, `/show`.
    - All other `/foo` forwarded to `POST /session/{id}/command` (orchestra
      commands and any future server-registered command get it for free).
-5. **tmux:** required (env `TMUX`). Soft override `--no-tmux-guard`.
+6. **tmux:** required (env `TMUX`). Soft override `--no-tmux-guard`.
 
 ## Architecture at a glance
 
 ```
 src/
-  index.ts             entry: args, lifecycle, top-level loop
-  server-lifecycle.ts  port scan, spawn `opencode serve`, health probe, dispose
-  input.ts             LineEditor: raw stdin, Emacs keymap, multi-line, paste
-  render.ts            scrollback above, status line at row-1, redraw on state
-  events.ts            SSE dispatcher: filter by sessionID, normalize parts
-  state.ts             in-memory store + subscribe(); model, tokens, cost, mode
-  slash.ts             local commands + forward-to-server fallback
-  picker.ts            reusable "pick one of N" menu mode for /model, /agents
-  orchestra-watch.ts   fs.watch .opencode/orchestra/sessions/ for badge
+  index.tsx              entry: args, lifecycle, renderer selection, render(<App/>)
+  server-lifecycle.ts    port scan, spawn `opencode serve`, health probe, dispose
+  events.ts              SSE dispatcher: filter by sessionID, emit block events
+  blocks.ts              typed Block model + formatLine() ANSI formatter
+  app.tsx                <App>: chrome + Static scrollback, thin renderer translation
+  editor.ts              LineEditor: pure state machine, Emacs keymap, history
+  keybindings.ts         all Ink 5 key dispatch
+  renderer/
+    types.ts             Renderer interface
+    stdout.ts            StdoutRenderer: Static-backed, default backend
+    visibility.ts        per-role on/off toggles + /show slash-command parser
+    fifo.ts              log-file IPC (regular append-mode temp files, not FIFOs)
+    tmux-pane.ts         TmuxPaneRenderer: --multi-pane, 2 eager side panes
+    tmux-window.ts       TmuxWindowRenderer: --multi-window, lazy side windows
+  components/
+    PromptInput.tsx      Ink input wrapper
+    Rule.tsx             horizontal rule with optional title
+    StatusLine.tsx       [idle] + hidden-role badges
+    PermissionModal.tsx  y/a/n inline permission prompt
+    QuestionModal.tsx    numbered-options question modal
 ```
 
 One source file per concern. Grow organically; do not pre-explode.
@@ -90,6 +116,42 @@ One source file per concern. Grow organically; do not pre-explode.
   per global doc rules (timestamp = `date +"%Y-%m-%d--%H-%M"`).
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-21 — Phase 3 UX: typed block renderer + tmux multiplex (3U.1–3U.7)
+
+**Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6, multiple sessions)
+
+**What shipped:**
+- **Typed block model** (`src/blocks.ts`): `Role` type, `Block` type, `formatLine()`
+  ANSI formatter with per-role prefixes (`│ ` thinking, `⚙ ` tool-call, `↳ ` tool-result).
+- **Static scrollback** (`src/app.tsx`): replaced `streamBuf`/debounce with line-granularity
+  `<Static>` commits. The dynamic region holds only the chrome (≤8 lines). Flicker eliminated.
+- **Per-role visibility** (`src/renderer/visibility.ts`): `/show thinking off` / `/show tools off`
+  suppress roles; hidden counts displayed in StatusLine badges.
+- **`Renderer` interface** (`src/renderer/types.ts`, `src/renderer/stdout.ts`): rendering
+  logic extracted from `app.tsx`; `StdoutRenderer` is the default; `app.tsx` is a thin
+  SSE-to-renderer translation layer.
+- **`TmuxPaneRenderer`** (`--multi-pane`): 2 side panes (thinking + tools) spawned eagerly
+  at startup. Layout: `main | thinking / tools` (tools below thinking in right column).
+  `tool-call` and `tool-result` share the `tools` pane via `PANE_KEY` map.
+- **`TmuxWindowRenderer`** (`--multi-window`, recommended default): up to 2 side windows
+  spawned lazily on first block. Window names: `<session>-thinking`, `<session>-tools`.
+  Sessions with no thinking get no thinking window; sessions with no tool calls get no
+  tools window. `WINDOW_KEY` map routes both tool roles to `"tools"`.
+- **IPC via regular log files** (`src/renderer/fifo.ts`): named FIFOs attempted and
+  rejected — O_RDWR FIFOs cause libuv to consume data via event-loop readability
+  monitoring. Regular append-mode files (`/tmp/octmux-PID-KEY.log`) + `tail -f` is reliable.
+- **`--multi-window` / `--multi-pane` guard**: both flags require a real tmux pane; stale
+  TMUX_PANE env (inherited by child terminals) detected via `/proc/self/fd/0` readlink
+  vs `tmux display-message -p -t $TMUX_PANE "#{pane_tty}"`. Flags are mutually exclusive.
+- **Cleanup (3U.7)**: `text-delta` compat alias removed from `ReplEvent` union; `blocks.smoke.ts`
+  deleted; README rewritten with multiplex docs; this doc updated with locked decision #4.
+
+**What changed in this doc:** locked decision #4 added; Phase 3 UX entry inserted in Phase
+plan; "Architecture at a glance" updated to reflect actual source tree; "Critical files"
+updated; this log entry prepended; frontmatter refreshed.
+
+---
 
 ### 2026-05-20--17-40 — Phase 3 Extended: Ink rendering layer (3E.1–3E.6)
 
@@ -568,6 +630,14 @@ All six sub-phases shipped. octmux is a working REPL: type a prompt, Enter submi
 
 ---
 
+### Phase 3 UX — Typed block renderer + tmux multiplex (3U.1–3U.7)
+
+**Status:** ✓ shipped — see log 2026-05-21 and `docs/Phase3-UX.md`.
+
+All seven sub-phases shipped. Highlights: flicker-free Static scrollback; typed Block model with ANSI role prefixes; per-role visibility toggles (`/show thinking off`); `Renderer` interface with `StdoutRenderer`, `TmuxPaneRenderer`, and `TmuxWindowRenderer` backends; `--multi-window` (recommended, lazy windows) and `--multi-pane` (eager panes) multiplex flags; `tool-call` + `tool-result` consolidated to a shared `"tools"` sink in both renderers. See `docs/Phase3-UX.md` for full spec, design rationale, and implementation log.
+
+---
+
 ### Phase 4 — Status line + async streaming + Esc-interrupt + rich parts (2 days)
 
 **Status:** planned.
@@ -719,15 +789,17 @@ multi-session views, themes) is post-MVP.
 
 ## Critical files
 
-- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/index.ts` — entry, top-level loop, lifecycle wiring
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/index.tsx` — entry, arg parsing, renderer selection, render(`<App/>`)
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/server-lifecycle.ts` — port rotation, spawn, health, dispose
-- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/input.ts` — raw-mode line editor (UX-heavy)
-- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/render.ts` — screen, status line, redraw
-- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/events.ts` — SSE dispatcher
-- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/state.ts` — in-memory store
-- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/slash.ts` — slash registry + fallback
-- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/picker.ts` — menu mode
-- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/orchestra-watch.ts` — fs.watch + badge
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/events.ts` — SSE dispatcher, block event emission
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/blocks.ts` — typed Block model, `formatLine()` ANSI formatter
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/app.tsx` — `<App>`: chrome + Static scrollback, thin renderer translation
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/editor.ts` — LineEditor state machine
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/types.ts` — `Renderer` interface
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/stdout.ts` — `StdoutRenderer` (default)
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/tmux-pane.ts` — `TmuxPaneRenderer` (`--multi-pane`)
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/tmux-window.ts` — `TmuxWindowRenderer` (`--multi-window`)
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/visibility.ts` — per-role visibility, `/show` parser
 
 ## Reused patterns (do not re-derive)
 

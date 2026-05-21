@@ -2,7 +2,7 @@
 title: "octmux — Phase 3-UX: Block-typed renderer + tmux multiplex (panes + windows)"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
-updated_at: 2026-05-21--14-15
+updated_at: 2026-05-21--15-30
 updated_by: Claude Code (Claude Sonnet 4.6)
 parent_plan: docs/Phase3-Extended.md
 context: >
@@ -36,7 +36,150 @@ context: >
   external context.
 ---
 
+## Phase 3-UX implementation summary
+
+This section is the authoritative executive summary of what Phase 3-UX shipped,
+written after all sub-phases (3U.1–3U.7) completed. Read it for architecture
+orientation; read the sub-phase specs and log entries below for rationale and
+detail.
+
+### What was built
+
+Phase 3-UX replaced the monolithic `streamBuf` rendering in `app.tsx` with a
+layered output architecture and added two tmux multiplex backends:
+
+**Layer 1 — Typed block model (`src/blocks.ts`, `src/events.ts`):**
+Every piece of streamed content is a typed `Block` with a `Role` (`text`,
+`thinking`, `tool-call`, `tool-result`, `user`, `error`). `src/events.ts`
+emits `block-start` / `block-delta` / `block-end` events for each role.
+`formatLine(role, line, ...)` produces the ANSI-prefixed output string —
+dim-grey `│ ` for thinking, cyan `⚙ ` for tool calls, dim `↳ ` for results.
+
+**Layer 2 — Static scrollback (`src/app.tsx`):**
+Streamed lines are committed to Ink's `<Static>` at line granularity. The
+dynamic region holds only the bottom chrome (rule + input + rule + status,
+`marginBottom={2}`). Flicker is structurally impossible regardless of response
+length.
+
+**Layer 3 — Per-role visibility (`src/renderer/visibility.ts`):**
+`/show thinking off` / `/show tools off` gates rendering per role. Hidden
+blocks are counted and displayed as badges in StatusLine. `useSyncExternalStore`
+with a cached snapshot (to avoid infinite re-render) connects visibility state
+to React.
+
+**Layer 4 — Renderer interface (`src/renderer/types.ts`, `src/renderer/stdout.ts`):**
+`Renderer` interface extracts all rendering logic from `app.tsx`. `<App>` is a
+thin SSE-to-renderer translation layer; it does not know which backend is active.
+`StdoutRenderer` is the default: immutable array commits for `useSyncExternalStore`
+stability, forwarding "changed" events to React.
+
+**Layer 5 — Multiplex backends:**
+
+*`TmuxPaneRenderer` (`src/renderer/tmux-pane.ts`, flag `--multi-pane`):*
+Spawns **2 side panes** eagerly at startup:
+- `thinking` — horizontal split from origin
+- `tools` — vertical split below thinking (receives both `tool-call` and `tool-result`)
+
+*`TmuxWindowRenderer` (`src/renderer/tmux-window.ts`, flag `--multi-window`):*
+Spawns **up to 2 side windows lazily** — only when a role's first block arrives:
+- `<session>-thinking` — spawned on first thinking block
+- `<session>-tools` — spawned on first tool-call or tool-result block
+
+Both backends share `src/renderer/fifo.ts` (regular append-mode temp files,
+`/tmp/octmux-PID-KEY.log`) + `tail -f` for IPC. Named FIFOs were attempted and
+rejected because O_RDWR on a FIFO causes libuv to register the fd for readability,
+silently consuming data before `tail` can read it.
+
+### Key design decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| `tool-call` + `tool-result` → one sink | `"tools"` window/pane | Full call→result sequence in one scrollback; less window clutter |
+| Window spawning | Lazy (on first block) | Sessions with no tool calls get no tools window |
+| Pane spawning | Eager (at startup) | Panes are already a density-oriented layout; pre-splitting is fine |
+| `--multi-window` as recommended default | Yes | SSH/TTY-friendly; native selection; independent scrollback per role |
+| `--multi-pane` preserved | Yes | Simultaneous view for wide local terminals; not actively developed further |
+| FIFOs vs regular files | Regular files | O_RDWR FIFOs cause libuv to consume data; regular files + `tail -f` via inotify is reliable |
+| `text-delta` compat alias | Removed in 3U.7 | No consumers after 3U.4; was a temporary bridge for the 3U.1→3U.2 transition |
+
+### Pane/window layout (as shipped)
+
+**`--multi-pane` layout:**
+```
+┌──────────────┬───────────┐
+│              │ thinking  │
+│  main        ├───────────┤
+│  (chrome)    │  tools    │
+└──────────────┴───────────┘
+```
+
+**`--multi-window` layout:**
+```
+tmux window list:
+  0: main (origin — chrome + text response)
+  1: <session>-thinking   (spawned on first thinking block)
+  2: <session>-tools      (spawned on first tool-call or tool-result block)
+```
+
+### Files shipped in Phase 3-UX
+
+| File | Status | Description |
+|---|---|---|
+| `src/blocks.ts` | new (3U.1) | `Role` type, `Block` type, `formatLine()`, `formatBlock()` |
+| `src/events.ts` | modified (3U.1, 3U.7) | Block events, `openParts` tracking; `text-delta` removed in 3U.7 |
+| `src/app.tsx` | major refactor (3U.2, 3U.4) | Static scrollback, thin renderer translation layer |
+| `src/renderer/visibility.ts` | new (3U.3) | Per-role on/off, hidden counts, `/show` parser, snapshot cache |
+| `src/renderer/types.ts` | new (3U.4) | `Renderer` interface |
+| `src/renderer/stdout.ts` | new (3U.4) | `StdoutRenderer` |
+| `src/renderer/fifo.ts` | new (3U.5) | Regular temp file IPC (not named FIFOs) |
+| `src/renderer/tmux-pane.ts` | new (3U.5, updated 3U.6-fix) | 2-pane layout, `PANE_KEY` map |
+| `src/renderer/tmux-window.ts` | new (3U.6) | Lazy window spawn, `WINDOW_KEY` map |
+| `src/index.tsx` | modified (3U.4–3U.6) | Renderer construction, `--multi-pane`, `--multi-window`, TTY guard |
+
+---
+
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-21 — Phase 3U.7 (cleanup)
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6)
+
+**What shipped:**
+- `src/events.ts`: removed `text-delta` from `ReplEvent` union; removed dual-emit
+  in `message.part.delta` branch (now emits only `block-delta`). No consumers existed
+  after 3U.4; the alias was a temporary bridge for the 3U.1→3U.2 transition.
+- `src/app.tsx`: no changes needed — already had no `text-delta` handler after 3U.4.
+- `src/blocks.smoke.ts`: deleted (was gitignored; left over from 3U.1 development).
+- `README.md`: major update — added Output architecture section (typed Block model,
+  Renderer interface, three backends); documented `/show` slash commands; documented
+  both `--multi-window` (recommended) and `--multi-pane` flags; added tmux.conf
+  snippets for both modes; added "Choosing between" subsection; added opentmux
+  integration subsection.
+- `docs/Implementation-plan.md`: prepended Phase 3 UX consolidated log entry;
+  inserted Phase 3 UX entry in Phase plan; added locked decision #4; updated stale
+  "Critical files" section (now reflects actual shipped source tree); refreshed
+  frontmatter.
+- `docs/Phase3-UX.md` (this doc):
+  - Added "Phase 3-UX implementation summary" section at the top with architecture
+    overview, key design decisions table, pane/window layout diagrams, and files table.
+  - Fixed stale contract table in "Division of responsibilities": consolidated
+    tool-call + tool-result rows to a single `tools` sink row; updated log file
+    path template (`.log` not `.fifo`).
+  - Fixed "Layout choice (single source of truth)" in §3U.5 spec: updated to reflect
+    2-pane layout (thinking + tools) with a note that the original 3-pane spec was
+    superseded.
+  - Updated "What octmux DOES own" to reference `PANE_KEY`/`WINDOW_KEY` maps and
+    sink keys rather than roles.
+  - Updated opentmux contract surface table: added sink key set primitive; updated
+    log file path template; split tmux command set by mode (pane vs window).
+  - Flipped 3U.7 status ☐ → ✓ in sub-phase order and section heading.
+  - Refreshed frontmatter `updated_at` and `updated_by`.
+
+**What changed in this doc:** 3U.7 implementation log prepended; all stale
+references to 3-pane layout and separate tool-call/tool-result sinks corrected;
+implementation summary section added.
+
+---
 
 ### 2026-05-21 — Phase 3U.6 (TmuxWindowRenderer) + post-implementation fix
 
@@ -478,16 +621,15 @@ pane consumption (octmux still spawns `tail -F` processes;
 opentmux re-skins the panes from outside). Either integration mode
 relies on the same contract.
 
-**The contract that ties the three layers together** is what 3U.5
+**The contract that ties the three layers together** is what 3U.5/3U.6
 implements:
 
-| Octmux emits             | Sink                                | Title set via              |
-|--------------------------|-------------------------------------|----------------------------|
-| `text`, `user`, `error`  | Ink's pane (origin pane, scrollback)| n/a (the chrome pane)      |
-| `thinking`               | `${tmpdir}/octmux-${pid}-thinking.fifo` | `select-pane -T thinking`  |
-| `tool-call`              | `${tmpdir}/octmux-${pid}-tool-call.fifo` | `select-pane -T tool-call` |
-| `tool-result`            | `${tmpdir}/octmux-${pid}-tool-result.fifo` | `select-pane -T tool-result` |
-| (future) `subagent:<id>` | `${tmpdir}/octmux-${pid}-subagent-<id>.fifo` | `select-pane -T subagent:<id>` |
+| Octmux emits                    | Sink                                           | Title / name                                      |
+|---------------------------------|------------------------------------------------|---------------------------------------------------|
+| `text`, `user`, `error`         | Ink's pane (origin pane, scrollback)           | n/a (the chrome pane)                             |
+| `thinking`                      | `/tmp/octmux-${pid}-thinking.log`              | pane mode: `select-pane -T thinking`; window mode: window named `<session>-thinking` |
+| `tool-call`, `tool-result`      | `/tmp/octmux-${pid}-tools.log` (shared)        | pane mode: `select-pane -T tools`; window mode: window named `<session>-tools` |
+| (future) `subagent:<id>`        | `/tmp/octmux-${pid}-subagent-<id>.log`         | pane/window named `subagent:<id>` or `<session>-subagent-<id>` |
 
 Anything that wants to consume octmux's output — a default
 `tail -F` per side pane, or opentmux's pane-renderer — reads from
@@ -515,17 +657,19 @@ configures tmux. octmux itself stays out of both concerns.
 
 **What octmux DOES own programmatically inside this contract:**
 
-- Choosing which `Role` exists and which gets its own pane (the
-  `SIDE_ROLES` array in `tmux-pane.ts`).
-- Creating the FIFO for each role and spawning the pane with
-  `split-window` (with a default geometry; opentmux may override).
-- Setting the pane title via `select-pane -T <role>` so tmux's
-  `pane-border-format` can render it.
-- Cleaning up FIFOs and panes on shutdown.
+- Choosing which `Role` exists and which sink key it maps to (`PANE_KEY` /
+  `WINDOW_KEY` maps in `tmux-pane.ts` / `tmux-window.ts`). Currently: `thinking`
+  → its own sink; `tool-call` and `tool-result` → shared `"tools"` sink.
+- Creating the log file for each sink key and spawning a pane (`split-window`,
+  pane mode) or window (`new-window -d`, window mode). Panes are created eagerly
+  in `setup()`; windows are created lazily on first block via `_ensureWindow()`.
+- Setting the pane title (`select-pane -T`) or window name (`new-window -n`) so
+  the user can navigate and identify them.
+- Cleaning up log files and panes/windows on shutdown.
 - The per-role ANSI prefix glyph in `formatLine` (`│`, `⚙`, `↳`) —
-  this is intra-content framing, written to the pane's byte stream,
-  visible regardless of whether tmux draws a border around the
-  pane. It does not depend on tmux configuration.
+  this is intra-content framing, written to the sink's byte stream,
+  visible regardless of whether tmux draws a border. It does not depend
+  on tmux configuration.
 
 That last item is worth dwelling on: there are *two* kinds of
 framing in play, and they are independent.
@@ -584,7 +728,7 @@ Each sub-phase is independently shippable and verifies standalone.
 - **3U.4** — Extract `Renderer` interface (Option 2 seam). ✓ shipped.
 - **3U.5** — `TmuxPaneRenderer`: multi-pane layout via FIFOs (Option 3, panes). ✓ shipped.
 - **3U.6** — `TmuxWindowRenderer`: multi-window layout via FIFOs (Option 3, windows; default mode). ✓ shipped.
-- **3U.7** — Cleanup + parent-plan update (consolidates both multiplex modes). ☐ pending.
+- **3U.7** — Cleanup + parent-plan update (consolidates both multiplex modes). ✓ shipped.
 
 Note on ordering — the original plan placed cleanup at 3U.6 and
 did not include the window renderer. After 3U.5 shipped and was
@@ -1461,18 +1605,19 @@ After all splits, `tmux select-pane -t $originPaneId` returns focus.
 
 **Layout choice (single source of truth):**
 
-The simplest layout that matches the opentmux demo is:
+The shipped layout (updated after 3U.6 consolidation):
 - Main pane (octmux's origin): chrome + main text response.
-- Right split: thinking pane.
-- Right split of right split: tool-call pane.
-- Below tool-call: tool-result pane.
+- Right split (`-h`): thinking pane.
+- Below thinking (`-v`): tools pane (receives both tool-call and tool-result content).
 
 tmux's `split-window -h` splits horizontally (creates a right pane);
-`split-window -v` splits vertically. Order matters: split right
-first, then split the right pane vertically. This keeps the main
-pane wide and stacks the side panes on the right. The implementer
-may prefer a different geometry; document the chosen one in the
-README's tmux section.
+`split-window -v` splits vertically. The `tools` pane sits below `thinking`
+in the right column. Both panes use the sink-key as their title (`select-pane -T thinking`,
+`select-pane -T tools`).
+
+*Note: the original spec showed 3 separate panes for thinking/tool-call/tool-result.
+This was consolidated to 2 panes post-3U.5 (see 3U.6 log entry). The implementation
+in `src/renderer/tmux-pane.ts` reflects the 2-pane layout.*
 
 **Pane framing via tmux (this is the heart of 3U.5):**
 
@@ -1976,7 +2121,7 @@ preserved alternative.
 
 ### Phase 3U.7 — Cleanup + parent-plan update (½–1 day)
 
-**Status:** ☐ pending
+**Status:** ✓ complete
 
 **Goal:** delete the `text-delta` compatibility alias, document the
 final dual-mode architecture (window mode as default-recommended,
@@ -2202,15 +2347,17 @@ Phase 3-UX makes the following primitives available for opentmux
 public surface; nothing else in octmux is intended for external
 consumption.
 
-| Primitive                | Provided by              | Stability         |
-|--------------------------|--------------------------|-------------------|
-| Role enum                | `src/blocks.ts` `Role`   | versioned; closed for v1 — see below |
-| FIFO path template       | `src/renderer/fifo.ts`   | stable: `${tmpdir}/octmux-${pid}-${role}.fifo` |
-| Pane title per role      | `select-pane -T <role>`  | stable: role string verbatim |
-| `Renderer` interface     | `src/renderer/types.ts`  | stable across Phase 4; extensible after |
-| `Visibility` system      | `src/renderer/visibility.ts` | stable; opentmux may read but should not write |
-| Per-role ANSI formatter  | `formatLine` in `blocks.ts` | stable; pure function |
-| tmux command set         | `split-window`, `select-pane`, `kill-pane`, `list-panes` | stable |
+| Primitive                     | Provided by              | Stability         |
+|-------------------------------|--------------------------|-------------------|
+| Role enum                     | `src/blocks.ts` `Role`   | versioned; closed for v1 — see below |
+| Sink key set                  | `PANE_KEY`/`WINDOW_KEY` in renderer files | v1: `"thinking"` and `"tools"` (tool-call + tool-result share one sink) |
+| Log file path template        | `src/renderer/fifo.ts`   | stable: `/tmp/octmux-${pid}-${sinkKey}.log` |
+| Window/pane title per sink    | `new-window -n` (window mode) / `select-pane -T` (pane mode) | stable: sink key verbatim; window mode adds `<session>-` prefix |
+| `Renderer` interface          | `src/renderer/types.ts`  | stable across Phase 4; extensible after |
+| `Visibility` system           | `src/renderer/visibility.ts` | stable; opentmux may read but should not write |
+| Per-role ANSI formatter       | `formatLine` in `blocks.ts` | stable; pure function |
+| tmux command set — pane mode  | `split-window`, `select-pane`, `kill-pane` | stable |
+| tmux command set — window mode | `new-window`, `set-window-option`, `kill-window`, `display-message` | stable |
 
 The role enum is "closed for v1" — meaning octmux v1 will only
 emit the roles listed in `src/blocks.ts`. Future versions may
@@ -2219,8 +2366,14 @@ opentmux should match roles by string prefix where appropriate
 (`subagent:` for the subagent family) and degrade gracefully on
 unknown roles (default styling, no special pane treatment).
 
-The FIFO path template is the most public part of the contract.
-Once shipped, the template `${tmpdir}/octmux-${pid}-${role}.fifo`
+The sink key set (not the role set) is the public surface for file paths and
+tmux constructs. Currently two sink keys exist: `thinking` and `tools`. The
+`tools` sink receives both `tool-call` and `tool-result` roles, so opentmux
+consumers see a single chronological stream of tool activity rather than two
+separate panes/windows.
+
+The log file path template is the most public part of the contract.
+Once shipped, the template `/tmp/octmux-${pid}-${sinkKey}.log`
 must not change without a major version bump, because external
 consumers will hard-code or pattern-match against it.
 
