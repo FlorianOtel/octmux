@@ -7,6 +7,7 @@ import { App } from "./app.tsx";
 import { Visibility } from "./renderer/visibility.ts";
 import { StdoutRenderer } from "./renderer/stdout.ts";
 import { TmuxPaneRenderer } from "./renderer/tmux-pane.ts";
+import { TmuxWindowRenderer } from "./renderer/tmux-window.ts";
 import type { Renderer } from "./renderer/types.ts";
 
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
@@ -24,7 +25,8 @@ Usage:
 
 Flags:
   --no-tmux-guard           allow running outside tmux (scripts / CI)
-  --multi-pane              split into tmux panes (thinking + tool side panes)`);
+  --multi-pane              split into tmux panes (thinking + tool side panes)
+  --multi-window            split into tmux windows (thinking + tool side windows)`);
   process.exit(0);
 }
 
@@ -37,6 +39,7 @@ const noTmuxGuard = args.includes("--no-tmux-guard");
 const attachIdx   = args.indexOf("--attach");
 const attachPort  = attachIdx !== -1 ? parseInt(args[attachIdx + 1], 10) : NaN;
 const multiPane   = args.includes("--multi-pane");
+const multiWindow = args.includes("--multi-window");
 const originPaneId = process.env.TMUX_PANE ?? "";
 
 if (!process.env.TMUX && !noTmuxGuard) {
@@ -44,27 +47,23 @@ if (!process.env.TMUX && !noTmuxGuard) {
   process.exit(1);
 }
 
-if (multiPane) {
+if (multiPane && multiWindow) {
+  console.error("octmux: --multi-pane and --multi-window are mutually exclusive");
+  process.exit(2);
+}
+if (multiPane || multiWindow) {
   if (!process.env.TMUX || !process.env.TMUX_PANE) {
-    console.error("octmux --multi-pane requires running inside a tmux pane (TMUX/TMUX_PANE not set).");
+    console.error("octmux --multi-pane/--multi-window requires running inside a tmux pane (TMUX/TMUX_PANE not set).");
     process.exit(1);
   }
-  // TMUX/TMUX_PANE can be inherited by child terminals launched from within tmux.
-  // Verify we're actually running in the tmux-managed PTY for this pane, not a
-  // fresh terminal that just inherited the env.
-  // TMUX/TMUX_PANE are inherited by child terminals launched from within tmux.
-  // Verify by reading the process's stdin symlink from /proc and comparing to
-  // the PTY that tmux has assigned to this pane. Stale-env terminals have a
-  // different PTY than the tmux pane from which the env vars were inherited.
   try {
-    const myTty   = readlinkSync("/proc/self/fd/0");           // e.g. /dev/pts/5
-    // -p is a flag (print to stdout); format string is the last positional arg.
+    const myTty   = readlinkSync("/proc/self/fd/0");
     const paneTty = execFileSync("tmux", [
       "display-message", "-p", "-t", process.env.TMUX_PANE, "#{pane_tty}",
-    ], { encoding: "utf8" }).trim();                           // e.g. /dev/pts/5
+    ], { encoding: "utf8" }).trim();
     if (myTty !== paneTty) {
       console.error(
-        `octmux --multi-pane: TMUX_PANE env is stale (inherited from tmux, not running inside it).\n` +
+        `octmux --multi-pane/--multi-window: TMUX_PANE env is stale (inherited from tmux, not running inside it).\n` +
         `  This process stdin: ${myTty}\n` +
         `  Pane ${process.env.TMUX_PANE} PTY:  ${paneTty}\n` +
         `Run octmux from inside an actual tmux pane.`
@@ -72,8 +71,7 @@ if (multiPane) {
       process.exit(1);
     }
   } catch {
-    // /proc/self/fd/0 unavailable or tmux query failed — fail safe.
-    console.error("octmux --multi-pane: could not verify tmux pane context. Run from inside a tmux pane.");
+    console.error("octmux: could not verify tmux pane context. Run from inside a tmux pane.");
     process.exit(1);
   }
 }
@@ -135,7 +133,12 @@ process.on("exit", () => { try { process.stdout.write("\x1b[?1007l"); } catch {}
 
 const visibility = new Visibility();
 let renderer: Renderer;
-if (multiPane) {
+if (multiWindow) {
+  const tmuxRenderer = new TmuxWindowRenderer(visibility);
+  await tmuxRenderer.setup();
+  await new Promise(res => setImmediate(res));
+  renderer = tmuxRenderer;
+} else if (multiPane) {
   const tmuxRenderer = new TmuxPaneRenderer(visibility);
   await tmuxRenderer.setup(originPaneId);
   // Yield to the event loop so SIGWINCH from pane splits updates stdout.rows/columns.

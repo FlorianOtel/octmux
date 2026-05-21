@@ -1,9 +1,9 @@
 ---
-title: "octmux — Phase 3-UX: Block-typed renderer + tmux multi-pane"
+title: "octmux — Phase 3-UX: Block-typed renderer + tmux multiplex (panes + windows)"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
 updated_at: 2026-05-21--13-35
-updated_by: Claude Code (Claude Sonnet 4.6)
+updated_by: Claude Code (Claude Haiku 4.5)
 parent_plan: docs/Phase3-Extended.md
 context: >
   Phase 3 Extended shipped Ink-based rendering with a single growing
@@ -14,23 +14,61 @@ context: >
   full clear-and-redraw of the dynamic region on every flush → visible
   flicker on every long response. Phase 3 UX moves streamed content out
   of Ink's dynamic region entirely (Option 4), then introduces a typed
-  Renderer interface (Option 2) so a future tmux multi-pane backend
+  Renderer interface (Option 2) so a future tmux multiplex backend
   (Option 3) is a swap rather than a rewrite. The path is 4 → 2 → 3.
   A core architectural principle threads through every sub-phase: Ink's
   responsibility is bounded to a single pane's interactive chrome
-  (input area, status line, modals); tmux is the pane manager and
-  framing engine (borders, titles, splits, resize, focus); opentmux is
-  the future cross-pane coherence layer. Ink does not draw multi-pane
+  (input area, status line, modals); tmux is the layout/framing engine
+  (borders, titles, splits, windows, resize, focus); opentmux is the
+  future cross-pane coherence layer. Ink does not draw multi-pane
   layouts and does not draw pane borders — those belong to tmux. This
-  separation is what makes the role → FIFO → pane-title contract in
-  3U.5 a clean integration seam for opentmux. Each sub-phase is
-  independently shippable and verifies in isolation. Same execution
-  model as Phase 3 Extended: a fresh CC session reading this doc plus
-  the repo at the prior phase's commit should be able to complete the
-  next phase without external context.
+  separation is what makes the role → FIFO → tmux-construct contract
+  in 3U.5/3U.6 a clean integration seam for opentmux. **Phase 3-UX
+  ships two multiplex backends**: `TmuxPaneRenderer` (3U.5, side
+  panes via `split-window` — shipped, preserved as alternative but
+  not actively developed further) and `TmuxWindowRenderer` (3U.6, full
+  windows via `new-window` — the default recommended mode for SSH/TTY
+  and KISS workflows). 3U.7 is the final reflective cleanup once both
+  renderers are in place. Each sub-phase is independently shippable
+  and verifies in isolation. Same execution model as Phase 3 Extended:
+  a fresh CC session reading this doc plus the repo at the prior
+  phase's commit should be able to complete the next phase without
+  external context.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-21 — Phase 3U.6 (TmuxWindowRenderer)
+
+**Implemented by:** Claude Code (Claude Haiku 4.5)
+
+**What shipped:**
+- `src/renderer/tmux-window.ts` (new, ~130 lines): `TmuxWindowRenderer extends EventEmitter implements Renderer`.
+  Lazy window creation via `_ensureWindow(role)` called from `beginBlock()` when a side-role block opens for the
+  first time. `setup()` only records `_originWindowId` and `_sessionName` via tmux queries; no windows created
+  until first use. Per-role line buffers accumulate text and write complete lines with `\n` to each role's FIFO
+  (`tail -f` flushes immediately during streaming). Non-side roles delegate to internal `StdoutRenderer`.
+  `dispose()` kills windows and closes FIFOs (only for roles that were actually created). Event delegation and
+  `getCommitted`/`getTail` mirror `TmuxPaneRenderer` for `app.tsx` compatibility.
+- `src/renderer/types.ts`: added `"tmux-window"` to `kind` union (required for interface compliance).
+- `src/index.tsx`: `--multi-window` flag; merged guard block covering both `--multi-pane` and `--multi-window`
+  with mutual-exclusion check; three-way renderer construction (window, pane, stdout). Guard reuses the
+  TTY-comparison stale-env detection from 3U.5 for both multiplex modes.
+
+**Key design choices:**
+- Lazy spawn on first use prevents resource waste for roles that never produce output.
+- Uses regular append-mode log files (from fifo.ts, not named FIFOs) for robust IPC.
+- Window names follow `<session>-<role>` pattern set at creation via `-n` flag.
+- `automatic-rename off` and `allow-rename off` prevent tmux from renaming windows to "tail".
+- `-d` flag on `new-window` keeps focus on origin window, avoiding visible flash during startup.
+
+**What changed in this doc:**
+- Prepended this implementation log entry at top.
+- Status flipped in "Sub-phase execution order": 3U.6 ☐ pending → ✓ shipped.
+- Status flipped in section heading "### Phase 3U.6": **Status:** ☐ pending → **Status:** ✓ complete.
+- Frontmatter `updated_at: 2026-05-21--13-35`, `updated_by: Claude Code (Claude Haiku 4.5)`.
+
+---
 
 ### 2026-05-21 — Phase 3U.5 (+ post-implementation fixes)
 
@@ -240,6 +278,100 @@ delegate framing to tmux, where it belongs. See the "Division of
 responsibilities" section below for the full Ink/tmux/opentmux
 boundary statement that governs every sub-phase.
 
+## Why windows became the default multiplex mode (post-3U.5 retrospective)
+
+Added after 3U.5 shipped and was used in earnest for a few days. The
+section captures a course correction: the original plan terminated at
+`TmuxPaneRenderer`, with panes as the only multi-stream backend. Real
+use revealed that panes are the right answer for one specific
+workflow (wide local terminal, visual density valued, simultaneous
+view of all streams) and the wrong answer for the workflow octmux is
+actually being used in most days (frequent SSH to TTYs, native
+selection desired, KISS preference, robustness over flash).
+
+Rather than amend 3U.5 retroactively, the plan keeps it as-shipped
+and adds 3U.6 (`TmuxWindowRenderer`) as a second `Renderer`
+implementation alongside the existing one. Both modes are reachable
+via mutually exclusive CLI flags (`--multi-pane` / `--multi-window`);
+window mode becomes the recommended default; pane mode is preserved
+as an alternative for users who want the visual-density view.
+**`TmuxPaneRenderer` is not removed and is not actively developed
+further** — it sits at its 3U.5 shipped state, and feature work that
+follows (Phase 5 subagent support, opentmux integration, anything
+beyond bug fixes) targets the window renderer.
+
+**What windows do better for the actual workflow:**
+
+1. **Native terminal selection works.** Each window fills the whole
+   terminal, so OS-level click-drag selects within one role's
+   content with no copy-mode dance, no Shift modifier, no `wl-copy`
+   binding. The selection problem documented in the chat planning
+   thread (selecting "thinking" content but accidentally selecting
+   across all panes) disappears entirely.
+2. **SSH/TTY-friendly.** Panes need width to be useful; an
+   80-column SSH session with three vertical panes is unreadable.
+   Windows are width-independent — multi-window mode works
+   identically on an 80×24 TTY and a 200×60 local terminal.
+3. **Independent scrollback per role.** Each window owns its own
+   scrollback buffer and copy-mode state. No "I scrolled the
+   thinking pane and now tool-result is off-screen." Histories are
+   fully independent and accessed with each window's own mouse
+   wheel / `prefix [`.
+4. **Scales painlessly with subagents.** Twelve subagent windows is
+   twelve entries in the status line — `prefix w` shows a navigable
+   list with names. Twelve subagent *panes* is a layout problem
+   that needs opentmux-level work to solve. Window mode is what
+   makes Phase 5 cheap.
+5. **Status-line activity indicators.** With `set -g
+   monitor-activity on` in `~/.tmux.conf`, tmux's status line
+   subtly highlights windows with new output. At-a-glance "which
+   role just produced something" without continuous context
+   switching.
+6. **Zero `tmux.conf` required.** Pane mode wanted five lines of
+   border config (`pane-border-status`, `pane-border-format`, etc.)
+   to look right. Window mode works bare-bones with zero config;
+   every window is full-screen terminal text.
+7. **Less octmux code per multiplex feature.** The whole "pane
+   geometry" subsection of 3U.5 (`-h` vs `-v` order, splitting the
+   right pane vertically, returning focus to origin pane) becomes
+   moot. Window mode just calls `new-window -d` once per role.
+
+**The trade-off, named explicitly:**
+
+Window mode loses the *simultaneous view* of multiple streams. In
+pane mode you watch thinking arrive while reading the response. In
+window mode you have to switch (`prefix n/p`, `prefix <number>`,
+`prefix w`). For workflows that genuinely benefit from peripheral
+vision over all streams at once (debugging a tool-heavy session at
+a wide local terminal, e.g.), pane mode remains the right choice
+and is preserved. For SSH/TTY use and most day-to-day work,
+activity flags in the status line make "switch when something
+happens" cheap enough that the simultaneous view is not missed.
+
+**What this means for the plan structure:**
+
+- 3U.5 remains shipped and unchanged.
+- 3U.6 adds `TmuxWindowRenderer` as a peer to `TmuxPaneRenderer`.
+- 3U.7 (the original 3U.6, renumbered) does the consolidated
+  cleanup once both renderers exist — README, parent plan,
+  contract surface table all updated to reflect the dual-mode
+  reality.
+- `TmuxPaneRenderer` is documented as "preserved as alternative;
+  not actively developed further" in both the README and the
+  contract-surface table.
+
+**What this does NOT mean:**
+
+- Pane mode is not "deprecated" in the sense of "will be removed."
+  It works, it stays. The phrase "not actively developed further"
+  means: bug fixes only; no new features land in pane mode unless
+  they fall out of shared `Renderer`-interface work that benefits
+  both. Phase 5 subagent panes, for example, are window-only.
+- The contract from 3U.5 is not invalidated. FIFO path template,
+  role enum, visibility system — all unchanged. 3U.6 reuses every
+  one of those primitives; the only differences are the tmux
+  commands used to create and label the sink.
+
 ## Locked decisions (updates to parent plan)
 
 The parent plan's locked decision #3 (post-Phase-3E) reads:
@@ -433,12 +565,23 @@ One source file per concern, same layout convention as Phase 3 Extended.
 
 Each sub-phase is independently shippable and verifies standalone.
 
-- **3U.1** — Block-typed event surface + ANSI formatter (no rendering change).
-- **3U.2** — Direct-to-terminal streaming: kill the flicker (Option 4).
-- **3U.3** — Per-role visibility toggles (`/show thinking off` etc).
-- **3U.4** — Extract `Renderer` interface (Option 2 seam).
-- **3U.5** — `TmuxPaneRenderer`: multi-pane layout via FIFOs (Option 3).
-- **3U.6** — Cleanup + parent-plan update.
+- **3U.1** — Block-typed event surface + ANSI formatter (no rendering change). ✓ shipped.
+- **3U.2** — Direct-to-terminal streaming: kill the flicker (Option 4). ✓ shipped.
+- **3U.3** — Per-role visibility toggles (`/show thinking off` etc). ✓ shipped.
+- **3U.4** — Extract `Renderer` interface (Option 2 seam). ✓ shipped.
+- **3U.5** — `TmuxPaneRenderer`: multi-pane layout via FIFOs (Option 3, panes). ✓ shipped.
+- **3U.6** — `TmuxWindowRenderer`: multi-window layout via FIFOs (Option 3, windows; default mode). ✓ shipped.
+- **3U.7** — Cleanup + parent-plan update (consolidates both multiplex modes). ☐ pending.
+
+Note on ordering — the original plan placed cleanup at 3U.6 and
+did not include the window renderer. After 3U.5 shipped and was
+used in earnest, the plan was amended (see "Why windows became the
+default multiplex mode" above) to add window mode and to swap the
+sub-phase order: implement window mode first (now 3U.6), then run
+the consolidated cleanup last (now 3U.7), so cleanup reflects the
+final dual-renderer architecture rather than an intermediate state.
+3U.1–3U.5 shipped under their original numbers; only 3U.6 and 3U.7
+are affected by the renumber.
 
 ---
 
@@ -1498,13 +1641,341 @@ update remain.
 
 ---
 
-### Phase 3U.6 — Cleanup + parent-plan update (½ day)
+### Phase 3U.6 — TmuxWindowRenderer: multi-window layout via FIFOs (½–1 day)
+
+**Status:** ✓ complete
+
+**Goal:** ship a second `Renderer` implementation that uses tmux
+**windows** instead of panes — each side role (thinking, tool-call,
+tool-result) lives in its own dedicated tmux window, named
+`<session>-<role>`. Add `--multi-window` CLI flag, mutually exclusive
+with `--multi-pane`. Make window mode the recommended default for
+SSH/TTY workflows; preserve `TmuxPaneRenderer` unchanged for users
+who prefer the simultaneous-view layout.
+
+**Why this is small:** the `Renderer` interface extracted in 3U.4
+absorbs the change cleanly. `TmuxWindowRenderer` reuses the
+`StdoutRenderer` for in-pane content (text, user, error), the
+`fifo.ts` log-file mechanism for IPC, and the `Visibility` system
+for role gating. The only genuinely new code is the ~30 lines of
+window-specific tmux command invocations. Most of the file mirrors
+`tmux-pane.ts` because most of the file is `Renderer`-interface
+plumbing, not tmux semantics. See the rationale section "Why
+TmuxWindowRenderer (and what stays of TmuxPaneRenderer)" above for
+the decision context.
+
+**Deliverable:** `octmux --multi-window` inside tmux spawns three
+new windows (`<session>-thinking`, `<session>-tool-call`,
+`<session>-tool-result`), each running `tail -f` on its role's log
+file. Origin window keeps the chrome + text response. Submitting a
+prompt that triggers thinking and a tool call fills the three side
+windows concurrently. `prefix w` shows them in a navigable list.
+Native click-drag selection works inside each window. Mouse wheel
+scrolls each window's scrollback independently. Detach/reattach
+preserves windows and content. Quitting octmux closes the side
+windows and removes the log files. `--multi-pane` continues to work
+exactly as 3U.5 shipped, with no behavioural change.
+
+**Files to create:**
+
+- `src/renderer/tmux-window.ts` (new, ~100 lines):
+  ```ts
+  import { execFileSync } from "node:child_process";
+  import type { Renderer } from "./types.ts";
+  import type { Role } from "../blocks.ts";
+  import { formatLine } from "../blocks.ts";
+  import { makeFifo, type FifoHandle } from "./fifo.ts";
+  import { StdoutRenderer } from "./stdout.ts";
+  import { Visibility } from "./visibility.ts";
+
+  const SIDE_ROLES: Role[] = ["thinking", "tool-call", "tool-result"];
+
+  export class TmuxWindowRenderer implements Renderer {
+    readonly kind = "tmux-window" as const;
+    readonly visibility: Visibility;
+    private main: StdoutRenderer;
+    private fifos = new Map<Role, FifoHandle>();
+    private windowIds = new Map<Role, string>();   // tmux window IDs (@N format)
+    private originWindowId: string | null = null;
+    private openBlocks = new Map<string, Role>();
+    private lineBuffers = new Map<Role, string>();
+
+    constructor(visibility: Visibility) {
+      this.visibility = visibility;
+      this.main = new StdoutRenderer(visibility);
+    }
+
+    async setup() {
+      // Capture origin window (no $TMUX_WINDOW env var; query tmux directly).
+      this.originWindowId = execFileSync("tmux", [
+        "display-message", "-p", "-F", "#{window_id}",
+      ]).toString().trim();
+      const sessionName = execFileSync("tmux", [
+        "display-message", "-p", "-F", "#{session_name}",
+      ]).toString().trim();
+
+      for (const role of SIDE_ROLES) {
+        const fifo = makeFifo(role, process.pid);   // reuse 3U.5's log-file impl
+        this.fifos.set(role, fifo);
+        this.lineBuffers.set(role, "");
+
+        // new-window -d keeps focus on origin; -P -F prints new window id;
+        // -n sets the window name at creation (no separate select-pane -T).
+        const id = execFileSync("tmux", [
+          "new-window", "-d",
+          "-P", "-F", "#{window_id}",
+          "-n", `${sessionName}-${role}`,
+          `tail -f ${fifo.path}`,
+        ]).toString().trim();
+        this.windowIds.set(role, id);
+
+        // Prevent tmux from auto-renaming the window to "tail" once the command starts.
+        execFileSync("tmux", ["set-window-option", "-t", id, "automatic-rename", "off"]);
+        execFileSync("tmux", ["set-window-option", "-t", id, "allow-rename", "off"]);
+      }
+      // No focus restoration needed — `-d` already kept focus on origin.
+    }
+
+    beginBlock(partID: string, role: Role) {
+      this.openBlocks.set(partID, role);
+      if (!this.isSideRole(role)) this.main.beginBlock(partID, role);
+    }
+
+    appendToBlock(partID: string, text: string) {
+      const role = this.openBlocks.get(partID);
+      if (!role) return;
+      if (!this.visibility.isVisible(role)) { this.visibility.increment(role); return; }
+      if (this.isSideRole(role)) {
+        // Same per-role line-buffer pattern as TmuxPaneRenderer.
+        let buf = (this.lineBuffers.get(role) ?? "") + text;
+        let nl = buf.indexOf("\n");
+        while (nl !== -1) {
+          const line = buf.slice(0, nl);
+          this.fifos.get(role)!.writer.write(formatLine(role, line, false) + "\n");
+          buf = buf.slice(nl + 1);
+          nl = buf.indexOf("\n");
+        }
+        this.lineBuffers.set(role, buf);
+      } else {
+        this.main.appendToBlock(partID, text);
+      }
+    }
+
+    endBlock(partID: string, status?: "ok" | "error") {
+      const role = this.openBlocks.get(partID);
+      this.openBlocks.delete(partID);
+      if (role && this.isSideRole(role)) {
+        // Flush any trailing partial line.
+        const buf = this.lineBuffers.get(role) ?? "";
+        if (buf) {
+          this.fifos.get(role)!.writer.write(formatLine(role, buf, false) + "\n");
+          this.lineBuffers.set(role, "");
+        }
+      } else {
+        this.main.endBlock(partID, status);
+      }
+    }
+
+    commitUserInput(t: string)      { this.main.commitUserInput(t); }
+    commitSystemMessage(t: string)  { this.main.commitSystemMessage(t); }
+    commitError(m: string)          { this.main.commitError(m); }
+    commitTurnEnd()                 { this.main.commitTurnEnd(); }
+
+    // Pass-through hooks for app.tsx's useSyncExternalStore.
+    on(ev: string, cb: () => void)  { this.main.on(ev, cb); return this; }
+    off(ev: string, cb: () => void) { this.main.off(ev, cb); return this; }
+    getCommitted()                  { return this.main.getCommitted(); }
+    getTail()                       { return this.main.getTail(); }
+
+    async dispose() {
+      for (const [role, fifo] of this.fifos) {
+        try { execFileSync("tmux", ["kill-window", "-t", this.windowIds.get(role)!]); } catch {}
+        await fifo.close();
+      }
+      await this.main.dispose();
+    }
+
+    private isSideRole(r: Role) { return SIDE_ROLES.includes(r); }
+  }
+  ```
+
+  Notes on the implementation:
+  - Method bodies for `beginBlock` / `appendToBlock` / `endBlock` /
+    `commit*` / `getCommitted` / `getTail` / event delegation are
+    structurally identical to `TmuxPaneRenderer`. They could be
+    factored into a shared abstract base — but with only one extra
+    subclass and `TmuxPaneRenderer` frozen at 3U.5, the duplication
+    cost is bounded and the readability of a self-contained file
+    wins. The decision to *not* refactor to a shared base is
+    deliberate; revisit only if a third multiplex backend is added.
+  - The window-id format in tmux is `@N` (vs `%N` for pane ids).
+    Keep the variable name `windowIds` to avoid confusion.
+  - The `-d` flag on `new-window` is critical: without it, tmux
+    focuses each newly-spawned window, producing visible "flash"
+    cycling through three windows at startup before settling.
+
+**Files to modify:**
+
+- `src/index.tsx`:
+  - Add `--multi-window` argv flag alongside `--multi-pane`.
+  - Mutual exclusion check: if both passed, error with
+    `octmux: --multi-pane and --multi-window are mutually exclusive`
+    and exit non-zero.
+  - Renderer construction:
+    ```ts
+    const visibility = new Visibility();
+    let renderer: Renderer;
+    if (args.includes("--multi-pane") && args.includes("--multi-window")) {
+      process.stderr.write("octmux: --multi-pane and --multi-window are mutually exclusive\n");
+      process.exit(2);
+    } else if (args.includes("--multi-window")) {
+      renderer = new TmuxWindowRenderer(visibility);
+      await (renderer as TmuxWindowRenderer).setup();
+    } else if (args.includes("--multi-pane")) {
+      renderer = new TmuxPaneRenderer(visibility);
+      await (renderer as TmuxPaneRenderer).setup(originPaneId);
+    } else {
+      renderer = new StdoutRenderer(visibility);
+    }
+    ```
+  - `--multi-window` inherits the same tmux-presence guard as
+    `--multi-pane`: must run inside tmux (the
+    `tmux display-message` calls in `TmuxWindowRenderer.setup()`
+    will fail noisily otherwise; wrap in a try/catch with a clear
+    error message, mirroring the stale-env detection used for
+    `--multi-pane`).
+
+**Files NOT modified:**
+
+- `src/app.tsx` — no changes. The `Renderer` interface from 3U.4
+  is sufficient; `<App>` only sees `renderer.commit*` /
+  `renderer.beginBlock` / etc.
+- `src/blocks.ts`, `src/events.ts` — unchanged.
+- `src/renderer/types.ts`, `src/renderer/stdout.ts`,
+  `src/renderer/visibility.ts`, `src/renderer/fifo.ts` — all
+  unchanged.
+- `src/renderer/tmux-pane.ts` — **unchanged**. This is a deliberate
+  freeze. The Pane renderer is preserved at its 3U.5 shipped state.
+  Future contract evolutions touch `tmux-window.ts` and the
+  `Renderer` interface; `tmux-pane.ts` only changes if a `Renderer`
+  contract change forces it.
+
+**Edge cases to handle:**
+
+1. **Not running inside tmux.** `tmux display-message` fails with a
+   non-zero exit, throwing from `execFileSync`. Wrap
+   `TmuxWindowRenderer.setup()` in a try/catch in `index.tsx` and
+   emit a clear error: `octmux --multi-window requires running
+   inside tmux`. Same UX as the `--multi-pane` guard from 3U.5.
+2. **Stale tmux env (terminal launched from inside a tmux session
+   but no longer attached).** Same TTY-comparison guard 3U.5 uses
+   (`/proc/self/fd/0` readlink vs `tmux display-message -p
+   "#{pane_tty}"`) applies here too. Reuse the existing helper from
+   `index.tsx` if it was extracted, or inline the same check.
+3. **Window auto-rename.** Without
+   `set-window-option automatic-rename off` and `allow-rename off`,
+   tmux will rewrite the window name to `tail` (the command being
+   run) shortly after spawn. Both options must be set per window;
+   they are session-scoped so doing it once per window at setup
+   suffices.
+4. **A side window is killed manually by the user.** The `tail -f`
+   process dies; subsequent writes from octmux to that role's log
+   file still succeed (it's a regular file, not a FIFO — see 3U.5's
+   "Key bugs found and fixed" log entry). The content is just no
+   longer displayed. On `dispose()`, `kill-window` for that id will
+   fail; the catch in dispose handles it silently. No crash.
+5. **Detach / reattach.** Windows are session-owned by tmux.
+   Detaching the tmux client leaves windows running; reattaching
+   shows them intact with full scrollback. This is the property
+   that makes window mode robust for SSH workflows where the user
+   may disconnect and reconnect.
+6. **Activity flag recommendation.** `set -g monitor-activity on`
+   and `set -g visual-activity off` in `~/.tmux.conf` give a subtle
+   highlight in the status line when a non-focused window has new
+   output. Recommend this in the README (3U.7) but do not require
+   it — window mode works without.
+
+**Why FIFOs / log files unchanged from 3U.5:** the per-role IPC
+mechanism is decoupled from the multiplex backend by design. 3U.5
+ships regular append-mode log files instead of named FIFOs (see
+3U.5's log entry for the libuv-readability rationale); window mode
+inherits this verbatim. `src/renderer/fifo.ts` is reused
+unchanged. The same `tail -f` consumer pattern works for both
+panes and windows.
+
+**Manual verification:**
+
+1. Outside tmux: `octmux --multi-window` exits with a clear error.
+   `octmux` (no flag) and `octmux --multi-pane` still work as before.
+2. `octmux --multi-pane --multi-window` exits with the mutex error
+   and a non-zero exit code.
+3. Inside tmux: `octmux --multi-window` opens three new windows
+   named `<session>-thinking`, `<session>-tool-call`,
+   `<session>-tool-result`. Focus stays in the origin window
+   (octmux's chrome is visible; no flash).
+4. `prefix w` shows the window list including the three octmux
+   windows and the origin.
+5. Submit a prompt that triggers thinking and a tool call.
+   `prefix 1`/`prefix 2`/etc. switches to each octmux window; each
+   contains its role's streamed content correctly formatted.
+6. Native click-drag (no Shift, no copy-mode) selects text inside
+   the focused window only, scoped to that window. Mouse wheel
+   scrolls each window's scrollback independently.
+7. With `set -g monitor-activity on` in `~/.tmux.conf`, sending a
+   prompt while focused on the origin window highlights the
+   side windows in the status line as they receive content.
+8. Detach the tmux session (`prefix d`). Reattach
+   (`tmux attach`). All windows preserved; scrollback intact in
+   each.
+9. Kill a side window manually (`tmux kill-window -t @N` from
+   another pane). Octmux continues running. New content for that
+   role is silently dropped to the still-open log file but not
+   displayed. No crash. Quit octmux normally — remaining windows
+   close, log files removed.
+10. Quit octmux (Ctrl-C double-press). All three side windows
+    disappear. `/tmp/octmux-${pid}-*.log` files removed. Origin
+    window returns to the shell prompt.
+11. `--multi-pane` end-to-end test from 3U.5's verification still
+    passes unchanged — this phase did not touch `tmux-pane.ts`.
+
+**Out of scope:**
+
+- Any change to `TmuxPaneRenderer`. It stays exactly at its 3U.5
+  shipped state.
+- Refactoring shared code between Pane and Window renderers into
+  a base class. The duplication is bounded and `TmuxPaneRenderer`
+  is frozen; refactor cost > maintenance saving.
+- README and parent-plan updates documenting the dual-mode
+  reality. That work is 3U.7.
+- Subagent windows (Phase 5; same contract, additional roles).
+- Activity-flag tmux.conf snippets (user-tunable; recommend in
+  README via 3U.7).
+- Runtime switching between window mode and pane mode
+  mid-session.
+
+**Handoff to 3U.7:** both multiplex renderers exist and verify
+end-to-end. The cleanup phase now consolidates documentation
+(README, parent plan, contract surface table) around the dual-mode
+reality: window mode as default-recommended, pane mode as
+preserved alternative.
+
+---
+
+### Phase 3U.7 — Cleanup + parent-plan update (½–1 day)
 
 **Status:** ☐ pending
 
 **Goal:** delete the `text-delta` compatibility alias, document the
-new architecture, flip status in the parent implementation plan,
-prepare a clean baseline for Phase 4.
+final dual-mode architecture (window mode as default-recommended,
+pane mode preserved as alternative), update the contract surface in
+the opentmux sequencing section, flip status in the parent
+implementation plan, prepare a clean baseline for Phase 4.
+
+This is the original 3U.6 cleanup phase, renumbered after 3U.6
+became `TmuxWindowRenderer`. Scope has grown modestly to reflect
+the dual-renderer reality, but the shape of the phase is
+unchanged: it is reflective work that touches docs and one or two
+small code items, not new features.
 
 **Files to delete:**
 
@@ -1521,68 +1992,126 @@ prepare a clean baseline for Phase 4.
   goes away.
 - `README.md`:
   - Add an "Output architecture" section: typed Block model,
-    Renderer interface, two backends (stdout / tmux-pane).
-  - Document the `/show` slash commands and the `--multi-pane` flag.
-  - Document the tmux pane geometry chosen in 3U.5.
-  - Document the FIFO cleanup command for crash recovery.
+    Renderer interface, **three** backends (stdout / tmux-window /
+    tmux-pane).
+  - Document the `/show` slash commands and **both** multiplex
+    flags: `--multi-window` (recommended default for SSH/TTY use)
+    and `--multi-pane` (preserved alternative for wide local
+    terminals; not actively developed further).
+  - Document the tmux geometry chosen in 3U.5 (panes) and 3U.6
+    (windows). For windows, note that names follow
+    `<session>-<role>` and that `prefix w` is the natural
+    navigator.
+  - Document the FIFO/log-file cleanup command for crash recovery
+    (`rm /tmp/octmux-*.log`).
   - **Add a "Pane framing and the Ink/tmux boundary" subsection**
     that summarises the Division of responsibilities section from
     this doc. Key points the README must convey: Ink owns the
-    chrome pane only; tmux owns all multi-pane layout and pane
-    framing; the user's `~/.tmux.conf` configures pane appearance
-    (with the recommended snippet from 3U.5 reproduced verbatim);
+    chrome pane only; tmux owns all multi-pane/multi-window layout
+    and framing; the user's `~/.tmux.conf` configures appearance
+    (with the recommended snippet from 3U.5 reproduced verbatim
+    for pane mode, and the optional `monitor-activity on` /
+    `visual-activity off` snippet recommended for window mode);
     octmux issues no `set-option` commands. State explicitly that
-    `--multi-pane` works without the tmux.conf snippet (panes are
-    just unbordered) so the reader understands the snippet is a
-    polish step, not a prerequisite.
+    both modes work without any `tmux.conf` customisation —
+    customisation is polish, not prerequisite.
+  - **Add a "Choosing between --multi-window and --multi-pane"
+    subsection** that gives the reader a decision rule: window
+    mode is right for SSH/TTY, narrow terminals, KISS preference,
+    independent scrollback per role; pane mode is right for wide
+    local terminals where simultaneous view of all streams pays
+    off and where the user is comfortable with copy-mode for
+    per-pane selection. State that window mode is the default
+    recommendation and that pane mode is preserved as-is but not
+    being actively developed.
   - **Add an "Integration with opentmux" subsection** that
-    documents the contract 3U.5 establishes — the role → FIFO →
-    pane-title mapping — and identifies it as the seam opentmux
-    is expected to consume. Spell out the two integration modes
-    (opentmux owns spawning, or opentmux owns consumption) so a
-    future opentmux contributor reading the README knows where
-    the seam is and which side they're building. List the exact
-    FIFO path template (`${tmpdir}/octmux-${pid}-${role}.fifo`)
-    and the set of role names octmux emits, since those are the
-    public surface of the contract. **State explicitly that
-    opentmux integration is not part of Phase 3-UX and is not
-    the immediately-following work** — point the reader at the
-    "Sequencing toward opentmux integration" section of this
-    doc for the gating criteria, the full contract surface, the
-    contract assumptions, and the concrete sequencing
-    recommendation (Phase 3-UX → Phase 4 → soak → Phase 5 →
-    opentmux). The README's job is to surface the contract to
-    casual readers; this doc's job is to govern when and how it
-    gets consumed.
+    documents the contract 3U.5/3U.6 establish — the role → FIFO →
+    tmux-construct (pane title or window name) mapping — and
+    identifies it as the seam opentmux is expected to consume.
+    Spell out the two integration modes (opentmux owns spawning,
+    or opentmux owns consumption) so a future opentmux
+    contributor reading the README knows where the seam is and
+    which side they're building. List the exact log-file path
+    template (`/tmp/octmux-${pid}-${role}.log`) and the set of
+    role names octmux emits, since those are the public surface
+    of the contract. **State explicitly that opentmux integration
+    is not part of Phase 3-UX and is not the immediately-following
+    work** — point the reader at the "Sequencing toward opentmux
+    integration" section of this doc for the gating criteria, the
+    full contract surface, the contract assumptions, and the
+    concrete sequencing recommendation (Phase 3-UX → Phase 4 →
+    soak → Phase 5 → opentmux). **Note that, while opentmux
+    integration could in principle target either renderer, future
+    work (Phase 5, opentmux) targets `TmuxWindowRenderer`** —
+    pane mode is reachable via the contract but is not a focus of
+    development.
 - `docs/Implementation-plan.md`:
   - Add locked decision #4 from this doc's "Locked decisions"
-    section.
+    section. The wording is unchanged from when it was drafted;
+    "multi-pane" inside the decision text already reads correctly
+    as "the multiplex backends established in 3U.5/3U.6" —
+    locked decisions are intentionally short and broad.
   - Insert a "Phase 3 UX" entry in the Phase plan between
     Phase 3 Extended and Phase 4, with status `✓ shipped — see log
     <date>` and a link reference to this doc.
-  - Prepend a single consolidated log entry summarising 3U.1–3U.6.
+  - Prepend a single consolidated log entry summarising 3U.1–3U.7.
+    Mention both multiplex backends, with one sentence on why
+    window mode is the default.
   - Refresh `updated_by` and `updated_at` in frontmatter.
-- `docs/Phase3-UX.md` (this doc): leave in place as historical
-  contract.
+- `docs/Phase3-UX.md` (this doc):
+  - Leave in place as historical contract.
+  - The implementation log for 3U.6 and 3U.7 is filled in normally
+    as those phases ship.
+
+**Contract-surface table update (in the "Sequencing toward opentmux
+integration" section of this doc):**
+
+The table row currently reads:
+
+> | Pane title per role | `select-pane -T <role>` | stable: role string verbatim |
+
+Replace with:
+
+> | Window/pane title per role | `new-window -n` (window mode) / `select-pane -T` (pane mode) | stable: role string verbatim (window mode adds `<session>-` prefix) |
+
+And the tmux command set row:
+
+> | tmux command set | `split-window`, `select-pane`, `kill-pane`, `list-panes` | stable |
+
+Replace with:
+
+> | tmux command set | window mode: `new-window`, `set-window-option`, `kill-window`, `display-message`. pane mode: `split-window`, `select-pane`, `kill-pane`, `list-panes`. | stable per mode |
+
+No other changes to the opentmux section are required — the
+contract assumptions (1–7) all hold for both renderers as written.
 
 **Verification:**
 
-1. `bun run dev` and `bun run dev -- --multi-pane` both produce the
-   correct UX walk-through end-to-end.
-2. `bun run compile` produces a working `dist/octmux`. Both modes
-   work from the compiled binary.
-3. `grep -r "text-delta" src/` returns nothing.
-4. `wc -l src/*.ts src/**/*.ts src/**/*.tsx` — total project size
-   should be modestly larger than Phase 3 Extended (the renderer/
-   directory adds ~400 lines; visibility and slash-command parsing
-   add ~100; the simpler `app.tsx` saves ~80).
-5. `git log --oneline` shows one commit per sub-phase (3U.1–3U.6).
+1. `bun run dev`, `bun run dev -- --multi-pane`, and `bun run dev
+   -- --multi-window` all produce the correct UX walk-through
+   end-to-end.
+2. `bun run dev -- --multi-pane --multi-window` exits with the
+   mutex error.
+3. `bun run compile` produces a working `dist/octmux`. All three
+   modes work from the compiled binary.
+4. `grep -r "text-delta" src/` returns nothing.
+5. `wc -l src/*.ts src/**/*.ts src/**/*.tsx` — total project size
+   should be modestly larger than after 3U.5 (window renderer adds
+   ~100 lines, app.tsx loses a few from text-delta removal).
+6. `git log --oneline` shows one commit per sub-phase (3U.1–3U.7),
+   with 3U.6 dated after 3U.5 and 3U.7 dated after 3U.6.
+7. README has the "Choosing between --multi-window and --multi-pane"
+   subsection; opentmux contract section mentions both modes.
+8. Parent `Implementation-plan.md` log entry mentions both
+   multiplex backends.
 
 **Handoff to Phase 4:** The Renderer interface is the seam for any
 future output-related work. StatusLine has its first piece of real
 content (the hidden-roles summary); Phase 4 fills in the rest
 (model, tokens, cost, orchestra badge) via the same
-`useSyncExternalStore` pattern.
+`useSyncExternalStore` pattern. Phase 5 (subagent multi-window
+support) targets `TmuxWindowRenderer` and does not need to
+maintain parity in `TmuxPaneRenderer`.
 
 ---
 
@@ -1847,6 +2376,8 @@ When finishing a sub-phase:
    before starting the next; do NOT interleave.
 3. Prepend a log entry at the top of this doc's "Implementation log"
    section using the same format as Phase 3 Extended's entries.
-4. Only after 3U.6: prepend a single consolidated log entry to the
+4. Only after 3U.7: prepend a single consolidated log entry to the
    parent plan's Implementation log and flip the parent's locked
-   decision #4 to "shipped".
+   decision #4 to "shipped". (3U.7 is the final sub-phase since the
+   3U.6/3U.7 reorder; the original plan terminated at 3U.6
+   pre-reorder.)

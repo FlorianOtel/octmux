@@ -11,6 +11,6 @@ export interface Renderer {
   // Called by app.tsx on session-idle: flush open tail + push 2-blank turn separator.
   commitTurnEnd(): void;
   dispose(): Promise<void>;
-  readonly kind: "stdout" | "tmux-pane";
+  readonly kind: "stdout" | "tmux-pane" | "tmux-window";
   readonly visibility: Visibility;
 }
