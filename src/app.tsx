@@ -163,7 +163,6 @@ export function App(props: AppProps) {
       <Box flexDirection="column" marginBottom={3}>
         <Rule title={props.sessionLabel} width={w} align="right" />
         <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question} onSubmit={handleSubmit} />
-        <Rule width={w} />
         <StatusLine vis={renderer.visibility} />
       </Box>
     </>

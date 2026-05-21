@@ -90,33 +90,38 @@ const session   = await client.session.create({});
 const sessionID = session.data!.id;
 const eventStream = await client.global.event({});
 
-// ─── Terminal setup ─────────────────────────────────────────────────────────
+// ─── Terminal setup (alternate scroll mode only — clear happens after renderer setup) ──
 
 // Alternate scroll mode: wheel events arrive as ↑/↓ arrow keys.
 // Does NOT intercept button clicks, so text selection keeps working.
 process.stdout.write("\x1b[?1007h");
 process.on("exit", () => { try { process.stdout.write("\x1b[?1007l"); } catch {} });
 
-// Clear terminal and position cursor so the input area anchors at the bottom.
-// Dynamic area minimum height:
-//   Rule(1) + Input(1) + Rule(1) + StatusLine(1) + marginBottom(3) = 7 lines.
-// The 4-line status area = StatusLine(1) + 3 reserved blank lines.
-const _rows = process.stdout.rows ?? 24;
-process.stdout.write('\x1b[2J\x1b[H'); // clear entire screen, cursor home
-const _pad = Math.max(0, _rows - 7);
-if (_pad > 0) process.stdout.write('\n'.repeat(_pad));
-
-// ─── Render ───────────────────────────────────────────────────────────────────
+// ─── Renderer construction (must come before terminal clear for multi-pane) ──────────
+// In --multi-pane mode, setup() calls tmux split-window which sends SIGWINCH and resizes
+// the main pane. The terminal clear + cursor positioning must happen AFTER the resize so
+// process.stdout.rows/columns reflect the actual (narrower) pane dimensions.
 
 const visibility = new Visibility();
 let renderer: Renderer;
 if (multiPane) {
   const tmuxRenderer = new TmuxPaneRenderer(visibility);
   await tmuxRenderer.setup(originPaneId);
+  // Yield to the event loop so SIGWINCH from pane splits updates stdout.rows/columns.
+  await new Promise(res => setImmediate(res));
   renderer = tmuxRenderer;
 } else {
   renderer = new StdoutRenderer(visibility);
 }
+
+// ─── Terminal clear + cursor anchor ──────────────────────────────────────────────────
+// Chrome height: Rule(1) + Input(1) + StatusLine(1) + marginBottom(3) = 6 lines.
+const _rows = process.stdout.rows ?? 24;
+process.stdout.write('\x1b[2J\x1b[H'); // clear entire screen, cursor home
+const _pad = Math.max(0, _rows - 6);
+if (_pad > 0) process.stdout.write('\n'.repeat(_pad));
+
+// ─── Render ───────────────────────────────────────────────────────────────────
 
 render(
   <App
