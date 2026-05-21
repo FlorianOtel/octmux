@@ -2,7 +2,7 @@
 title: "octmux — Phase 3-UX: Block-typed renderer + tmux multiplex (panes + windows)"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
-updated_at: 2026-05-21--15-30
+updated_at: 2026-05-21--17-19
 updated_by: Claude Code (Claude Sonnet 4.6)
 parent_plan: docs/Phase3-Extended.md
 context: >
@@ -82,8 +82,8 @@ Spawns **2 side panes** eagerly at startup:
 
 *`TmuxWindowRenderer` (`src/renderer/tmux-window.ts`, flag `--multi-window`):*
 Spawns **up to 2 side windows lazily** — only when a role's first block arrives:
-- `<session>-thinking` — spawned on first thinking block
-- `<session>-tools` — spawned on first tool-call or tool-result block
+- `<session>--thinking` — spawned on first thinking block
+- `<session>--tools` — spawned on first tool-call or tool-result block
 
 Both backends share `src/renderer/fifo.ts` (regular append-mode temp files,
 `/tmp/octmux-PID-KEY.log`) + `tail -f` for IPC. Named FIFOs were attempted and
@@ -116,9 +116,9 @@ silently consuming data before `tail` can read it.
 **`--multi-window` layout:**
 ```
 tmux window list:
-  0: main (origin — chrome + text response)
-  1: <session>-thinking   (spawned on first thinking block)
-  2: <session>-tools      (spawned on first tool-call or tool-result block)
+  0: <session>         (origin — renamed to opencode session label at startup)
+  1: <session>--thinking   (spawned on first thinking block)
+  2: <session>--tools      (spawned on first tool-call or tool-result block)
 ```
 
 ### Files shipped in Phase 3-UX
@@ -139,6 +139,15 @@ tmux window list:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-21 — Phase 3U.8 (minor-fixes)
+
+**Implemented by:** Claude Code (Claude Haiku 4.5)
+
+**What shipped:**
+`TmuxWindowRenderer` origin window renamed to opencode session label; side window names changed to `<label>--thinking` / `<label>--tools` (double-dash); `SubprocessStatus` component added — animated 2-char spinner + elapsed timer per active subprocess, shown above the input chrome.
+
+---
 
 ### 2026-05-21 — Phase 3U.7 (cleanup)
 
@@ -205,7 +214,7 @@ A `WINDOW_KEY` / `PANE_KEY` map (`tool-call` → `"tools"`, `tool-result` → `"
 Per-role line buffers remain Role-keyed since the two tool roles carry distinct ANSI prefixes.
 
 For `TmuxWindowRenderer`: `_ensureWindow(windowKey)` is idempotent — the second tool role to fire is a
-no-op. At most two windows open per session: `<session>-thinking` and `<session>-tools`.
+no-op. At most two windows open per session: `<session>--thinking` and `<session>--tools`.
 
 For `TmuxPaneRenderer`: `setup()` now creates 2 panes instead of 3 — `thinking` (horizontal split from
 origin) and `tools` (vertical split below thinking), giving a layout of `main | thinking / tools`.
@@ -214,7 +223,7 @@ origin) and `tools` (vertical split below thinking), giving a layout of `main | 
 - Lazy spawn on first use — sessions with no thinking blocks get no thinking window, sessions with no tool
   calls get no tools window.
 - Uses regular append-mode log files (from fifo.ts, not named FIFOs) for robust IPC.
-- Window names: `<session>-thinking` and `<session>-tools` (set at creation via `-n` flag).
+- Window names: `<session>--thinking` and `<session>--tools` (set at creation via `-n` flag); origin window renamed to `<session>`.
 - `automatic-rename off` and `allow-rename off` prevent tmux from renaming windows to "tail".
 - `-d` flag on `new-window` keeps focus on origin window, avoiding visible flash at spawn time.
 
@@ -627,9 +636,9 @@ implements:
 | Octmux emits                    | Sink                                           | Title / name                                      |
 |---------------------------------|------------------------------------------------|---------------------------------------------------|
 | `text`, `user`, `error`         | Ink's pane (origin pane, scrollback)           | n/a (the chrome pane)                             |
-| `thinking`                      | `/tmp/octmux-${pid}-thinking.log`              | pane mode: `select-pane -T thinking`; window mode: window named `<session>-thinking` |
-| `tool-call`, `tool-result`      | `/tmp/octmux-${pid}-tools.log` (shared)        | pane mode: `select-pane -T tools`; window mode: window named `<session>-tools` |
-| (future) `subagent:<id>`        | `/tmp/octmux-${pid}-subagent-<id>.log`         | pane/window named `subagent:<id>` or `<session>-subagent-<id>` |
+| `thinking`                      | `/tmp/octmux-${pid}-thinking.log`              | pane mode: `select-pane -T thinking`; window mode: window named `<session>--thinking` |
+| `tool-call`, `tool-result`      | `/tmp/octmux-${pid}-tools.log` (shared)        | pane mode: `select-pane -T tools`; window mode: window named `<session>--tools` |
+| (future) `subagent:<id>`        | `/tmp/octmux-${pid}-subagent-<id>.log`         | pane/window named `subagent:<id>` or `<session>--subagent-<id>` |
 
 Anything that wants to consume octmux's output — a default
 `tail -F` per side pane, or opentmux's pane-renderer — reads from
@@ -2352,7 +2361,7 @@ consumption.
 | Role enum                     | `src/blocks.ts` `Role`   | versioned; closed for v1 — see below |
 | Sink key set                  | `PANE_KEY`/`WINDOW_KEY` in renderer files | v1: `"thinking"` and `"tools"` (tool-call + tool-result share one sink) |
 | Log file path template        | `src/renderer/fifo.ts`   | stable: `/tmp/octmux-${pid}-${sinkKey}.log` |
-| Window/pane title per sink    | `new-window -n` (window mode) / `select-pane -T` (pane mode) | stable: sink key verbatim; window mode adds `<session>-` prefix |
+| Window/pane title per sink    | `new-window -n` (window mode) / `select-pane -T` (pane mode) | stable: sink key verbatim; window mode: `<session>--<sinkKey>` (origin window: `<session>`) |
 | `Renderer` interface          | `src/renderer/types.ts`  | stable across Phase 4; extensible after |
 | `Visibility` system           | `src/renderer/visibility.ts` | stable; opentmux may read but should not write |
 | Per-role ANSI formatter       | `formatLine` in `blocks.ts` | stable; pure function |

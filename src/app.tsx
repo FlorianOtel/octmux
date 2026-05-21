@@ -11,6 +11,7 @@ import { Rule } from "./components/Rule.tsx";
 import { StatusLine } from "./components/StatusLine.tsx";
 import { PermissionModal } from "./components/PermissionModal.tsx";
 import { QuestionModal } from "./components/QuestionModal.tsx";
+import { SubprocessStatus } from "./components/SubprocessStatus.tsx";
 
 type QuestionType = {
   question: string;
@@ -40,6 +41,7 @@ export function App(props: AppProps) {
   const [permission, setPermission] = useState<{ permID: string; title: string } | null>(null);
   const [question, setQuestion] = useState<{ reqID: string; questions: QuestionType[] } | null>(null);
   const [lastSubmitted, setLastSubmitted] = useState<string>("");
+  const [procTimes, setProcTimes] = useState<{ thinking: number | null; tools: number | null }>({ thinking: null, tools: null });
 
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -67,7 +69,13 @@ export function App(props: AppProps) {
         if (!evRaw) continue;
         const evList: ReplEvent[] = Array.isArray(evRaw) ? evRaw : [evRaw];
         for (const ev of evList) {
-          if      (ev.kind === "block-start")  renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName });
+          if (ev.kind === "block-start") {
+            renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName });
+            if (ev.role === "thinking")
+              setProcTimes(p => p.thinking === null ? { ...p, thinking: Date.now() } : p);
+            else if (ev.role === "tool-call" || ev.role === "tool-result")
+              setProcTimes(p => p.tools === null ? { ...p, tools: Date.now() } : p);
+          }
           else if (ev.kind === "block-delta")  renderer.appendToBlock(ev.partID, ev.text);
           else if (ev.kind === "block-end")    renderer.endBlock(ev.partID, ev.status);
           else if (ev.kind === "error")        { renderer.commitError(ev.message); setIsGenerating(false); }
@@ -76,6 +84,7 @@ export function App(props: AppProps) {
             renderer.commitTurnEnd();
             setIsGenerating(false);
             setLastSubmitted("");
+            setProcTimes({ thinking: null, tools: null });
           }
           else if (ev.kind === "permission-asked") setPermission({ permID: ev.permID, title: ev.title });
           else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
@@ -161,6 +170,7 @@ export function App(props: AppProps) {
       {permission && <PermissionModal title={permission.title} onAnswer={handlePermission} />}
       {question && <QuestionModal questions={question.questions} onAnswer={handleQuestion} />}
       <Box flexDirection="column" marginBottom={2}>
+        <SubprocessStatus thinking={procTimes.thinking} tools={procTimes.tools} />
         <Rule title={props.sessionLabel} width={w} align="right" />
         <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question} onSubmit={handleSubmit} />
         <Rule width={w} />

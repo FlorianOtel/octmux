@@ -135,7 +135,7 @@ const visibility = new Visibility();
 let renderer: Renderer;
 if (multiWindow) {
   const tmuxRenderer = new TmuxWindowRenderer(visibility);
-  await tmuxRenderer.setup();
+  await tmuxRenderer.setup(sessionID.slice(0, 8));
   await new Promise(res => setImmediate(res));
   renderer = tmuxRenderer;
 } else if (multiPane) {

@@ -30,7 +30,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   // Line buffers keyed by Role — tool-call and tool-result have distinct
   // ANSI prefixes even though they share a window.
   private _lineBufs   = new Map<Role, string>();
-  private _sessionName = "";
+  private _sessionLabel = "";
   private _originWindowId = "";
 
   constructor(visibility: Visibility) {
@@ -40,17 +40,26 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     this._main.on("changed", () => this.emit("changed"));
   }
 
-  async setup(): Promise<void> {
-    // Only probe tmux context — no windows spawned yet (lazy).
+  async setup(sessionLabel: string): Promise<void> {
+    // Probe tmux context and rename origin window to the session label.
+    this._sessionLabel = sessionLabel;
     this._originWindowId = execFileSync("tmux", [
       "display-message", "-p", "#{window_id}",
     ]).toString().trim();
-    this._sessionName = execFileSync("tmux", [
-      "display-message", "-p", "#{session_name}",
-    ]).toString().trim();
+    // Rename origin window to the session label and lock it.
+    execFileSync("tmux", [
+      "rename-window", "-t", this._originWindowId, sessionLabel,
+    ]);
+    execFileSync("tmux", [
+      "set-window-option", "-t", this._originWindowId, "automatic-rename", "off",
+    ]);
+    execFileSync("tmux", [
+      "set-window-option", "-t", this._originWindowId, "allow-rename", "off",
+    ]);
   }
 
   // Create the window + log file for a given window key on first use.
+  // Future: /rename will call `tmux rename-window` on all _windowIds; subagents follow the same `<label>--<key>` pattern.
   private _ensureWindow(windowKey: string): void {
     if (this._fifos.has(windowKey)) return;
     const fifo = makeFifo(windowKey, process.pid);
@@ -58,7 +67,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     const id = execFileSync("tmux", [
       "new-window", "-d",
       "-P", "-F", "#{window_id}",
-      "-n", `${this._sessionName}-${windowKey}`,
+      "-n", `${this._sessionLabel}--${windowKey}`,
       `tail -f ${fifo.path}`,
     ]).toString().trim();
     this._windowIds.set(windowKey, id);

@@ -74,9 +74,9 @@ Hidden blocks are counted but not rendered. The StatusLine shows `hidden: T·N` 
 
 Three tmux windows after a session with thinking and tool calls:
 ```
-window 0: main             (origin — chrome + text response, always present)
-window 1: <session>-thinking   (spawned on first thinking block)
-window 2: <session>-tools      (spawned on first tool-call or tool-result block)
+window 0: <session>            (origin — renamed to opencode session label at startup)
+window 1: <session>--thinking  (spawned on first thinking block)
+window 2: <session>--tools     (spawned on first tool-call or tool-result block)
 ```
 Navigate with `prefix n`/`prefix p`, `prefix <number>`, or `prefix w` for the list.
 
@@ -129,7 +129,7 @@ octmux establishes a contract for external consumers (e.g. opentmux):
 | Primitive | Details |
 |---|---|
 | Log file path | `/tmp/octmux-${pid}-${sinkKey}.log` (`thinking` or `tools`) |
-| Window name | `<session>-thinking`, `<session>-tools` (window mode) |
+| Window name | `<session>--thinking`, `<session>--tools` (window mode) |
 | Pane title | `thinking`, `tools` via `select-pane -T` (pane mode) |
 
 opentmux can integrate in two modes: (A) take over spawning — octmux creates log files and announces them; opentmux creates panes/windows with its own geometry; (B) take over consumption — octmux spawns panes/windows as normal; opentmux re-skins them from outside. Mode B requires no octmux changes. See `docs/Phase3-UX.md` §"Sequencing toward opentmux integration" for full details.

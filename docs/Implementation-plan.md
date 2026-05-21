@@ -3,7 +3,7 @@ title: "octmux — Implementation Plan"
 created_at: 2026-05-18--21-58
 created_by: Claude Code (Claude Sonnet 4.6 1M)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-21--15-30
+updated_at: 2026-05-21--17-18
 context: >
   octmux is a text-only barebones REPL UI for OpenCode that mimics the Claude
   Code CLI feel: text REPL, one bottom status line, Emacs-style line edits,
@@ -630,11 +630,11 @@ All six sub-phases shipped. octmux is a working REPL: type a prompt, Enter submi
 
 ---
 
-### Phase 3 UX — Typed block renderer + tmux multiplex (3U.1–3U.7)
+### Phase 3 UX — Typed block renderer + tmux multiplex (3U.1–3U.8)
 
 **Status:** ✓ shipped — see log 2026-05-21 and `docs/Phase3-UX.md`.
 
-All seven sub-phases shipped. Highlights: flicker-free Static scrollback; typed Block model with ANSI role prefixes; per-role visibility toggles (`/show thinking off`); `Renderer` interface with `StdoutRenderer`, `TmuxPaneRenderer`, and `TmuxWindowRenderer` backends; `--multi-window` (recommended, lazy windows) and `--multi-pane` (eager panes) multiplex flags; `tool-call` + `tool-result` consolidated to a shared `"tools"` sink in both renderers. See `docs/Phase3-UX.md` for full spec, design rationale, and implementation log.
+All eight sub-phases shipped. Highlights: flicker-free Static scrollback; typed Block model with ANSI role prefixes; per-role visibility toggles (`/show thinking off`); `Renderer` interface with `StdoutRenderer`, `TmuxPaneRenderer`, and `TmuxWindowRenderer` backends; `--multi-window` (recommended, lazy windows) and `--multi-pane` (eager panes) multiplex flags; `tool-call` + `tool-result` consolidated to a shared `"tools"` sink in both renderers. Origin window renamed to opencode session label; side windows use `<label>--<key>` naming convention (double-dash); `SubprocessStatus` component shows animated spinner + elapsed timer for active subprocesses. See `docs/Phase3-UX.md` for full spec, design rationale, and implementation log.
 
 ---
 
