@@ -2,7 +2,7 @@
 title: "octmux — Phase 3-UX: Block-typed renderer + tmux multi-pane"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
-updated_at: 2026-05-21--11-45
+updated_at: 2026-05-21--12-55
 updated_by: Claude Code (Claude Haiku 4.5)
 parent_plan: docs/Phase3-Extended.md
 context: >
@@ -31,6 +31,31 @@ context: >
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-21 — Phase 3U.4
+
+**Implemented by:** Claude Code (Claude Haiku 4.5)
+
+**What shipped:**
+- `src/renderer/types.ts` (new): `Renderer` interface with `beginBlock`, `appendToBlock`,
+  `endBlock`, `commitUserInput`, `commitSystemMessage`, `commitError`, `commitTurnEnd`,
+  `dispose`, `kind`, `visibility`
+- `src/renderer/stdout.ts` (new): `StdoutRenderer extends EventEmitter implements Renderer`;
+  owns all rendering logic (line-split, block-transition separators, visibility gating,
+  turn-end separator); uses immutable array updates for useSyncExternalStore compatibility;
+  exports `CommittedLine` type
+- `src/app.tsx`: pure refactor — all rendering state/logic removed; accepts `renderer:
+  Renderer` prop; `useSyncExternalStore` for scrollback+tail; thin SSE dispatch calling
+  renderer methods; no functional change
+- `src/index.tsx`: constructs `new StdoutRenderer(new Visibility())`; passes as `renderer`
+  prop to `<App>`; disposes on exit
+
+**What changed in this doc:** Phase 3U.4 status ☐ → ✓
+
+**Suggested next steps:** Phase 3U.5 — TmuxPaneRenderer: add --multi-pane flag; spawn
+side panes via tmux split-window; route non-text blocks to per-role FIFOs.
+
+---
 
 ### 2026-05-21 — Phase 3U.3
 
@@ -884,7 +909,7 @@ interface so a future tmux-pane backend can be a swap.
 
 ### Phase 3U.4 — Extract Renderer interface (Option 2 seam) (½ day)
 
-**Status:** ☐ pending
+**Status:** ✓ complete
 
 **Goal:** pull the "format a block; commit to Static; manage tail
 buffer" logic out of `app.tsx` and behind a `Renderer` interface.
