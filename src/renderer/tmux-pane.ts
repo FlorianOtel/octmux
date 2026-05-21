@@ -75,7 +75,7 @@ export class TmuxPaneRenderer extends EventEmitter implements Renderer {
     if (this._isSideRole(role)) {
       // Raw formatted content only — NO blank separators (see §3U.5 note in docs/Phase3-UX.md).
       const fifo = this._fifos.get(role);
-      if (fifo) try { fifo.writer.write(formatLine(role, text, false)); } catch {}
+      if (fifo) fifo.write(formatLine(role, text, false));
     } else {
       this._main.appendToBlock(partID, text);
     }
@@ -84,9 +84,9 @@ export class TmuxPaneRenderer extends EventEmitter implements Renderer {
   endBlock(partID: string, status?: "ok" | "error"): void {
     const role = this._openBlocks.get(partID);
     if (role && this._isSideRole(role)) {
-      // Single trailing newline — not a 2-blank separator; just terminates the last line cleanly.
+      // Single trailing newline — terminates the last line cleanly (not a 2-blank separator).
       const fifo = this._fifos.get(role);
-      if (fifo) try { fifo.writer.write("\n"); } catch {}
+      if (fifo) fifo.write("\n");
     } else {
       this._main.endBlock(partID, status);
     }
@@ -102,7 +102,7 @@ export class TmuxPaneRenderer extends EventEmitter implements Renderer {
     for (const [role, fifo] of this._fifos) {
       const paneId = this._paneIds.get(role);
       if (paneId) try { execFileSync("tmux", ["kill-pane", "-t", paneId]); } catch {}
-      await fifo.close();
+      fifo.close();
     }
     await this._main.dispose();
   }

@@ -1,4 +1,5 @@
 import { render } from "ink";
+import { execFileSync } from "node:child_process";
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { findFreePort, spawnOpencodeServer, type ServerHandle } from "./server-lifecycle.ts";
 import { App } from "./app.tsx";
@@ -116,7 +117,18 @@ if (multiPane) {
 
 // ─── Terminal clear + cursor anchor ──────────────────────────────────────────────────
 // Chrome height: Rule(1) + Input(1) + StatusLine(1) + marginBottom(3) = 6 lines.
-const _rows = process.stdout.rows ?? 24;
+// Use tmux to get the accurate pane height — process.stdout.rows may lag SIGWINCH
+// from pane splits and pane-border-status title bars.
+let _rows: number;
+if (process.env.TMUX) {
+  try {
+    _rows = parseInt(
+      execFileSync("tmux", ["display-message", "-p", "#{pane_height}"]).toString().trim(), 10,
+    );
+  } catch { _rows = process.stdout.rows ?? 24; }
+} else {
+  _rows = process.stdout.rows ?? 24;
+}
 process.stdout.write('\x1b[2J\x1b[H'); // clear entire screen, cursor home
 const _pad = Math.max(0, _rows - 6);
 if (_pad > 0) process.stdout.write('\n'.repeat(_pad));

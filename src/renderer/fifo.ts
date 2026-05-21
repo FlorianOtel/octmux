@@ -5,8 +5,9 @@ import { execFileSync } from "node:child_process";
 
 export type FifoHandle = {
   path: string;
-  writer: fs.WriteStream;
-  close: () => Promise<void>;
+  // Synchronous write — more reliable than WriteStream for O_RDWR|O_NONBLOCK FIFOs in Bun.
+  write: (data: string) => void;
+  close: () => void;
 };
 
 export function makeFifo(role: string, pid: number): FifoHandle {
@@ -14,16 +15,13 @@ export function makeFifo(role: string, pid: number): FifoHandle {
   try { fs.unlinkSync(p); } catch {}
   // mkfifo not in Bun/Node stdlib; use system binary (available on all Linux distros).
   execFileSync("mkfifo", [p]);
-  // O_RDWR avoids blocking when no reader is attached yet (opening O_WRONLY would block).
+  // O_RDWR avoids blocking when no reader is attached yet (O_WRONLY would block until reader opens).
   const fd = fs.openSync(p, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
-  const writer = fs.createWriteStream("", { fd, autoClose: false });
-  // Swallow EPIPE — the side pane may be killed by the user at any time.
-  writer.on("error", () => {});
   return {
     path: p,
-    writer,
-    close: async () => {
-      await new Promise<void>((res) => writer.end(() => res()));
+    // fs.writeSync directly invokes the write() syscall — no stream buffering, no silent drops.
+    write: (data: string) => { try { fs.writeSync(fd, data); } catch {} },
+    close: () => {
       try { fs.closeSync(fd); } catch {}
       try { fs.unlinkSync(p); } catch {}
     },
