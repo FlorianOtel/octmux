@@ -8,10 +8,14 @@ import type {
   EventMessagePartRemoved,
   EventPermissionUpdated,
 } from "@opencode-ai/sdk";
+import type { Role } from "./blocks.ts";
 
 // Normalised events the REPL cares about; all others are dropped.
 export type ReplEvent =
-  | { kind: "text-delta"; text: string }
+  | { kind: "text-delta"; text: string }                               // compat alias — preserved
+  | { kind: "block-start"; partID: string; role: Role; toolName?: string }
+  | { kind: "block-delta"; partID: string; role: Role; text: string }
+  | { kind: "block-end";   partID: string; role: Role; status?: "ok" | "error" }
   | { kind: "session-idle" }
   | { kind: "error"; message: string }
   | { kind: "generating" }
@@ -27,13 +31,22 @@ export type ReplEvent =
 // opencode fires message.part.updated for user messages too — we skip them.
 const userMessageIDs = new Set<string>();
 
-// Track which part IDs we've already emitted a "generating" event for, so we
-// don't re-emit it on subsequent message.part.updated events for the same part.
+// Maps partID → Role for currently-open (in-progress) blocks.
+const openParts = new Map<string, Role>();
+// Used only for "emit generating exactly once" logic.
 const seenPartIDs = new Set<string>();
 
+// SDK part-type → Role mapping (assumptions based on SDK type inspection; confirm via live run):
+// | part.type    | message.part.delta field (assumed) | Role emitted    |
+// |--------------|-----------------------------------|-----------------|
+// | "text"       | "text"                            | "text"          |
+// | "reasoning"  | "text" (assumed; same .text prop) | "thinking"      |
+// | "tool"       | "raw"  (assumed; ToolStatePending.raw) | "tool-call" |
+// | "tool"       | n/a (output arrives via part.updated) | "tool-result" |
+
 // Filter a raw SDK GlobalEvent payload to one the REPL cares about.
-// Returns null for sub-agent events, unrelated sessions, or event types we ignore.
-export function filterEvent(event: Event, sessionID: string): ReplEvent | null {
+// Returns null, a single ReplEvent, or an array of ReplEvents for events with side effects.
+export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEvent[] | null {
   // Track user message IDs so we can skip their text parts below.
   if (event.type === "message.updated") {
     const info = (event as EventMessageUpdated).properties.info;
@@ -52,31 +65,111 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | null {
       properties: { sessionID: string; messageID: string; partID: string; field: string; delta: string };
     };
     if (e.properties.sessionID !== sessionID) return null;
-    if (e.properties.field !== "text") return null;
     if (!e.properties.delta) return null;
-    return { kind: "text-delta", text: e.properties.delta };
+
+    const role = openParts.get(e.properties.partID);
+    if (!role) return null; // part not yet tracked (user part or unknown type)
+
+    const blockDelta: ReplEvent = { kind: "block-delta", partID: e.properties.partID, role, text: e.properties.delta };
+
+    // Preserve text-delta compat alias so app.tsx streaming is unchanged.
+    if (role === "text" && e.properties.field === "text") {
+      return [blockDelta, { kind: "text-delta", text: e.properties.delta }];
+    }
+    return blockDelta;
   }
 
-  // message.part.updated: only used to detect the creation (len=0) event and
-  // emit the "generating" indicator. Text content now comes from part.delta above.
+  // message.part.updated: handles text, reasoning, and tool parts.
   if (event.type === "message.part.updated") {
     const e = event as EventMessagePartUpdated;
     const part = e.properties.part;
-    if (part.type !== "text" || part.sessionID !== sessionID) return null;
-    if (userMessageIDs.has(part.messageID)) return null;
-    // Emit "generating" exactly once — on the len=0 creation event.
-    if (part.text.length === 0 && !seenPartIDs.has(part.id)) {
-      seenPartIDs.add(part.id);
-      return { kind: "generating" };
+    if (part.sessionID !== sessionID) return null;
+
+    // --- text parts ---
+    if (part.type === "text") {
+      if (userMessageIDs.has(part.messageID)) return null;
+      // First time (len=0 creation): open block and emit generating.
+      if (part.text.length === 0 && !seenPartIDs.has(part.id)) {
+        seenPartIDs.add(part.id);
+        openParts.set(part.id, "text");
+        return [
+          { kind: "block-start", partID: part.id, role: "text" },
+          { kind: "generating" },
+        ];
+      }
+      return null;
     }
+
+    // --- reasoning parts ---
+    if (part.type === "reasoning") {
+      if (userMessageIDs.has(part.messageID)) return null;
+      if (!openParts.has(part.id)) {
+        openParts.set(part.id, "thinking");
+        return { kind: "block-start", partID: part.id, role: "thinking" };
+      }
+      return null;
+    }
+
+    // --- tool parts ---
+    if (part.type === "tool") {
+      const toolPart = part as unknown as {
+        id: string; messageID: string; sessionID: string;
+        type: "tool"; tool: string;
+        state: { status: string; input?: unknown; raw?: string; output?: string; error?: string; title?: string };
+      };
+      if (userMessageIDs.has(toolPart.messageID)) return null;
+
+      const state = toolPart.state;
+
+      // First time (pending state): open tool-call block.
+      if (state.status === "pending" && !openParts.has(toolPart.id)) {
+        openParts.set(toolPart.id, "tool-call");
+        return { kind: "block-start", partID: toolPart.id, role: "tool-call", toolName: toolPart.tool };
+      }
+
+      // Tool completed: end tool-call block; emit tool-result block.
+      if (state.status === "completed" && openParts.get(toolPart.id) === "tool-call") {
+        openParts.delete(toolPart.id);
+        const output = state.output ?? "";
+        const events: ReplEvent[] = [
+          { kind: "block-end", partID: toolPart.id, role: "tool-call", status: "ok" },
+        ];
+        if (output) {
+          const resultPartID = `${toolPart.id}-result`;
+          events.push(
+            { kind: "block-start", partID: resultPartID, role: "tool-result" },
+            { kind: "block-delta", partID: resultPartID, role: "tool-result", text: output },
+            { kind: "block-end",   partID: resultPartID, role: "tool-result", status: "ok" },
+          );
+        }
+        return events;
+      }
+
+      // Tool errored: end tool-call block with error.
+      if (state.status === "error" && openParts.get(toolPart.id) === "tool-call") {
+        openParts.delete(toolPart.id);
+        return { kind: "block-end", partID: toolPart.id, role: "tool-call", status: "error" };
+      }
+
+      return null;
+    }
+
     return null;
   }
 
   if (event.type === "session.idle") {
     const e = event as EventSessionIdle;
     if (e.properties.sessionID !== sessionID) return null;
-    seenPartIDs.clear(); // Reset per-turn tracking.
-    return { kind: "session-idle" };
+
+    // Close any still-open blocks (text/reasoning parts that didn't get explicit end events).
+    const closeEvents: ReplEvent[] = [];
+    for (const [partID, role] of openParts) {
+      closeEvents.push({ kind: "block-end", partID, role });
+    }
+    openParts.clear();
+    seenPartIDs.clear();
+
+    return [{ kind: "session-idle" }, ...closeEvents];
   }
 
   if (event.type === "session.error") {
@@ -97,8 +190,15 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | null {
   if (event.type === "message.part.removed") {
     const e = event as EventMessagePartRemoved;
     if (e.properties.sessionID !== sessionID) return null;
-    seenPartIDs.delete(e.properties.partID);
-    return { kind: "part-removed", partId: e.properties.partID };
+    const partId = e.properties.partID;
+    const events: ReplEvent[] = [{ kind: "part-removed", partId }];
+    const role = openParts.get(partId);
+    if (role) {
+      events.push({ kind: "block-end", partID: partId, role });
+      openParts.delete(partId);
+    }
+    seenPartIDs.delete(partId);
+    return events;
   }
 
   // v1 event type: permission.updated

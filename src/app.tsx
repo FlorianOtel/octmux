@@ -2,7 +2,7 @@ import { Box, Static, Text, useStdout, useInput } from "ink";
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { LineEditor } from "./editor.ts";
-import { filterEvent } from "./events.ts";
+import { filterEvent, type ReplEvent } from "./events.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
 import { StatusLine } from "./components/StatusLine.tsx";
@@ -58,8 +58,10 @@ export function App(props: AppProps) {
     (async () => {
       for await (const globalEvent of props.eventStream) {
         if (cancelled) break;
-        const ev = filterEvent(globalEvent.payload as unknown as Event, props.sessionID);
-        if (!ev) continue;
+        const evRaw = filterEvent(globalEvent.payload as unknown as Event, props.sessionID);
+        if (!evRaw) continue;
+        const evList: ReplEvent[] = Array.isArray(evRaw) ? evRaw : [evRaw];
+        for (const ev of evList) {
 
         if (ev.kind === "text-delta") {
           // Accumulate via ref; flush to state at most once per 50 ms so Ink
@@ -99,6 +101,7 @@ export function App(props: AppProps) {
 
         } else if (ev.kind === "question-asked") {
           setQuestion({ reqID: ev.reqID, questions: ev.questions });
+        }
         }
       }
     })();

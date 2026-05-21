@@ -3,4 +3,5 @@ dist/
 *.log
 bun.lockb
 .claude/
+*.smoke.ts
 
