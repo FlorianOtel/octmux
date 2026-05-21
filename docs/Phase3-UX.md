@@ -2,8 +2,8 @@
 title: "octmux — Phase 3-UX: Block-typed renderer + tmux multiplex (panes + windows)"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
-updated_at: 2026-05-21--13-35
-updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-05-21--14-00
+updated_by: Claude Code (Claude Sonnet 4.6)
 parent_plan: docs/Phase3-Extended.md
 context: >
   Phase 3 Extended shipped Ink-based rendering with a single growing
@@ -38,35 +38,44 @@ context: >
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-21 — Phase 3U.6 (TmuxWindowRenderer)
+### 2026-05-21 — Phase 3U.6 (TmuxWindowRenderer) + post-implementation fix
 
-**Implemented by:** Claude Code (Claude Haiku 4.5)
+**Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6)
 
 **What shipped:**
-- `src/renderer/tmux-window.ts` (new, ~130 lines): `TmuxWindowRenderer extends EventEmitter implements Renderer`.
-  Lazy window creation via `_ensureWindow(role)` called from `beginBlock()` when a side-role block opens for the
-  first time. `setup()` only records `_originWindowId` and `_sessionName` via tmux queries; no windows created
-  until first use. Per-role line buffers accumulate text and write complete lines with `\n` to each role's FIFO
-  (`tail -f` flushes immediately during streaming). Non-side roles delegate to internal `StdoutRenderer`.
-  `dispose()` kills windows and closes FIFOs (only for roles that were actually created). Event delegation and
-  `getCommitted`/`getTail` mirror `TmuxPaneRenderer` for `app.tsx` compatibility.
+- `src/renderer/tmux-window.ts` (new, ~140 lines): `TmuxWindowRenderer extends EventEmitter implements Renderer`.
+  Lazy window creation via `_ensureWindow(windowKey)` called from `beginBlock()` when a side-role block opens
+  for the first time. `setup()` only records `_originWindowId` and `_sessionName` via tmux queries; no windows
+  created until first use. Per-role line buffers accumulate text and write complete lines with `\n` to each
+  role's window log file (`tail -f` flushes immediately during streaming). Non-side roles delegate to internal
+  `StdoutRenderer`. `dispose()` kills windows and closes FIFOs (only for windows that were actually created).
+  Event delegation and `getCommitted`/`getTail` mirror `TmuxPaneRenderer` for `app.tsx` compatibility.
 - `src/renderer/types.ts`: added `"tmux-window"` to `kind` union (required for interface compliance).
 - `src/index.tsx`: `--multi-window` flag; merged guard block covering both `--multi-pane` and `--multi-window`
   with mutual-exclusion check; three-way renderer construction (window, pane, stdout). Guard reuses the
   TTY-comparison stale-env detection from 3U.5 for both multiplex modes.
 
+**Post-implementation fix — tool window consolidation:**
+`tool-call` and `tool-result` now share a single `<session>-tools` window instead of separate windows.
+A `WINDOW_KEY` map (`tool-call` → `"tools"`, `tool-result` → `"tools"`, `thinking` → `"thinking"`) drives
+window routing; `_fifos` and `_windowIds` are keyed by window key, not Role. Per-role line buffers remain
+Role-keyed since the two tool roles carry distinct ANSI prefixes. `_ensureWindow(windowKey)` is idempotent
+— the second tool role to fire for an existing window key is a no-op. At most two windows open per session:
+`<session>-thinking` and `<session>-tools`.
+
 **Key design choices:**
-- Lazy spawn on first use prevents resource waste for roles that never produce output.
+- Lazy spawn on first use — sessions with no thinking blocks get no thinking window, sessions with no tool
+  calls get no tools window.
 - Uses regular append-mode log files (from fifo.ts, not named FIFOs) for robust IPC.
-- Window names follow `<session>-<role>` pattern set at creation via `-n` flag.
+- Window names: `<session>-thinking` and `<session>-tools` (set at creation via `-n` flag).
 - `automatic-rename off` and `allow-rename off` prevent tmux from renaming windows to "tail".
-- `-d` flag on `new-window` keeps focus on origin window, avoiding visible flash during startup.
+- `-d` flag on `new-window` keeps focus on origin window, avoiding visible flash at spawn time.
 
 **What changed in this doc:**
 - Prepended this implementation log entry at top.
 - Status flipped in "Sub-phase execution order": 3U.6 ☐ pending → ✓ shipped.
 - Status flipped in section heading "### Phase 3U.6": **Status:** ☐ pending → **Status:** ✓ complete.
-- Frontmatter `updated_at: 2026-05-21--13-35`, `updated_by: Claude Code (Claude Haiku 4.5)`.
+- Frontmatter `updated_at` and `updated_by` refreshed.
 
 ---
 

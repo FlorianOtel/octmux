@@ -7,16 +7,28 @@ import { StdoutRenderer, type CommittedLine } from "./stdout.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer } from "./types.ts";
 
-const SIDE_ROLES: Role[] = ["thinking", "tool-call", "tool-result"];
+// Maps each side role to the window key it streams into.
+// tool-call and tool-result share one "tools" window so the full
+// call → result sequence is visible in a single scrollback buffer.
+const WINDOW_KEY: Partial<Record<Role, string>> = {
+  thinking:      "thinking",
+  "tool-call":   "tools",
+  "tool-result": "tools",
+};
+
+const SIDE_ROLES: Role[] = Object.keys(WINDOW_KEY) as Role[];
 
 export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   readonly kind = "tmux-window" as const;
   readonly visibility: Visibility;
 
   private _main: StdoutRenderer;
-  private _fifos      = new Map<Role, FifoHandle>();
-  private _windowIds  = new Map<Role, string>();
+  // Keyed by window key (e.g. "thinking", "tools") — at most 2 entries.
+  private _fifos      = new Map<string, FifoHandle>();
+  private _windowIds  = new Map<string, string>();
   private _openBlocks = new Map<string, Role>();
+  // Line buffers keyed by Role — tool-call and tool-result have distinct
+  // ANSI prefixes even though they share a window.
   private _lineBufs   = new Map<Role, string>();
   private _sessionName = "";
   private _originWindowId = "";
@@ -38,18 +50,19 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     ]).toString().trim();
   }
 
-  private _ensureWindow(role: Role): void {
-    if (this._fifos.has(role)) return;
-    const fifo = makeFifo(role, process.pid);
-    this._fifos.set(role, fifo);
-    this._lineBufs.set(role, "");
+  // Create the window + log file for a given window key on first use.
+  private _ensureWindow(windowKey: string): void {
+    if (this._fifos.has(windowKey)) return;
+    const fifo = makeFifo(windowKey, process.pid);
+    this._fifos.set(windowKey, fifo);
     const id = execFileSync("tmux", [
       "new-window", "-d",
       "-P", "-F", "#{window_id}",
-      "-n", `${this._sessionName}-${role}`,
+      "-n", `${this._sessionName}-${windowKey}`,
       `tail -f ${fifo.path}`,
     ]).toString().trim();
-    this._windowIds.set(role, id);
+    this._windowIds.set(windowKey, id);
+    // Prevent tmux from auto-renaming the window to "tail" once the command starts.
     execFileSync("tmux", ["set-window-option", "-t", id, "automatic-rename", "off"]);
     execFileSync("tmux", ["set-window-option", "-t", id, "allow-rename", "off"]);
   }
@@ -57,8 +70,9 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   beginBlock(partID: string, role: Role, meta?: Block["meta"]): void {
     if (!this.visibility.isVisible(role)) return;
     this._openBlocks.set(partID, role);
-    if (this._isSideRole(role)) {
-      this._ensureWindow(role);
+    const windowKey = WINDOW_KEY[role];
+    if (windowKey) {
+      this._ensureWindow(windowKey);
     } else {
       this._main.beginBlock(partID, role, meta);
     }
@@ -71,8 +85,9 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
       this.visibility.increment(role);
       return;
     }
-    if (this._isSideRole(role)) {
-      const fifo = this._fifos.get(role);
+    const windowKey = WINDOW_KEY[role];
+    if (windowKey) {
+      const fifo = this._fifos.get(windowKey);
       if (!fifo) return;
       let buf = (this._lineBufs.get(role) ?? "") + text;
       let nl = buf.indexOf("\n");
@@ -89,8 +104,9 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
 
   endBlock(partID: string, status?: "ok" | "error"): void {
     const role = this._openBlocks.get(partID);
-    if (role && this._isSideRole(role)) {
-      const fifo = this._fifos.get(role);
+    const windowKey = role ? WINDOW_KEY[role] : undefined;
+    if (role && windowKey) {
+      const fifo = this._fifos.get(windowKey);
       if (fifo) {
         const buf = this._lineBufs.get(role) ?? "";
         if (buf) fifo.write(formatLine(role, buf, false) + "\n");
@@ -109,8 +125,8 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   commitError(m: string):         void { this._main.commitError(m); }
 
   async dispose(): Promise<void> {
-    for (const [role, fifo] of this._fifos) {
-      const windowId = this._windowIds.get(role);
+    for (const [windowKey, fifo] of this._fifos) {
+      const windowId = this._windowIds.get(windowKey);
       if (windowId) try { execFileSync("tmux", ["kill-window", "-t", windowId]); } catch {}
       fifo.close();
     }
