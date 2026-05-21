@@ -4,6 +4,7 @@ import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { LineEditor } from "./editor.ts";
 import { filterEvent, type ReplEvent } from "./events.ts";
 import { formatLine, type Role } from "./blocks.ts";
+import { Visibility, parseShowCommand } from "./renderer/visibility.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
 import { StatusLine } from "./components/StatusLine.tsx";
@@ -42,6 +43,7 @@ export function App(props: AppProps) {
   const [permission, setPermission] = useState<{ permID: string; title: string } | null>(null);
   const [question, setQuestion] = useState<{ reqID: string; questions: QuestionType[] } | null>(null);
   const [lastSubmitted, setLastSubmitted] = useState<string>("");
+  const [vis] = useState(() => new Visibility());
 
   const tailBufRef = useRef<string>("");
   const activeBlockRef = useRef<{ partID: string; role: Role } | null>(null);
@@ -67,6 +69,10 @@ export function App(props: AppProps) {
   }
 
   function handleBlockDelta(ev: { partID: string; role: Role; text: string }) {
+    if (!vis.isVisible(ev.role)) {
+      vis.increment(ev.role);
+      return;
+    }
     // Switching blocks: flush the prior tail and add a 2-line visual separator.
     // NOTE for 3U.5: this separator must NOT be forwarded to side-pane FIFOs.
     // The TmuxPaneRenderer should omit blank-separator lines when writing to FIFOs —
@@ -112,7 +118,7 @@ export function App(props: AppProps) {
           handleBlockDelta(ev);
 
         } else if (ev.kind === "block-end") {
-          flushTail();
+          if (vis.isVisible(ev.role)) flushTail();
 
         } else if (ev.kind === "generating") {
           setIsGenerating(true);
@@ -183,6 +189,18 @@ export function App(props: AppProps) {
   // Send submitted text to the LLM; add to committed immediately so the UI
   // doesn't feel laggy while waiting for the first SSE event.
   const handleSubmit = useCallback(async (text: string) => {
+    const showResult = parseShowCommand(text, vis);
+    if (showResult.handled) {
+      setCommitted(prev => [...prev,
+        { id: nextId++, role: "user", ansi: formatLine("user", text, true) },
+        { id: nextId++, role: "text", ansi: " " },
+        { id: nextId++, role: "text", ansi: " " },
+        { id: nextId++, role: "text", ansi: `→ ${showResult.reply ?? ""}` },
+        { id: nextId++, role: "text", ansi: " " },
+        { id: nextId++, role: "text", ansi: " " },
+      ]);
+      return;
+    }
     setLastSubmitted(text);
     // User line followed by 2 blank lines (restores Phase3-Extended spacing before AI response).
     setCommitted(prev => [...prev,
@@ -238,7 +256,7 @@ export function App(props: AppProps) {
         <Rule title={props.sessionLabel} width={w} align="right" />
         <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question} onSubmit={handleSubmit} />
         <Rule width={w} />
-        <StatusLine />
+        <StatusLine vis={vis} />
       </Box>
     </>
   );

@@ -2,7 +2,7 @@
 title: "octmux — Phase 3-UX: Block-typed renderer + tmux multi-pane"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
-updated_at: 2026-05-21--09-23
+updated_at: 2026-05-21--11-45
 updated_by: Claude Code (Claude Haiku 4.5)
 parent_plan: docs/Phase3-Extended.md
 context: >
@@ -31,6 +31,25 @@ context: >
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-21 — Phase 3U.3
+
+**Implemented by:** Claude Code (Claude Haiku 4.5)
+
+**What shipped:**
+- `src/renderer/visibility.ts` (new): `Visibility` EventEmitter class with per-role
+  on/off state + hidden counts; `parseShowCommand()` parser for `/show [role] [on|off]`
+- `src/app.tsx`: `Visibility` singleton; `handleBlockDelta` gated on `vis.isVisible`;
+  `block-end` skips `flushTail` for hidden roles; `handleSubmit` intercepts `/show`
+  commands, pushes reply to committed without calling LLM; `vis` passed to StatusLine
+- `src/components/StatusLine.tsx`: accepts `vis: Visibility`; uses `useSyncExternalStore`
+  to subscribe; renders `[idle]  hidden: T·N ⚙·M` badge when roles are suppressed
+
+**What changed in this doc:** Phase 3U.3 status ☐ → ✓
+
+**Suggested next steps:** Phase 3U.4 — extract Renderer interface (Option 2 seam).
+
+---
 
 ### 2026-05-21 — Phase 3U.2
 
@@ -714,7 +733,7 @@ tool calls when they're noise.
 
 ### Phase 3U.3 — Per-role visibility toggles (½ day)
 
-**Status:** ☐ pending
+**Status:** ✓ complete
 
 **Goal:** let the user hide thinking and/or tool-call blocks via
 slash commands. When hidden, the role's content does not commit to
