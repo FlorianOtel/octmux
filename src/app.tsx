@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { LineEditor } from "./editor.ts";
 import { filterEvent, type ReplEvent } from "./events.ts";
+import { formatLine, type Role } from "./blocks.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
 import { StatusLine } from "./components/StatusLine.tsx";
@@ -19,7 +20,7 @@ type QuestionType = {
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
-type HistoryEntry = { id: number; role: "user" | "assistant" | "error"; text: string };
+type CommittedLine = { id: number; role: Role; ansi: string };
 
 type AppProps = {
   client: Client;
@@ -34,23 +35,59 @@ let nextId = 0;
 
 export function App(props: AppProps) {
   const [editor] = useState(() => new LineEditor());
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [streamBuf, setStreamBuf] = useState("");
+  const [committed, setCommitted] = useState<CommittedLine[]>([]);
+  const [tail, setTail] = useState<{ role: Role; text: string } | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [ctrlcPending, setCtrlcPending] = useState(false);
   const [permission, setPermission] = useState<{ permID: string; title: string } | null>(null);
   const [question, setQuestion] = useState<{ reqID: string; questions: QuestionType[] } | null>(null);
   const [lastSubmitted, setLastSubmitted] = useState<string>("");
 
-  const streamBufRef = useRef("");
+  const tailBufRef = useRef<string>("");
+  const activeBlockRef = useRef<{ partID: string; role: Role } | null>(null);
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Batches setStreamBuf calls so Ink repaints at most ~20×/sec instead of
-  // once per SSE chunk (which can be 20-50 chunks/sec → visible flicker).
-  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { stdout } = useStdout();
   const w = stdout?.columns ?? 80;
+
+  function flushTail() {
+    if (tailBufRef.current && activeBlockRef.current) {
+      const role = activeBlockRef.current.role;
+      setCommitted(prev => [...prev, {
+        id: nextId++,
+        role,
+        ansi: formatLine(role, tailBufRef.current, false),
+      }]);
+      tailBufRef.current = "";
+    }
+    setTail(null);
+    activeBlockRef.current = null;
+  }
+
+  function handleBlockDelta(ev: { partID: string; role: Role; text: string }) {
+    // Switching blocks: flush the prior tail first.
+    if (activeBlockRef.current && activeBlockRef.current.partID !== ev.partID) {
+      flushTail();
+    }
+    activeBlockRef.current = { partID: ev.partID, role: ev.role };
+    tailBufRef.current += ev.text;
+
+    // Split off complete lines and commit them to Static.
+    let buf = tailBufRef.current;
+    let nl = buf.indexOf("\n");
+    const newCommits: CommittedLine[] = [];
+    while (nl !== -1) {
+      const line = buf.slice(0, nl);
+      newCommits.push({ id: nextId++, role: ev.role, ansi: formatLine(ev.role, line, false) });
+      buf = buf.slice(nl + 1);
+      nl = buf.indexOf("\n");
+    }
+    tailBufRef.current = buf;
+
+    if (newCommits.length > 0) setCommitted(prev => [...prev, ...newCommits]);
+    setTail(buf ? { role: ev.role, text: buf } : null);
+  }
 
   // SSE loop: runs for the lifetime of the component.
   useEffect(() => {
@@ -63,38 +100,30 @@ export function App(props: AppProps) {
         const evList: ReplEvent[] = Array.isArray(evRaw) ? evRaw : [evRaw];
         for (const ev of evList) {
 
-        if (ev.kind === "text-delta") {
-          // Accumulate via ref; flush to state at most once per 50 ms so Ink
-          // doesn't repaint the whole screen on every incoming SSE chunk.
-          streamBufRef.current += ev.text;
-          if (!flushTimerRef.current) {
-            flushTimerRef.current = setTimeout(() => {
-              setStreamBuf(streamBufRef.current);
-              flushTimerRef.current = null;
-            }, 50);
-          }
+        if (ev.kind === "block-delta") {
+          handleBlockDelta(ev);
+
+        } else if (ev.kind === "block-end") {
+          flushTail();
 
         } else if (ev.kind === "generating") {
           setIsGenerating(true);
 
         } else if (ev.kind === "session-idle") {
-          // Turn complete: flush any pending debounce, commit text to history, reset.
-          if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
-          const text = streamBufRef.current;
-          streamBufRef.current = "";
-          setStreamBuf("");
+          flushTail();
+          // Blank separator between turns (" " not "" — Ink gives empty string zero height).
+          setCommitted(prev => [...prev, { id: nextId++, role: "text", ansi: " " }]);
           setIsGenerating(false);
           setLastSubmitted("");
-          if (text.trim()) {
-            setHistory(h => [...h, { id: nextId++, role: "assistant", text }]);
-          }
 
         } else if (ev.kind === "error") {
-          if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
-          streamBufRef.current = "";
-          setStreamBuf("");
+          flushTail();
           setIsGenerating(false);
-          setHistory(h => [...h, { id: nextId++, role: "error", text: `[error] ${ev.message}` }]);
+          setCommitted(prev => [...prev, {
+            id: nextId++,
+            role: "error",
+            ansi: formatLine("error", ev.message, true),
+          }]);
 
         } else if (ev.kind === "permission-asked") {
           setPermission({ permID: ev.permID, title: ev.title });
@@ -105,10 +134,7 @@ export function App(props: AppProps) {
         }
       }
     })();
-    return () => {
-      cancelled = true;
-      if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
-    };
+    return () => { cancelled = true; };
   }, [props.client, props.sessionID, props.eventStream]);
 
   // Ctrl-C: three cases.
@@ -140,11 +166,15 @@ export function App(props: AppProps) {
     }
   });
 
-  // Send submitted text to the LLM; add to history immediately so the UI
+  // Send submitted text to the LLM; add to committed immediately so the UI
   // doesn't feel laggy while waiting for the first SSE event.
   const handleSubmit = useCallback(async (text: string) => {
     setLastSubmitted(text);
-    setHistory(h => [...h, { id: nextId++, role: "user", text }]);
+    setCommitted(prev => [...prev, {
+      id: nextId++,
+      role: "user",
+      ansi: formatLine("user", text, true),
+    }]);
     try {
       await props.client.session.promptAsync({
         path: { id: props.sessionID },
@@ -152,10 +182,10 @@ export function App(props: AppProps) {
       });
     } catch (err) {
       setIsGenerating(false);
-      setHistory(h => [...h, {
+      setCommitted(prev => [...prev, {
         id: nextId++,
         role: "error",
-        text: `[send error] ${err instanceof Error ? err.message : String(err)}`,
+        ansi: formatLine("error", `[send error] ${err instanceof Error ? err.message : String(err)}`, true),
       }]);
     }
   }, [props.client, props.sessionID]);
@@ -181,21 +211,11 @@ export function App(props: AppProps) {
 
   return (
     <>
-      <Static items={history}>
-        {(item) => (
-          <Box key={item.id} flexDirection="column">
-            <Text
-              inverse={item.role === "user"}
-              color={item.role === "error" ? "red" : undefined}>
-              {item.role === "user" ? `> ${item.text}` : item.text}
-            </Text>
-            <Text>{" "}</Text>
-            <Text>{" "}</Text>
-          </Box>
-        )}
+      <Static items={committed}>
+        {(item) => <Text key={item.id}>{item.ansi}</Text>}
       </Static>
-      {isGenerating && !streamBuf && <Text dimColor>[generating…]</Text>}
-      {streamBuf && <Text>{streamBuf}</Text>}
+      {tail && <Text>{formatLine(tail.role, tail.text, false)}</Text>}
+      {isGenerating && !tail && <Text dimColor>[generating…]</Text>}
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}
       {permission && <PermissionModal title={permission.title} onAnswer={handlePermission} />}
       {question && <QuestionModal questions={question.questions} onAnswer={handleQuestion} />}

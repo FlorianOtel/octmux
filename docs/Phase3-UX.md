@@ -2,7 +2,7 @@
 title: "octmux — Phase 3-UX: Block-typed renderer + tmux multi-pane"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
-updated_at: 2026-05-21--09-10
+updated_at: 2026-05-21--09-23
 updated_by: Claude Code (Claude Haiku 4.5)
 parent_plan: docs/Phase3-Extended.md
 context: >
@@ -31,6 +31,26 @@ context: >
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-21 — Phase 3U.2
+
+**Implemented by:** Claude Code (Claude Haiku 4.5)
+
+**What shipped:**
+- `src/app.tsx`: replaced `streamBuf`/debounce/`history` model with `<Static>`-backed
+  line-granularity rendering. `committed: CommittedLine[]` accumulates pre-formatted ANSI
+  lines; `tail` holds the single in-progress partial line in the dynamic region.
+  `handleBlockDelta` splits incoming text at newlines and commits completed lines;
+  `flushTail` commits any partial line on `block-end` or `session-idle`. The `text-delta`
+  branch and 50ms debounce are removed. User input and errors use `formatLine` and go
+  directly to `committed`. Dynamic region is now ≤ ~9 lines regardless of response length
+  — flicker is structurally impossible.
+
+**What changed in this doc:** Phase 3U.2 status ☐ → ✓
+
+**Suggested next steps:** Phase 3U.3 — per-role visibility toggles (`/show thinking off`).
+
+---
 
 ### 2026-05-21 — Phase 3U.1
 
@@ -495,7 +515,7 @@ the new block events.
 
 ### Phase 3U.2 — Direct-to-terminal streaming: kill the flicker (1–1½ days)
 
-**Status:** ☐ pending
+**Status:** ✓ complete
 
 **Goal:** rewrite the streaming render path in `app.tsx` so the
 dynamic region holds only the bottom chrome plus at most one
