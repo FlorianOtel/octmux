@@ -62,13 +62,21 @@ export function App(props: AppProps) {
       tailBufRef.current = "";
     }
     setTail(null);
-    activeBlockRef.current = null;
+    // Deliberately do NOT clear activeBlockRef here — kept for transition detection
+    // in handleBlockDelta. Callers that end a turn reset it explicitly.
   }
 
   function handleBlockDelta(ev: { partID: string; role: Role; text: string }) {
-    // Switching blocks: flush the prior tail first.
+    // Switching blocks: flush the prior tail and add a 2-line visual separator.
+    // NOTE for 3U.5: this separator must NOT be forwarded to side-pane FIFOs.
+    // The TmuxPaneRenderer should omit blank-separator lines when writing to FIFOs —
+    // each pane contains only its own role's content; leading/trailing blanks would be wrong.
     if (activeBlockRef.current && activeBlockRef.current.partID !== ev.partID) {
       flushTail();
+      setCommitted(prev => [...prev,
+        { id: nextId++, role: "text", ansi: " " },
+        { id: nextId++, role: "text", ansi: " " },
+      ]);
     }
     activeBlockRef.current = { partID: ev.partID, role: ev.role };
     tailBufRef.current += ev.text;
@@ -111,13 +119,19 @@ export function App(props: AppProps) {
 
         } else if (ev.kind === "session-idle") {
           flushTail();
-          // Blank separator between turns (" " not "" — Ink gives empty string zero height).
-          setCommitted(prev => [...prev, { id: nextId++, role: "text", ansi: " " }]);
+          // Two blank lines after each turn (restores Phase3-Extended spacing).
+          // Reset activeBlockRef so the next turn's first block has no prior transition.
+          activeBlockRef.current = null;
+          setCommitted(prev => [...prev,
+            { id: nextId++, role: "text", ansi: " " },
+            { id: nextId++, role: "text", ansi: " " },
+          ]);
           setIsGenerating(false);
           setLastSubmitted("");
 
         } else if (ev.kind === "error") {
           flushTail();
+          activeBlockRef.current = null;
           setIsGenerating(false);
           setCommitted(prev => [...prev, {
             id: nextId++,
@@ -170,11 +184,12 @@ export function App(props: AppProps) {
   // doesn't feel laggy while waiting for the first SSE event.
   const handleSubmit = useCallback(async (text: string) => {
     setLastSubmitted(text);
-    setCommitted(prev => [...prev, {
-      id: nextId++,
-      role: "user",
-      ansi: formatLine("user", text, true),
-    }]);
+    // User line followed by 2 blank lines (restores Phase3-Extended spacing before AI response).
+    setCommitted(prev => [...prev,
+      { id: nextId++, role: "user", ansi: formatLine("user", text, true) },
+      { id: nextId++, role: "text", ansi: " " },
+      { id: nextId++, role: "text", ansi: " " },
+    ]);
     try {
       await props.client.session.promptAsync({
         path: { id: props.sessionID },

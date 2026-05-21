@@ -1163,6 +1163,31 @@ closes the side panes and removes the FIFOs.
   }
   ```
 
+**Implementation note — block-separator blank lines must NOT go to side-pane FIFOs.**
+
+`StdoutRenderer` (via `app.tsx`'s `handleBlockDelta` and `session-idle` handlers) emits
+2-blank-line separators between every block transition and at the end of each turn. These
+separators exist to give visual breathing room in the single main-pane view.
+
+When `TmuxPaneRenderer` routes a block to a side pane via a FIFO, it must **not** write
+those blank separators. Each side pane contains only its own role's content — adding
+surrounding whitespace would produce leading/trailing blank lines inside the pane that
+the user did not generate. The pane already has visual framing from tmux's border; it
+does not need intra-content padding.
+
+Concrete rule for `TmuxPaneRenderer.appendToBlock` and `endBlock`:
+
+- Write only `formatLine(role, text, false)` to the FIFO — the raw formatted content.
+- Do **not** write blank separator lines before or after the block.
+- The `endBlock` separator in the skeleton above (`writer.write("\n")`) is acceptable as
+  a single trailing newline to terminate the last content line cleanly. It is not the
+  2-blank-line turn separator from `StdoutRenderer` and should not be changed to match it.
+
+The `StdoutRenderer.endBlock()` and the `session-idle` path in `app.tsx` add the 2-blank
+spacing for the main pane. That logic lives inside `StdoutRenderer` and is invisible to
+`TmuxPaneRenderer`. No cross-renderer coordination is needed; the separation of concerns
+already enforces the right behaviour.
+
 - `src/index.tsx` (modify):
   - Add `--multi-pane` to the argv check at the top.
   - Renderer selection:
