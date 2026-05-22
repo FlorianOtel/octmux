@@ -3,7 +3,7 @@ title: "octmux — Phase 3: Custom raw-mode input + Ink rendering + typed block 
 created_at: 2026-05-20--00-34
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-22--22-01
+updated_at: 2026-05-22--23-00
 context: >
   Phase 3 is the foundational UX phase split across three major sub-initiatives:
   Phase 3 (original raw-mode input), Phase 3 Extended (Ink-based rendering layer),
@@ -266,12 +266,21 @@ two tmux multiplex backends (panes and windows)._
 
 ---
 
-#### 2026-05-21 — Phase 3U.6 (TmuxWindowRenderer) + post-implementation fix
+#### 2026-05-22 — Phase 3U.6 (TmuxWindowRenderer) + post-implementation fixes
 
-**Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6)
-**Commit(s):** `c3d6fcc5`, `437d37bf`, `fcb2ef94`
+**Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6); post-implementation fixes by Claude Code (Claude Sonnet 4.6) — 2026-05-22--23-00
+**Commit(s):** `c3d6fcc5`, `437d37bf`, `fcb2ef94`, `TBD`
 
-**What shipped:**
+**What shipped (post-implementation fix — 2026-05-22):**
+- **No-args → help + explicit mode selection (`src/index.tsx`)**: `octmux` started without arguments
+  now prints help and exits (exit 0). A display mode is required on every invocation:
+  `--single` (new flag; all output inline, no tmux required — equivalent to the previous implicit
+  default), `--multi-pane`, or `--multi-window`. The three flags are mutually exclusive.
+  `--single` bypasses the tmux guard; `--multi-pane`/`--multi-window` still require an active tmux
+  pane. Help text extracted to a top-level `HELP` const and shared between `--help` and the
+  no-mode exit path.
+
+**What shipped (initial — 2026-05-21):**
 - `src/renderer/tmux-window.ts` (new, ~140 lines): `TmuxWindowRenderer extends EventEmitter implements Renderer`.
   Lazy window creation via `_ensureWindow(windowKey)` called from `beginBlock()` when a side-role block opens
   for the first time. `setup()` only records `_originWindowId` and `_sessionName` via tmux queries; no windows

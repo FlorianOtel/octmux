@@ -14,25 +14,27 @@ import type { Renderer } from "./renderer/types.ts";
 
 const args = process.argv.slice(2);
 
-if (args.includes("--help") || args.includes("-h")) {
-  console.log(`octmux — text REPL UI for opencode
+const HELP = `octmux — text REPL UI for opencode
 
-Usage:
-  octmux                    attach to opencode server on port 4096 (default)
-  octmux --attach <port>    attach to a running server on <port>
-  octmux --auto-spawn       spawn a new opencode server automatically (⚠ see below)
-  octmux --help             show this help
-  octmux --version          show version
+Display mode (required — select one):
+  --single          single-pane mode: all output inline (works in tmux and plain terminal)
+  --multi-pane      side panes for thinking + tool output (requires active tmux pane)
+  --multi-window    side windows for thinking + tool output (requires active tmux pane)
 
-Flags:
-  --no-tmux-guard           allow running outside tmux (scripts / CI)
-  --multi-pane              split into tmux panes (thinking + tool side panes)
-  --multi-window            split into tmux windows (thinking + tool side windows)
+Options:
+  --attach <port>   attach to a running opencode server on <port> (default: 4096)
+  --auto-spawn      spawn a new opencode server automatically (⚠ see below)
+  --no-tmux-guard   skip tmux pane-context checks (for --multi-pane/--multi-window in CI)
+  --help, -h        show this help
+  --version         show version
 
 ⚠ --auto-spawn warning:
   Running multiple opencode instances concurrently risks SQLite locking
   errors (second instance crashes) and memory bloat from duplicate MCP/LSP
-  processes. Prefer a single persistent server (scripts/opencode-server.service).`);
+  processes. Prefer a single persistent server (scripts/opencode-server.service).`;
+
+if (args.includes("--help") || args.includes("-h")) {
+  console.log(HELP);
   process.exit(0);
 }
 
@@ -44,20 +46,30 @@ if (args.includes("--version")) {
 const noTmuxGuard = args.includes("--no-tmux-guard");
 const attachIdx   = args.indexOf("--attach");
 const attachPort  = attachIdx !== -1 ? parseInt(args[attachIdx + 1], 10) : NaN;
+const single      = args.includes("--single");
 const multiPane   = args.includes("--multi-pane");
 const multiWindow = args.includes("--multi-window");
 const autoSpawn   = args.includes("--auto-spawn");
 const originPaneId = process.env.TMUX_PANE ?? "";
 
-if (!process.env.TMUX && !noTmuxGuard) {
-  console.error("octmux must run inside tmux.\nStart a tmux session first, or pass --no-tmux-guard to override.");
+// No display mode selected — operator must choose explicitly.
+if (!single && !multiPane && !multiWindow) {
+  console.log(HELP);
+  process.exit(0);
+}
+
+// --single, --multi-pane, --multi-window are mutually exclusive.
+if ([single, multiPane, multiWindow].filter(Boolean).length > 1) {
+  console.error("octmux: --single, --multi-pane, and --multi-window are mutually exclusive");
+  process.exit(2);
+}
+
+// --single works outside tmux; multi modes require an active tmux session.
+if (!single && !process.env.TMUX && !noTmuxGuard) {
+  console.error("octmux --multi-pane/--multi-window must run inside tmux.\nStart a tmux session first, or pass --no-tmux-guard to override.");
   process.exit(1);
 }
 
-if (multiPane && multiWindow) {
-  console.error("octmux: --multi-pane and --multi-window are mutually exclusive");
-  process.exit(2);
-}
 if (multiPane || multiWindow) {
   if (!process.env.TMUX || !process.env.TMUX_PANE) {
     console.error("octmux --multi-pane/--multi-window requires running inside a tmux pane (TMUX/TMUX_PANE not set).");
