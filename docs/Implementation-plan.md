@@ -2,8 +2,8 @@
 title: "octmux — Implementation Plan"
 created_at: 2026-05-18--21-58
 created_by: Claude Code (Claude Sonnet 4.6 1M)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-22--23-32
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-05-22--22-15
 context: >
   octmux is a text-only barebones REPL UI for OpenCode that mimics the Claude
   Code CLI feel: text REPL, one bottom status line, Emacs-style line edits,
@@ -35,10 +35,13 @@ itself.
 1. **Stack:** TypeScript on Bun. Use `@opencode-ai/sdk` (installed at
    `~/.config/opencode/node_modules/@opencode-ai/sdk`, v1.15.4). Ship via
    `bun build --compile` as a single executable.
-2. **Server lifecycle:** dual mode.
-   - Default — auto-spawn `opencode serve --port <free>` per tmux window.
-     Port range `[4096, 4106]` (mirrors opentmux).
-   - Flag — `--attach <port>` connects to an existing server.
+2. **Server lifecycle:** three modes (inverted in Phase 4.1c — default is now attach, not spawn).
+   - Default — attach to port 4096 (the systemd service `scripts/opencode-server.service`).
+     Rich error on connection failure guides user to start the service.
+   - `--attach <port>` — connect to an existing server on the given port.
+   - `--auto-spawn` — spawn `opencode serve --port <free>` per tmux window
+     (port range `[4096, 4106]`). Explicit opt-in only; risk: SQLite locking +
+     MCP/LSP bloat from concurrent instances.
 3. **Input layer:** Ink (React for CLI) for region composition and resize/repaint.
    `LineEditor` state machine (`src/editor.ts`) preserved as a pure buffer/history
    container; Ink's `useInput` hook drives it. Bottom-anchor via Ink's
@@ -83,12 +86,14 @@ src/
     fifo.ts              log-file IPC (regular append-mode temp files, not FIFOs)
     tmux-pane.ts         TmuxPaneRenderer: --multi-pane, 2 eager side panes
     tmux-window.ts       TmuxWindowRenderer: --multi-window, lazy side windows
+  commands.ts            local slash-command parsers (parseExitCommand, parseRenameCommand, parseModelCommand, parseShowCommand)
   components/
     PromptInput.tsx      Ink input wrapper
     Rule.tsx             horizontal rule with optional title
     StatusLine.tsx       [idle] + hidden-role badges
     PermissionModal.tsx  y/a/n inline permission prompt
     QuestionModal.tsx    numbered-options question modal
+    ModelPickerModal.tsx interactive model picker (arrow-key navigation, Enter/Esc/1-9 shortcuts)
 ```
 
 One source file per concern. Grow organically; do not pre-explode.
@@ -105,13 +110,17 @@ One source file per concern. Grow organically; do not pre-explode.
 
 ## Implementation logs (by phase)
 
-Detailed implementation logs for each phase have been moved to dedicated documents:
+Detailed implementation logs for each phase have been moved to dedicated documents.
+**If a Phase doc conflicts with this file, the Phase doc is authoritative.**
 
-- **Phase 0, Phase −1:** `docs/Implementation-plan.md` (original logs preserved)
-- **Phase 1, Phase 1.5:** `docs/Phase1.md`
-- **Phase 2:** `docs/Phase2.md`
-- **Phase 3, Phase 3E, Phase 3U:** `docs/Phase3.md` (combined with Phase3-Extended.md and Phase3-UX.md)
-- **Phase 4:** `docs/Phase4.md`
+- **Phase 0:** embedded in this file (inline log, no separate doc)
+- **Phase 1, Phase 1.5:** `docs/Phase1.md` ← authoritative
+- **Phase 2:** `docs/Phase2.md` ← authoritative
+- **Phase 3 (original, superseded):** plan spec only; no implementation log (never shipped as-is)
+- **Phase 3 Extended (3E.1–3E.6):** `docs/Phase3-Extended.md` ← authoritative
+- **Phase 3 UX (3U.1–3U.8):** `docs/Phase3-UX.md` ← authoritative
+- **Phase 3 combined summary:** `docs/Phase3.md` (aggregates both above; Phase3-Extended.md and Phase3-UX.md take precedence)
+- **Phase 4:** `docs/Phase4.md` ← authoritative
 
 ---
 
@@ -153,7 +162,7 @@ proven; no UI, no streaming yet. Phase 1 can assume the SDK works.
 
 ### Phase 1 — Hello-world REPL with streaming (1 day)
 
-**Status:** ✓ shipped — see log 2026-05-18--22-31
+**Status:** ✓ shipped — see `docs/Phase1.md`, log 2026-05-18--22-31
 
 **Goal:** type a prompt, hit Enter, watch the response stream in. Ctrl-C to
 quit. **No** raw mode (use Node `readline`). **No** slash commands. **No**
@@ -202,7 +211,7 @@ Phase 1.5 adds streaming polish (indicator, abort, permission/question modals) o
 
 ### Phase 1.5 — Streaming UX + interactive modals (½ day)
 
-**Status:** ✓ shipped — see log 2026-05-19--15-03 (1.5c+1.5d), 2026-05-19--13-08 (1.5b), 2026-05-19--10-38 (1.5a)
+**Status:** ✓ shipped — see `docs/Phase1.md`, log 2026-05-19--15-03 (1.5c+1.5d), 2026-05-19--13-08 (1.5b), 2026-05-19--10-38 (1.5a)
 
 **What was built (4 sub-phases):**
 
@@ -230,7 +239,7 @@ all sessions regardless of SDK version. Same cast-via-unknown pattern applies to
 
 ### Phase 2 — Auto-spawn server + tmux guard (1 day)
 
-**Status:** ✓ shipped — see log 2026-05-19--15-37
+**Status:** ✓ shipped — see `docs/Phase2.md`, log 2026-05-19--15-37
 
 **Goal:** default mode launches its own server with port rotation; refuses
 outside tmux unless overridden.
@@ -341,7 +350,7 @@ All eight sub-phases shipped. Highlights: flicker-free Static scrollback; typed 
 
 ### Phase 4 — Status line + async streaming + Esc-interrupt + rich parts (2 days)
 
-**Status:** in progress — Phase 4.1b (systemd, 2026-05-22), 4.1c (default attach 4096 + --auto-spawn, 2026-05-22), 4.2 (/model, /rename, /exit commands, 2026-05-22) shipped; core UI work planned.
+**Status:** in progress — see `docs/Phase4.md`. Shipped: 4.1b (systemd service, 2026-05-22), 4.1c (default attach 4096 + `--auto-spawn` opt-in, 2026-05-22), 4.2 (`/model`, `/rename`, `/exit`, `/show` consolidation, 2026-05-22), 4.2 fix (`/model` interactive picker + context-window display, 2026-05-22). Core StatusLine content, Esc-interrupt, and `state.ts` planned.
 
 **Goal:** bottom status line; Esc aborts a stream; tool calls and reasoning
 render distinctly.
@@ -379,7 +388,7 @@ commands on top — `/` input branches before reaching `promptAsync`.
 
 ### Phase 5 — Slash commands: local + forwarded (2 days)
 
-**Status:** planned.
+**Status:** partially shipped. `/exit`, `/model` (with interactive picker), `/rename`, and `/show` consolidation were delivered early in Phase 4.2 (see `docs/Phase4.md`). Remaining: `/clear`, `/help`, `/agents`, and the LLM-forwarding path for unknown slash commands.
 
 **Goal:** built-ins with custom UX; forward everything else.
 
@@ -501,6 +510,8 @@ multi-session views, themes) is post-MVP.
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/tmux-pane.ts` — `TmuxPaneRenderer` (`--multi-pane`)
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/tmux-window.ts` — `TmuxWindowRenderer` (`--multi-window`)
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/visibility.ts` — per-role visibility, `/show` parser
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/commands.ts` — local slash-command parsers (Phase 4.2+)
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/components/ModelPickerModal.tsx` — interactive model picker (Phase 4.2+)
 
 ## Reused patterns (do not re-derive)
 
@@ -558,9 +569,11 @@ When starting a phase:
 
 When finishing a phase:
 
-1. Add a new entry at the top of "Implementation log" with today's
-   `YYYY-MM-DD--HH-MM` timestamp.
-2. Flip the phase's status in "Phase plan" to `✓ shipped — see log
+1. Add a new entry at the top of the phase's Implementation log document with
+   today's `YYYY-MM-DD--HH-MM` timestamp. Each entry must include:
+   - **Implemented by:** `<agent name (model)> — YYYY-MM-DD--HH-MM`
+   - **Commit(s):** `hash1`, `hash2` — all hashes comma-separated on one line
+2. Flip the phase's status in "Phase plan" to `✓ shipped — see <doc>, log
    YYYY-MM-DD--HH-MM`.
-3. Refresh `updated_by` and `updated_at` in the frontmatter.
+3. Refresh `updated_by` and `updated_at` in the frontmatter of all docs touched.
 4. Commit with `feat(octmux): Phase N — <short title>`.
