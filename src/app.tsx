@@ -12,6 +12,7 @@ import { StatusLine } from "./components/StatusLine.tsx";
 import { PermissionModal } from "./components/PermissionModal.tsx";
 import { QuestionModal } from "./components/QuestionModal.tsx";
 import { SubprocessStatus } from "./components/SubprocessStatus.tsx";
+import { ModelPickerModal, type ModelPickerItem } from "./components/ModelPickerModal.tsx";
 
 type QuestionType = {
   question: string;
@@ -44,6 +45,7 @@ export function App(props: AppProps) {
   const [procTimes, setProcTimes] = useState<{ thinking: number | null; tools: number | null }>({ thinking: null, tools: null });
   const [sessionLabel, setSessionLabel] = useState(props.sessionLabel);
   const [activeModel, setActiveModel] = useState<{ providerID: string; modelID: string } | null>(null);
+  const [modelPicker, setModelPicker] = useState<{ items: ModelPickerItem[]; idx: number } | null>(null);
 
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -168,31 +170,38 @@ export function App(props: AppProps) {
           ]);
           const provData = provResp.data!;
           const sess = sessResp.data!;
-          const currentModel = activeModel
-            ? `${activeModel.providerID}/${activeModel.modelID}`
-            : sess.model
-              ? `${sess.model.providerID}/${sess.model.id}`
-              : "(server default)";
-          renderer.commitSystemMessage(`current model: ${currentModel}`);
-          renderer.commitSystemMessage("available models (connected providers):");
+          const curProvID  = activeModel?.providerID ?? sess.model?.providerID;
+          const curModelID = activeModel?.modelID    ?? sess.model?.id;
+          const items: ModelPickerItem[] = [];
           for (const p of provData.all) {
             if (!provData.connected.includes(p.id)) continue;
             for (const [mId, mInfo] of Object.entries(p.models)) {
-              const ctx = mInfo.limit.context >= 1000
-                ? `${Math.round(mInfo.limit.context / 1000)}k`
-                : String(mInfo.limit.context);
-              const marker = (activeModel?.providerID === p.id && activeModel?.modelID === mId) ||
-                (!activeModel && sess.model?.providerID === p.id && sess.model?.id === mId)
-                ? " *" : "";
-              renderer.commitSystemMessage(`  ${p.id}/${mId}  ${mInfo.name}  ctx:${ctx}${marker}`);
+              // Defensive: limit or limit.context may be absent at runtime.
+              const rawCtx = (mInfo as { limit?: { context?: number } }).limit?.context;
+              const ctxLabel = rawCtx
+                ? (rawCtx >= 1000 ? `${Math.round(rawCtx / 1000)}k` : String(rawCtx))
+                : "?";
+              items.push({
+                providerID: p.id,
+                modelID: mId,
+                name: mInfo.name,
+                ctxLabel,
+                isCurrent: p.id === curProvID && mId === curModelID,
+              });
             }
+          }
+          if (items.length === 0) {
+            renderer.commitSystemMessage("no connected providers found — check opencode configuration");
+          } else {
+            const initialIdx = Math.max(0, items.findIndex(it => it.isCurrent));
+            setModelPicker({ items, idx: initialIdx });
           }
         } catch (err) {
           renderer.commitSystemMessage(`/model error: ${err instanceof Error ? err.message : String(err)}`);
         }
       } else if (modelResult.action === "set") {
         setActiveModel({ providerID: modelResult.providerID!, modelID: modelResult.modelID! });
-        renderer.commitSystemMessage(`model set to ${modelResult.providerID}/${modelResult.modelID} (applies to next prompt)`);
+        renderer.commitSystemMessage(`model set to ${modelResult.providerID}/${modelResult.modelID}`);
       } else {
         renderer.commitSystemMessage("usage: /model  or  /model <providerID>/<modelID>");
       }
@@ -241,6 +250,16 @@ export function App(props: AppProps) {
     setQuestion(null);
   }, [question, props.baseUrl]);
 
+  const handleModelSelect = useCallback((item: ModelPickerItem) => {
+    setActiveModel({ providerID: item.providerID, modelID: item.modelID });
+    setModelPicker(null);
+    renderer.commitSystemMessage(`model set to ${item.providerID}/${item.modelID}`);
+  }, [renderer]);
+
+  const handleModelCancel = useCallback(() => {
+    setModelPicker(null);
+  }, []);
+
   return (
     <>
       <Static items={committed}>
@@ -251,10 +270,18 @@ export function App(props: AppProps) {
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}
       {permission && <PermissionModal title={permission.title} onAnswer={handlePermission} />}
       {question && <QuestionModal questions={question.questions} onAnswer={handleQuestion} />}
+      {modelPicker && (
+        <ModelPickerModal
+          items={modelPicker.items}
+          initialIdx={modelPicker.idx}
+          onSelect={handleModelSelect}
+          onCancel={handleModelCancel}
+        />
+      )}
       <Box flexDirection="column" marginBottom={2}>
         <SubprocessStatus thinking={procTimes.thinking} tools={procTimes.tools} />
         <Rule title={sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question} onSubmit={handleSubmit} />
+        <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question || !!modelPicker} onSubmit={handleSubmit} />
         <Rule width={w} />
         <StatusLine vis={renderer.visibility} />
       </Box>
