@@ -2,8 +2,8 @@
 title: "octmux — Implementation Plan"
 created_at: 2026-05-18--21-58
 created_by: Claude Code (Claude Sonnet 4.6 1M)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-22--00-00
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-05-22--19-40
 context: >
   octmux is a text-only barebones REPL UI for OpenCode that mimics the Claude
   Code CLI feel: text REPL, one bottom status line, Emacs-style line edits,
@@ -341,7 +341,7 @@ All eight sub-phases shipped. Highlights: flicker-free Static scrollback; typed 
 
 ### Phase 4 — Status line + async streaming + Esc-interrupt + rich parts (2 days)
 
-**Status:** planned.
+**Status:** in progress — Phase 4.1b shipped (systemd infra, 2026-05-22); core UI work planned.
 
 **Goal:** bottom status line; Esc aborts a stream; tool calls and reasoning
 render distinctly.
