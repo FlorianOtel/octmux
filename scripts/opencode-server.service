@@ -1,0 +1,39 @@
+[Unit]
+Description=OpenCode Headless HTTP Server
+Documentation=https://opencode.ai
+# Start after network is up (opencode binds to 127.0.0.1 by default, but
+# journald and hostname resolution are network-adjacent on some systems).
+After=network.target
+
+[Service]
+Type=simple
+User=florian
+WorkingDirectory=/home/florian
+
+# Full path required — opencode is installed per-user under ~/.opencode/bin.
+ExecStart=/home/florian/.opencode/bin/opencode serve \
+    --port 4096 \
+    --print-logs \
+    --log-level INFO
+
+# Restart the service if it exits for any reason other than a clean stop.
+Restart=on-failure
+RestartSec=5s
+
+# Cap restart storms: at most 3 restarts within 60 seconds, then give up
+# and leave the service in a failed state for manual inspection.
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Route all output to journald. Query with:
+#   journalctl -u opencode-server -f
+#   journalctl -u opencode-server --since "1 hour ago"
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opencode-server
+
+# Ensure opencode finds its provider config at ~/.config/opencode/.
+Environment=HOME=/home/florian
+
+[Install]
+WantedBy=multi-user.target

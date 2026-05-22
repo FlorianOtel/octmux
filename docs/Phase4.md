@@ -1,0 +1,105 @@
+---
+title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
+created_at: 2026-05-21--20-18
+created_by: Claude Code (Claude Sonnet 4.6)
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-05-22--19-40
+context: >
+  Phase 4 is the next major phase focusing on the status line, async streaming,
+  Esc-interrupt capability, and rich part rendering. This document contains
+  the complete planning and implementation logs for Phase 4.
+---
+
+# Phase pre-implementation checklist - Read this first
+
+When starting a phase:
+
+1. Read this doc top-to-bottom, paying attention to the most recent log
+   entry — it carries forward notes from the previous phase that the spec
+   below may not capture.
+2. Implement only the deliverables and files listed for the current phase.
+   Do not pull work forward from later phases.
+3. Run the phase's manual verification steps. All must pass.
+
+When finishing a phase:
+
+1. Add a new entry at the top of "Implementation log" with today's
+   `YYYY-MM-DD--HH-MM` timestamp.
+2. Flip the phase's status in the parent plan to `✓ shipped — see log
+   YYYY-MM-DD--HH-MM`.
+3. Refresh `updated_by` and `updated_at` in the frontmatter.
+4. Commit with `feat(octmux): Phase N — <short title>`.
+
+---
+
+## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-22 — Phase 4.1b: systemd service for opencode headless mode
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6)
+
+**What shipped:**
+Two files under `scripts/`:
+
+- `scripts/opencode-server.service` — systemd unit that runs `opencode serve --port 4096 --print-logs --log-level INFO` as `User=florian`. `Type=simple` (non-forking). `Restart=on-failure` with `RestartSec=5s` and a burst cap (`StartLimitBurst=3` per 60 s) to avoid restart storms. Logs go to journald (`StandardOutput=journal`, `SyslogIdentifier=opencode-server`); query with `journalctl -u opencode-server -f`.
+
+- `scripts/install-opencode-service.sh` — idempotent install script (run as root from repo root). Copies the unit to `/etc/systemd/system/`, reloads the daemon, and runs `systemctl enable --now`.
+
+**Port:** 4096 (manual dev instances use 4097 / 4101).
+
+**Log rotation:** handled by journald (configured via `/etc/systemd/journald.conf`; default keeps logs until disk use hits 10% or free space drops below 15%).
+
+**Usage after install:**
+```
+sudo bash scripts/install-opencode-service.sh
+journalctl -u opencode-server -f
+```
+
+---
+
+### 2026-05-21 — Phase 4.1: Post-Phase3 minor UX fixes
+
+**Implemented by:** Claude Code (Claude Haiku 4.5)
+
+**What shipped:**
+`TmuxWindowRenderer` origin window renamed to opencode session label; side window names changed to `<label>--thinking` / `<label>--tools` (double-dash); `SubprocessStatus` component added — animated 2-char spinner + elapsed timer per active subprocess, shown above the input chrome.
+
+Timer start/stop semantics: `thinking` timer starts on `block-start` for the thinking role, clears on its `block-end` (i.e. when the reasoning phase ends, before the text response begins — not at turn end). `tools` timer starts on the first `tool-call block-start`, clears on `tool-result block-end` (normal path — result delivery ends the sequence) or on `tool-call block-end` with `status="error"` (error path — no result follows). Both timers are also cleared on `session-idle` as a safety net. `procTimes` state in `app.tsx` tracks the start timestamps; zero-height when both are null.
+
+---
+
+## Phase 4 Plan
+
+**Status:** planned.
+
+**Goal:** bottom status line; Esc aborts a stream; tool calls and reasoning
+render distinctly.
+
+**Deliverable:** while streaming, status reads
+`[streaming · <model> · in:<n> out:<n> · $<cost>]`. Idle:
+`[idle · <model> · <session>]`. Esc aborts the stream.
+
+**Files to create / modify:**
+- `src/state.ts` (new) — `{ sessionID, mode: "idle"|"streaming"|
+  "awaiting-permission", model, tokens, cost, lastAssistantMessageID,
+  orchestraBadge? }` + `subscribe(listener)`.
+- `src/render.ts` — `drawStatusLine()` at `rows - 1`, dim ANSI. Input area
+  shifts up one row.
+- `src/events.ts` — branch on `part.type`: `text` → stream delta; `tool` →
+  `● Read(path)` + compact result; `reasoning` → dim italics under `·
+  thinking`, collapse if long; `step-start` → blank line.
+- `src/index.ts` — swap `prompt` for `promptAsync`. UX driven by SSE alone.
+  On `submit`: `mode = streaming`, call `promptAsync`. On `interrupt`:
+  `client.session.abort({ path: { id } })`. On `EventMessageUpdated` with
+  `info.finish`: update `state.tokens`/`state.cost`, `mode = idle`.
+
+**Constraint:** `promptAsync` returns 204 with no `messageID`. Correlation
+is by `sessionID` only — single-user, single-flight. Acceptable.
+
+**Manual verification:**
+1. Long prompt → `[streaming]` → Esc aborts within ~500 ms → `[idle]`.
+2. Token counter increments live; cost updates on message completion.
+3. Tools render as compact `● tool(args)` lines.
+
+**Handoff to Phase 5:** UX foundation is complete. Phase 5 layers slash
+commands on top — `/` input branches before reaching `promptAsync`.
