@@ -3,7 +3,7 @@ title: "octmux — Phase 2: Auto-spawn server + tmux guard"
 created_at: 2026-05-19--15-37
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-21--20-18
+updated_at: 2026-05-22--21-46
 context: >
   Phase 2 adds automatic server spawning with port rotation and a tmux guard
   that prevents octmux from running outside of tmux unless explicitly overridden.
@@ -37,6 +37,7 @@ When finishing a phase:
 ### 2026-05-19--15-37 — Phase 2: Auto-spawn server + tmux guard
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `e8249f7d` (shared with Phase 1.5c+1.5d)
 
 **What shipped:**
 - src/server-lifecycle.ts (new): findFreePort (TCP bind probe, range [4096, 4106]),

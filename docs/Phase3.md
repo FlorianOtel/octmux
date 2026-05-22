@@ -3,7 +3,7 @@ title: "octmux — Phase 3: Custom raw-mode input + Ink rendering + typed block 
 created_at: 2026-05-20--00-34
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-21--20-18
+updated_at: 2026-05-22--21-46
 context: >
   Phase 3 is the foundational UX phase split across three major sub-initiatives:
   Phase 3 (original raw-mode input), Phase 3 Extended (Ink-based rendering layer),
@@ -47,6 +47,7 @@ container. All Phase 3 behavior was preserved under the new Ink rendering model.
 #### 2026-05-20--19-00 — UX papercuts: cursor rendering, navigation, streaming flicker
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `376d2536`, `6f22cb05`
 
 **What shipped:**
 
@@ -86,6 +87,7 @@ push instead of string concat.
 #### 2026-05-20--17-40 — Phase 3E.6: Cleanup + doc updates
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `7059f5c4` (shared with 3E.4+3E.5 session)
 
 **What shipped:**
 - `src/index.ts.phase2.bak` deleted (leftover safety copy from 3E.1).
@@ -101,9 +103,10 @@ push instead of string concat.
 
 ---
 
-#### 2026-05-20--15-55 — Phase 3E.4 + 3E.5: Modals, mouse scroll, Ctrl-C recall, UX anchoring
+#### 2026-05-20--17-47 — Phase 3E.4 + 3E.5: Modals, mouse scroll, Ctrl-C recall, UX anchoring
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `7059f5c4` (shared with 3E.6 session)
 
 **What shipped:**
 
@@ -124,6 +127,7 @@ push instead of string concat.
 #### 2026-05-20--16-36 — Feature: history draft preservation in LineEditor
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `ddc065f0` (shared with 3E.3 session)
 
 **What shipped:**
 - `src/editor.ts`: Added `_draft: string | null` field to `LineEditor`. When the
@@ -148,6 +152,7 @@ push instead of string concat.
 #### 2026-05-20--16-21 — Phase 3E.3: <App> shell + Static scrollback
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `ddc065f0` (shared with history-draft session)
 
 **What shipped:**
 - `src/app.tsx` (new): `<App>` component with `<Static>` scrollback, session label
@@ -171,6 +176,7 @@ push instead of string concat.
 #### 2026-05-20--10-45 — Phase 3E.2 fixes: Keybinding fixes, keybindings.ts, LLM wiring, UX polish
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `d39ed8ed`
 
 **What shipped:**
 
@@ -206,6 +212,7 @@ is now a thin wrapper that calls `handleKey` in its `useInput` handler.
 #### 2026-05-20--00-34 — Phase 3E.2: LineEditor state machine + PromptInput component
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `a7560509`, `b23965e4`
 
 **What shipped:**
 - `src/editor.ts` (new): pure LineEditor EventEmitter state machine ported from
@@ -224,6 +231,7 @@ is now a thin wrapper that calls `handleKey` in its `useInput` handler.
 #### 2026-05-20--00-10 — Phase 3E.1: Bootstrap Ink + React under Bun
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `6c52cdd3`, `02f09ce3`, `9d43e9c1`
 
 **What shipped:**
 - `package.json`: added `ink@^5.0.0`, `react@^18.3.1` as deps; `@types/react@^18.3.0` as devDep; also added `react-devtools-core@^7.0.1` as optional dep (required for Ink 5.x compile support).
@@ -246,6 +254,7 @@ two tmux multiplex backends (panes and windows)._
 #### 2026-05-21 — Phase 3U.7 (cleanup)
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `cc634edd`
 
 **What shipped:**
 - `src/events.ts`: removed `text-delta` from `ReplEvent` union; removed dual-emit in `message.part.delta` branch (now emits only `block-delta`). No consumers existed after 3U.4; the alias was a temporary bridge for the 3U.1→3U.2 transition.
@@ -258,6 +267,7 @@ two tmux multiplex backends (panes and windows)._
 #### 2026-05-21 — Phase 3U.6 (TmuxWindowRenderer) + post-implementation fix
 
 **Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6)
+**Commit(s):** `c3d6fcc5`, `437d37bf`, `fcb2ef94`
 
 **What shipped:**
 - `src/renderer/tmux-window.ts` (new, ~140 lines): `TmuxWindowRenderer extends EventEmitter implements Renderer`.
@@ -272,6 +282,7 @@ two tmux multiplex backends (panes and windows)._
 #### 2026-05-21 — Phase 3U.5 (+ post-implementation fixes)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6)
+**Commit(s):** `60083c01`, `5e76fbc6`, `9441308`, `dbe280b0`, `e7240e2d`, `583ea025`, `541d70f8`, `461c572e`, `11402435`
 
 **What shipped:**
 - `src/renderer/fifo.ts` (new): Regular temp files (`/tmp/octmux-PID-ROLE.log`, O_WRONLY|O_APPEND) instead of named FIFOs.
@@ -284,6 +295,7 @@ two tmux multiplex backends (panes and windows)._
 #### 2026-05-21 — Phase 3U.4
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `0f09e793`, `9f468fd6`
 
 **What shipped:**
 - `src/renderer/types.ts` (new): `Renderer` interface with streaming and one-shot primitives.
@@ -296,6 +308,7 @@ two tmux multiplex backends (panes and windows)._
 #### 2026-05-21 — Phase 3U.3
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `cd537372`
 
 **What shipped:**
 - `src/renderer/visibility.ts` (new): `Visibility` EventEmitter class with per-role on/off state + hidden counts.
@@ -308,6 +321,7 @@ two tmux multiplex backends (panes and windows)._
 #### 2026-05-21 — Phase 3U.2
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `d78690bb`, `9fe87af7`
 
 **What shipped:**
 - `src/app.tsx`: replaced `streamBuf`/debounce/`history` model with `<Static>`-backed line-granularity rendering.
@@ -319,6 +333,7 @@ two tmux multiplex backends (panes and windows)._
 #### 2026-05-21 — Phase 3U.1
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `cdee8f5e`, `5fbcec1f`
 
 **What shipped:**
 - `src/blocks.ts` (new): `Role` type, `Block` type, inline ANSI constants, `formatLine()`, `formatBlock()`.

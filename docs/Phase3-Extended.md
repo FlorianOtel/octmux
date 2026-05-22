@@ -3,7 +3,7 @@ title: "octmux — Phase 3 Extended: Ink-based rendering layer"
 created_at: 2026-05-19--14-00
 created_by: Claude (Opus 4.7, chat planning session)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-20--19-00
+updated_at: 2026-05-22--21-46
 parent_plan: docs/Implementation-plan.md
 context: >
   Phase 3 shipped a custom raw-mode input layer (LineEditor) plus an ANSI
@@ -28,6 +28,7 @@ context: >
 ### 2026-05-20--19-00 — UX papercuts: cursor rendering, navigation, streaming flicker
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `376d2536`, `6f22cb05`
 
 **What shipped:**
 
@@ -67,6 +68,7 @@ push instead of string concat.
 ### 2026-05-20--17-40 — Phase 3E.6: Cleanup + doc updates
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `7059f5c4` (shared with 3E.4+3E.5 session)
 
 **What shipped:**
 - `src/index.ts.phase2.bak` deleted (leftover safety copy from 3E.1).
@@ -82,9 +84,10 @@ push instead of string concat.
 
 ---
 
-### 2026-05-20--15-55 — Phase 3E.4 + 3E.5: Modals, mouse scroll, Ctrl-C recall, UX anchoring
+### 2026-05-20--17-47 — Phase 3E.4 + 3E.5: Modals, mouse scroll, Ctrl-C recall, UX anchoring
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `7059f5c4` (shared with 3E.6 session)
 
 **What shipped:**
 
@@ -105,6 +108,7 @@ push instead of string concat.
 ### 2026-05-20--16-36 — Feature: history draft preservation in LineEditor
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `ddc065f0` (shared with 3E.3 session)
 
 **What shipped:**
 - `src/editor.ts`: Added `_draft: string | null` field to `LineEditor`. When the
@@ -132,6 +136,7 @@ push instead of string concat.
 ### 2026-05-20--16-21 — Phase 3E.3: <App> shell + Static scrollback
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `ddc065f0` (shared with history-draft session)
 
 **What shipped:**
 - `src/app.tsx` (new): `<App>` component with `<Static>` scrollback, session label
@@ -158,6 +163,7 @@ push instead of string concat.
 ### 2026-05-20--10-45 — Phase 3E.2 fixes: Keybinding fixes, keybindings.ts, LLM wiring, UX polish
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `d39ed8ed`
 
 **What shipped:**
 
@@ -241,6 +247,7 @@ be added later as a refactor if scrollback overflow becomes an issue. Phase
 ### 2026-05-20--00-34 — Phase 3E.2: LineEditor state machine + PromptInput component
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `a7560509`, `b23965e4`
 
 **What shipped:**
 - `src/editor.ts` (new): pure LineEditor EventEmitter state machine ported from
@@ -267,6 +274,7 @@ be added later as a refactor if scrollback overflow becomes an issue. Phase
 ### 2026-05-20--00-10 — Phase 3E.1: Bootstrap Ink + React under Bun
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `6c52cdd3`, `02f09ce3`, `9d43e9c1`
 
 **What shipped:**
 - `package.json`: added `ink@^5.0.0`, `react@^18.3.1` as deps; `@types/react@^18.3.0` as devDep; also added `react-devtools-core@^7.0.1` as optional dep (required for Ink 5.x compile support).
@@ -769,7 +777,7 @@ and on session-idle that buffer flushes into Static as an assistant entry.
 
 ### Phase 3E.4 — SSE integration: full Phase 1.5/3 parity under Ink (1–1½ days)
 
-**Status:** ✓ shipped — see log 2026-05-20--15-55
+**Status:** ✓ shipped — see log 2026-05-20--17-47
 
 **Goal:** wire the opencode client and SSE event stream into `<App>` so
 the existing Phase 1.5/3 behavior is fully restored under Ink:
@@ -942,7 +950,7 @@ Ctrl-C-during-generation recall of the last submission.
 
 ### Phase 3E.5 — Mouse-wheel scroll + Ctrl-C recall (½ day)
 
-**Status:** ✓ shipped — see log 2026-05-20--15-55
+**Status:** ✓ shipped — see log 2026-05-20--17-47
 
 **Goal:** add the two new UX features that motivated Phase 3 Extended in
 the first place — mouse wheel acts like Up/Down arrow keys (history nav),

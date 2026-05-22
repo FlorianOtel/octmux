@@ -3,7 +3,7 @@ title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-22--18-45
+updated_at: 2026-05-22--21-46
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -37,6 +37,7 @@ When finishing a phase:
 ### 2026-05-22 — Phase 4.2 fix: /model interactive picker + context window display
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `357fd181`, `487074d8`
 
 **What changed:**
 Two fixes to the `/model` command:
@@ -61,6 +62,7 @@ This means the picker shows more models than the user may have consciously set u
 ### 2026-05-22 — Phase 4.2: /model, /rename, /exit slash commands + /show consolidation
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `0bdd5174`
 
 **What changed:**
 Four slash-command implementations and command parsing consolidation. All local (non-forwarded) slash commands now live in a dedicated `src/commands.ts` module. The `parseShowCommand` function was moved from `visibility.ts` to `commands.ts` to keep all local parsers together. New commands: `/exit` (clean shutdown), `/rename <name>` (rename session in DB and tmux), `/model` (list providers/models or set active model for next prompt).
@@ -85,6 +87,7 @@ Four slash-command implementations and command parsing consolidation. All local 
 ### 2026-05-22 — Phase 4.1c: Default attach to port 4096 + --auto-spawn warning
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `55581900`, `8e793430`, `fe9a72db`
 
 **What changed:**
 The startup behavior has been inverted: `octmux` with no arguments now attaches to the default port 4096 (the systemd service) instead of auto-spawning. Auto-spawn is now an explicit opt-in via `--auto-spawn` flag.
@@ -104,6 +107,7 @@ The startup behavior has been inverted: `octmux` with no arguments now attaches 
 ### 2026-05-22 — Phase 4.1b: systemd service for opencode headless mode
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `cbd48a08`, `00bb1efc`
 
 **What shipped:**
 Two files under `scripts/`:
@@ -127,6 +131,7 @@ journalctl -u opencode-server -f
 ### 2026-05-21 — Phase 4.1: Post-Phase3 minor UX fixes
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `b92c706`, `419ac4e8`
 
 **What shipped:**
 `TmuxWindowRenderer` origin window renamed to opencode session label; side window names changed to `<label>--thinking` / `<label>--tools` (double-dash); `SubprocessStatus` component added — animated 2-char spinner + elapsed timer per active subprocess, shown above the input chrome.

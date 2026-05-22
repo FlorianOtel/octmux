@@ -3,7 +3,7 @@ title: "octmux — Phase 1: Hello-world REPL with streaming (+ 1.5 sub-phases)"
 created_at: 2026-05-18--22-31
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-19--15-37
+updated_at: 2026-05-22--21-46
 context: >
   Phase 1 establishes the foundational REPL with streaming support, including
   five sub-phases (1.5a through 1.5d) that add streaming UX polish, true
@@ -39,6 +39,7 @@ When finishing a phase:
 ### 2026-05-19--15-03 — Phase 1.5c+1.5d: Status display + interactive modals
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `e8249f7d` (shared with Phase 2)
 
 **What shipped:**
 - events.ts: added "permission-asked" (handles both v1 "permission.updated" and v2
@@ -62,6 +63,7 @@ When finishing a phase:
 ### 2026-05-19--13-08 — Phase 1.5b: True streaming via `message.part.delta`
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6, interactive session)
+**Commit(s):** `eeb64a1d` (shared with Phase 1.5a)
 
 **What shipped:**
 - `events.ts`: replaced `seenPartLength` Map with `seenPartIDs` Set. Added handler for
@@ -99,6 +101,7 @@ unchanged — `"text-delta"` kind is the same interface.
 ### 2026-05-19--10-38 — Phase 1.5a: Streaming UX scaffolding (indicator + abort)
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `eeb64a1d` (shared with Phase 1.5b)
 
 **What shipped:**
 - `events.ts`: added `"generating"`, `"session-status"`, `"part-removed"` event kinds. Detection of len=0 creation event emits `"generating"` signal. `session.status` and
@@ -113,6 +116,7 @@ True streaming was missing; fixed in Phase 1.5b above.
 ### 2026-05-18--23-20 — Phase 1: Post-ship debugging + streaming investigation
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6 1M, interactive session)
+**Commit(s):** `8bb2fd18`
 
 **What shipped:**
 - Fixed `src/events.ts`: removed the `e.properties.delta` guard (delta is always
@@ -187,6 +191,7 @@ unchanged (it recorded what Actor shipped, not the debugging). Frontmatter
 ### 2026-05-18--22-31 — Phase 1: Hello-world REPL with streaming
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
+**Commit(s):** `09cd76fa` (git msg: "Phase 0 Step1" — initial Phase 1 REPL)
 
 **What shipped:**
 - `src/events.ts` — `filterEvent()` narrows SDK `GlobalEvent` payloads to

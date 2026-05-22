@@ -2,7 +2,7 @@
 title: "octmux — Phase 3-UX: Block-typed renderer + tmux multiplex (panes + windows)"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
-updated_at: 2026-05-21--20-18
+updated_at: 2026-05-22--21-46
 updated_by: Claude Code (Claude Sonnet 4.6)
 parent_plan: docs/Phase3-Extended.md
 context: >
@@ -143,6 +143,7 @@ tmux window list:
 ### 2026-05-21 — Phase 3U.8 (minor-fixes)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `b92c706`, `419ac4e8`
 
 **What shipped:**
 `TmuxWindowRenderer` origin window renamed to opencode session label; side window names changed to `<label>--thinking` / `<label>--tools` (double-dash); `SubprocessStatus` component added — animated 2-char spinner + elapsed timer per active subprocess, shown above the input chrome.
@@ -154,6 +155,7 @@ Timer start/stop semantics: `thinking` timer starts on `block-start` for the thi
 ### 2026-05-21 — Phase 3U.7 (cleanup)
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
+**Commit(s):** `cc634edd`
 
 **What shipped:**
 - `src/events.ts`: removed `text-delta` from `ReplEvent` union; removed dual-emit
@@ -195,6 +197,7 @@ implementation summary section added.
 ### 2026-05-21 — Phase 3U.6 (TmuxWindowRenderer) + post-implementation fix
 
 **Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6)
+**Commit(s):** `c3d6fcc5`, `437d37bf`, `fcb2ef94`
 
 **What shipped:**
 - `src/renderer/tmux-window.ts` (new, ~140 lines): `TmuxWindowRenderer extends EventEmitter implements Renderer`.
@@ -240,6 +243,7 @@ origin) and `tools` (vertical split below thinking), giving a layout of `main | 
 ### 2026-05-21 — Phase 3U.5 (+ post-implementation fixes)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6)
+**Commit(s):** `60083c01`, `5e76fbc6`, `9441308`, `dbe280b0`, `e7240e2d`, `583ea025`, `541d70f8`, `461c572e`, `11402435`
 
 **What shipped:**
 - `src/renderer/fifo.ts` (new): `makeFifo(role, pid)` — regular temp file
@@ -287,6 +291,7 @@ update README with --multi-pane docs + tmux.conf snippet, update parent Implemen
 ### 2026-05-21 — Phase 3U.4
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `0f09e793`, `9f468fd6`
 
 **What shipped:**
 - `src/renderer/types.ts` (new): `Renderer` interface with `beginBlock`, `appendToBlock`,
@@ -312,6 +317,7 @@ side panes via tmux split-window; route non-text blocks to per-role FIFOs.
 ### 2026-05-21 — Phase 3U.3
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `cd537372`
 
 **What shipped:**
 - `src/renderer/visibility.ts` (new): `Visibility` EventEmitter class with per-role
@@ -331,6 +337,7 @@ side panes via tmux split-window; route non-text blocks to per-role FIFOs.
 ### 2026-05-21 — Phase 3U.2
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `d78690bb`, `9fe87af7`
 
 **What shipped:**
 - `src/app.tsx`: replaced `streamBuf`/debounce/`history` model with `<Static>`-backed
@@ -351,6 +358,7 @@ side panes via tmux split-window; route non-text blocks to per-role FIFOs.
 ### 2026-05-21 — Phase 3U.1
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
+**Commit(s):** `cdee8f5e`, `5fbcec1f`
 
 **What shipped:**
 - `src/blocks.ts` (new): `Role` type, `Block` type, inline ANSI constants, `formatLine()`, `formatBlock()`
