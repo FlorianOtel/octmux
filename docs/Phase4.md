@@ -2,8 +2,8 @@
 title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-22--19-40
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-05-22--19-50
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -33,6 +33,25 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-22 — Phase 4.1c: Default attach to port 4096 + --auto-spawn warning
+
+**Implemented by:** Claude Code (Claude Haiku 4.5)
+
+**What changed:**
+The startup behavior has been inverted: `octmux` with no arguments now attaches to the default port 4096 (the systemd service) instead of auto-spawning. Auto-spawn is now an explicit opt-in via `--auto-spawn` flag.
+
+**Rationale:**
+- Running multiple opencode instances concurrently risks SQLite locking errors (second instance crashes) and memory bloat from duplicate MCP/LSP processes.
+- A single persistent server (managed by `scripts/opencode-server.service`) is the recommended pattern.
+- On connection failure to port 4096 (default path), a rich error message guides users to start the server and documents the `--auto-spawn` option with its risks.
+
+**Files changed:** `src/index.tsx`
+- Added `--auto-spawn` flag parsing (line 43).
+- Updated help text with new usage patterns and `--auto-spawn` warning.
+- Rewrote server-lifecycle block (lines 94-138): now prefers attach-to-4096 over auto-spawn; distinct error messages for default vs. explicit `--attach`.
+
+---
 
 ### 2026-05-22 — Phase 4.1b: systemd service for opencode headless mode
 

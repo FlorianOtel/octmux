@@ -18,15 +18,21 @@ if (args.includes("--help") || args.includes("-h")) {
   console.log(`octmux — text REPL UI for opencode
 
 Usage:
-  octmux                    auto-spawn opencode server, enter REPL
+  octmux                    attach to opencode server on port 4096 (default)
   octmux --attach <port>    attach to a running server on <port>
+  octmux --auto-spawn       spawn a new opencode server automatically (⚠ see below)
   octmux --help             show this help
   octmux --version          show version
 
 Flags:
   --no-tmux-guard           allow running outside tmux (scripts / CI)
   --multi-pane              split into tmux panes (thinking + tool side panes)
-  --multi-window            split into tmux windows (thinking + tool side windows)`);
+  --multi-window            split into tmux windows (thinking + tool side windows)
+
+⚠ --auto-spawn warning:
+  Running multiple opencode instances concurrently risks SQLite locking
+  errors (second instance crashes) and memory bloat from duplicate MCP/LSP
+  processes. Prefer a single persistent server (scripts/opencode-server.service).`);
   process.exit(0);
 }
 
@@ -40,6 +46,7 @@ const attachIdx   = args.indexOf("--attach");
 const attachPort  = attachIdx !== -1 ? parseInt(args[attachIdx + 1], 10) : NaN;
 const multiPane   = args.includes("--multi-pane");
 const multiWindow = args.includes("--multi-window");
+const autoSpawn   = args.includes("--auto-spawn");
 const originPaneId = process.env.TMUX_PANE ?? "";
 
 if (!process.env.TMUX && !noTmuxGuard) {
@@ -91,13 +98,8 @@ async function isOpencodeHealthy(url: string): Promise<boolean> {
 let baseUrl: string;
 let serverHandle: ServerHandle | null = null;
 
-if (!isNaN(attachPort)) {
-  baseUrl = `http://127.0.0.1:${attachPort}`;
-  if (!(await isOpencodeHealthy(baseUrl))) {
-    console.error(`health: failed — no opencode server on port ${attachPort}`);
-    process.exit(1);
-  }
-} else {
+if (autoSpawn) {
+  // Explicit opt-in: spawn a new opencode instance on any free port.
   const port = await findFreePort(4096, 4106);
   if (port === null) { console.error("no free port in [4096, 4106]"); process.exit(1); }
   console.log(`spawning opencode server on port ${port}…`);
@@ -108,6 +110,34 @@ if (!isNaN(attachPort)) {
     process.exit(1);
   }
   baseUrl = serverHandle.url;
+} else {
+  // Default (no flags) or explicit --attach: connect to a running server.
+  // Default port is 4096 — the systemd service (scripts/opencode-server.service).
+  const port = !isNaN(attachPort) ? attachPort : 4096;
+  baseUrl = `http://127.0.0.1:${port}`;
+  if (!(await isOpencodeHealthy(baseUrl))) {
+    const isDefault = isNaN(attachPort);
+    if (isDefault) {
+      console.error(
+        `✗  no opencode server on port 4096 (default).\n` +
+        `\n` +
+        `Start the server first, then retry:\n` +
+        `  systemctl start opencode-server        # systemd service\n` +
+        `  opencode serve --port 4096             # or manually\n` +
+        `\n` +
+        `To attach to a different port:\n` +
+        `  octmux --attach <port>\n` +
+        `\n` +
+        `--auto-spawn is available but use with caution:\n` +
+        `  Multiple opencode instances risk SQLite locking errors and memory\n` +
+        `  bloat from duplicate MCP/LSP processes. Prefer the systemd service.\n` +
+        `  See scripts/opencode-server.service.`
+      );
+    } else {
+      console.error(`health: failed — no opencode server on port ${port}`);
+    }
+    process.exit(1);
+  }
 }
 
 process.on("SIGTERM", async () => { await serverHandle?.dispose(); await renderer.dispose(); process.exit(0); });
