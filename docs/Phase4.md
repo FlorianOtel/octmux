@@ -36,30 +36,6 @@ When finishing a phase:
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-23--00-48 — Phase 4.1d: user systemd service + configurable port
-
-**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-23--00-48
-**Commit(s):** `TBD`
-
-**What changed:**
-Converted the opencode systemd service from system-wide (required root) to a per-user service.
-
-- `scripts/opencode-server.service` — full rewrite as user unit: removed `User=florian`,
-  `After=network.target`, `Environment=HOME=`, all hardcoded `/home/florian` paths; replaced
-  with `%h` expansion; added `OPENCODE_PORT=4096` env var with optional `EnvironmentFile`
-  override (`~/.config/opencode/opencode-server.env`); changed `WantedBy` to `default.target`;
-  updated journal comments to use `--user` flag.
-- `scripts/install-opencode-service.sh` — rewritten without root: installs to
-  `~/.config/systemd/user/`; uses `systemctl --user` throughout; errors if run as root;
-  adds port-override hint and `loginctl enable-linger` hint.
-- `src/index.tsx` — `systemctl start` → `systemctl --user start` in the rich
-  connection-failure error message.
-
-**Design note — logging:** user journal remains volatile by default (cleared on reboot),
-rotation handled by journald. Query: `journalctl --user -u opencode-server [-f]`.
-
----
-
 ### 2026-05-22 — Phase 4.2 fix: /model interactive picker + context window display
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
@@ -127,6 +103,32 @@ The startup behavior has been inverted: `octmux` with no arguments now attaches 
 - Added `--auto-spawn` flag parsing (line 43).
 - Updated help text with new usage patterns and `--auto-spawn` warning.
 - Rewrote server-lifecycle block (lines 94-138): now prefers attach-to-4096 over auto-spawn; distinct error messages for default vs. explicit `--attach`.
+
+**Amendment — 2026-05-23, commit `12327ea` (Claude Code, Claude Sonnet 4.6):**
+Converted the service from system-wide (root-owned) to a proper **user unit**, and made the
+port configurable. opencode is single-user (SQLite session store) — a system-wide service was
+the wrong abstraction.
+
+- `scripts/opencode-server.service` — full rewrite as user unit: removed `User=florian`,
+  `After=network.target`, `Environment=HOME=`, all hardcoded `/home/florian` paths; `%h`
+  expansion throughout; `OPENCODE_PORT=4096` env var with optional `EnvironmentFile` override
+  at `~/.config/opencode/opencode-server.env`; `WantedBy=default.target`; journal comments
+  updated to `--user` flag.
+- `scripts/install-opencode-service.sh` — rewritten without root: installs to
+  `~/.config/systemd/user/`; `systemctl --user` throughout; errors if accidentally run as
+  root; port-override hint and `loginctl enable-linger` hint.
+- `src/index.tsx` — `systemctl start` → `systemctl --user start` in the rich error message.
+
+**Logging decision — volatile (journald):** user journal is volatile by default on Debian
+(stored in `/run/user/$UID/`, cleared on reboot). This is acceptable for a dev tool.
+Query: `journalctl --user -u opencode-server [-f]`.
+
+If persistent logs are needed later, options are:
+1. **System-level** (requires root): set `Storage=persistent` in `/etc/systemd/journald.conf`
+   and restart journald — all journals (system + user) become persistent in `/var/log/journal/`.
+2. **File-based** (user-level, no root): change `StandardOutput=journal` to
+   `StandardOutput=append:%h/.local/share/opencode/server.log` in the unit, then add a
+   companion logrotate config + systemd user timer for daily rotation with `copytruncate`.
 
 ---
 
