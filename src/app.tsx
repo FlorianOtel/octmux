@@ -165,6 +165,27 @@ export function App(props: AppProps) {
       if (modelResult.action === "list") {
         try {
           const [provResp, sessResp] = await Promise.all([
+            // NOTE: provider.list() (GET /provider) returns OpenCode's MERGED view: it combines
+            // the user's ~/.config/opencode/opencode.json with OpenCode's full upstream model
+            // catalog. The merge happens server-side inside the OpenCode process — the user's
+            // config entries take precedence (they can override names, limits, costs, etc.), but
+            // every model in OpenCode's built-in registry is also included.
+            //
+            // "connected" means the provider has an API key available from any source: the user's
+            // config file, an environment variable, or occasionally a provider with free/built-in
+            // access. It does NOT mean "explicitly configured by the user in opencode.json".
+            //
+            // As a result, the picker shows more models than the user may have consciously set up
+            // — any provider whose key happens to be present in the environment will appear.
+            //
+            // To show ONLY user-configured models:
+            //   - Switch to client.config.providers() (GET /config/providers), which reads
+            //     ~/.config/opencode/opencode.json directly and returns Provider[] with a
+            //     `source` field: "config" | "env" | "custom" | "api".
+            //   - Filter to source !== "api" to exclude upstream-catalog-only entries, or
+            //     source === "config" to show only what is explicitly in opencode.json.
+            //   - The Provider.models values there are the same Model type with limit.context
+            //     guaranteed non-null, so the defensive optional-chaining below is not needed.
             props.client.provider.list(),
             props.client.session.get({ path: { id: props.sessionID } }),
           ]);
@@ -176,7 +197,7 @@ export function App(props: AppProps) {
           for (const p of provData.all) {
             if (!provData.connected.includes(p.id)) continue;
             for (const [mId, mInfo] of Object.entries(p.models)) {
-              // Defensive: limit or limit.context may be absent at runtime.
+              // Defensive: limit or limit.context may be absent for catalog-only entries.
               const rawCtx = (mInfo as { limit?: { context?: number } }).limit?.context;
               const ctxLabel = rawCtx
                 ? (rawCtx >= 1000 ? `${Math.round(rawCtx / 1000)}k` : String(rawCtx))
