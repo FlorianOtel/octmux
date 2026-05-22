@@ -269,7 +269,7 @@ two tmux multiplex backends (panes and windows)._
 #### 2026-05-22 — Phase 3U.6 (TmuxWindowRenderer) + post-implementation fixes
 
 **Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6); post-implementation fixes by Claude Code (Claude Sonnet 4.6) — 2026-05-22--23-00
-**Commit(s):** `c3d6fcc5`, `437d37bf`, `fcb2ef94`, `TBD`
+**Commit(s):** `c3d6fcc5`, `437d37bf`, `fcb2ef94`, `1a2f58b`
 
 **What shipped (post-implementation fix — 2026-05-22):**
 - **No-args → help + explicit mode selection (`src/index.tsx`)**: `octmux` started without arguments

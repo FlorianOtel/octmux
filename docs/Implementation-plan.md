@@ -117,9 +117,7 @@ Detailed implementation logs for each phase have been moved to dedicated documen
 - **Phase 1, Phase 1.5:** `docs/Phase1.md` ← authoritative
 - **Phase 2:** `docs/Phase2.md` ← authoritative
 - **Phase 3 (original, superseded):** plan spec only; no implementation log (never shipped as-is)
-- **Phase 3 Extended (3E.1–3E.6):** `docs/Phase3-Extended.md` ← authoritative
-- **Phase 3 UX (3U.1–3U.8):** `docs/Phase3-UX.md` ← authoritative
-- **Phase 3 combined summary:** `docs/Phase3.md` (aggregates both above; Phase3-Extended.md and Phase3-UX.md take precedence)
+- **Phase 3 Extended (3E.1–3E.6) + Phase 3 UX (3U.1–3U.8):** `docs/Phase3.md` ← authoritative (combined log)
 - **Phase 4:** `docs/Phase4.md` ← authoritative
 
 ---
@@ -282,7 +280,7 @@ pure UX work on the input layer — no server changes.
 
 ### Phase 3 — Custom raw-mode input layer (2–3 days) — **core UX phase**
 
-**Status:** ✓ superseded — replaced by Phase 3 Extended (Ink migration). See log 2026-05-20--17-40 and `docs/Phase3-Extended.md`.
+**Status:** ✓ superseded — replaced by Phase 3 Extended (Ink migration). See log 2026-05-20--17-40 in `docs/Phase3.md`.
 
 **Goal:** replace `readline` with our own input handler so typing feels like
 Claude Code.
@@ -334,7 +332,7 @@ status line, switches to async streaming, and wires Esc-to-abort.
 
 ### Phase 3 Extended — Ink rendering layer (3E.1–3E.6)
 
-**Status:** ✓ shipped — see log 2026-05-20--17-40 and `docs/Phase3-Extended.md`.
+**Status:** ✓ shipped — see log 2026-05-20--17-40 in `docs/Phase3.md`.
 
 All six sub-phases shipped. octmux is a working REPL: type a prompt, Enter submits to the LLM, streaming response displays in `<Static>` scrollback above the anchored input area, Ctrl-C Ctrl-C exits. Permission and question modals are real Ink components. Mouse wheel navigates history. Ctrl-C during generation aborts and restores the last submitted text.
 
@@ -342,9 +340,9 @@ All six sub-phases shipped. octmux is a working REPL: type a prompt, Enter submi
 
 ### Phase 3 UX — Typed block renderer + tmux multiplex (3U.1–3U.8)
 
-**Status:** ✓ shipped — see log 2026-05-21 and `docs/Phase3-UX.md`.
+**Status:** ✓ shipped — see log 2026-05-21 in `docs/Phase3.md`.
 
-All eight sub-phases shipped. Highlights: flicker-free Static scrollback; typed Block model with ANSI role prefixes; per-role visibility toggles (`/show thinking off`); `Renderer` interface with `StdoutRenderer`, `TmuxPaneRenderer`, and `TmuxWindowRenderer` backends; `--multi-window` (recommended, lazy windows) and `--multi-pane` (eager panes) multiplex flags; `tool-call` + `tool-result` consolidated to a shared `"tools"` sink in both renderers. Origin window renamed to opencode session label; side windows use `<label>--<key>` naming convention (double-dash); `SubprocessStatus` component shows animated spinner + elapsed timer for active subprocesses; timers clear on role-specific `block-end` events (thinking clears when reasoning ends; tools clears on `tool-result block-end` or `tool-call` error). See `docs/Phase3-UX.md` for full spec, design rationale, and implementation log.
+All eight sub-phases shipped. Highlights: flicker-free Static scrollback; typed Block model with ANSI role prefixes; per-role visibility toggles (`/show thinking off`); `Renderer` interface with `StdoutRenderer`, `TmuxPaneRenderer`, and `TmuxWindowRenderer` backends; `--multi-window` (recommended, lazy windows) and `--multi-pane` (eager panes) multiplex flags; `tool-call` + `tool-result` consolidated to a shared `"tools"` sink in both renderers. Origin window renamed to opencode session label; side windows use `<label>--<key>` naming convention (double-dash); `SubprocessStatus` component shows animated spinner + elapsed timer for active subprocesses; timers clear on role-specific `block-end` events (thinking clears when reasoning ends; tools clears on `tool-result block-end` or `tool-call` error). See `docs/Phase3.md` for full spec, design rationale, and implementation log.
 
 ---
 
