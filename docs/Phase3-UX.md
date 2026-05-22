@@ -2,7 +2,7 @@
 title: "octmux — Phase 3-UX: Block-typed renderer + tmux multiplex (panes + windows)"
 created_at: 2026-05-20--19-30
 created_by: Claude (Opus 4.7, chat planning session)
-updated_at: 2026-05-22--21-46
+updated_at: 2026-05-22--22-01
 updated_by: Claude Code (Claude Sonnet 4.6)
 parent_plan: docs/Phase3-Extended.md
 context: >
@@ -139,18 +139,6 @@ tmux window list:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
-
-### 2026-05-21 — Phase 3U.8 (minor-fixes)
-
-**Implemented by:** Claude Code (Claude Haiku 4.5)
-**Commit(s):** `b92c706`, `419ac4e8`
-
-**What shipped:**
-`TmuxWindowRenderer` origin window renamed to opencode session label; side window names changed to `<label>--thinking` / `<label>--tools` (double-dash); `SubprocessStatus` component added — animated 2-char spinner + elapsed timer per active subprocess, shown above the input chrome.
-
-Timer start/stop semantics: `thinking` timer starts on `block-start` for the thinking role, clears on its `block-end` (i.e. when the reasoning phase ends, before the text response begins — not at turn end). `tools` timer starts on the first `tool-call block-start`, clears on `tool-result block-end` (normal path — result delivery ends the sequence) or on `tool-call block-end` with `status="error"` (error path — no result follows). Both timers are also cleared on `session-idle` as a safety net. `procTimes` state in `app.tsx` tracks the start timestamps; zero-height when both are null.
-
----
 
 ### 2026-05-21 — Phase 3U.7 (cleanup)
 
@@ -2556,11 +2544,13 @@ When starting a sub-phase:
 
 When finishing a sub-phase:
 
-1. Commit with `feat(octmux): Phase 3U.<n> — <short title>`.
-2. If shipping multiple sub-phases in one session: complete one
+1. Prepend a log entry at the top of this doc's "Implementation log"
+   section with:
+   - **Implemented by:** `<agent name (model)> — YYYY-MM-DD--HH-MM`
+   - **Commit(s):** `hash1`, `hash2` — all hashes comma-separated on one line
+2. Commit with `feat(octmux): Phase 3U.<n> — <short title>`.
+3. If shipping multiple sub-phases in one session: complete one
    before starting the next; do NOT interleave.
-3. Prepend a log entry at the top of this doc's "Implementation log"
-   section using the same format as Phase 3 Extended's entries.
 4. Only after 3U.7: prepend a single consolidated log entry to the
    parent plan's Implementation log and flip the parent's locked
    decision #4 to "shipped". (3U.7 is the final sub-phase since the

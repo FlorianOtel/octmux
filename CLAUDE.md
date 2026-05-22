@@ -11,7 +11,11 @@ After any change to `src/`, you MUST:
    The binary at `dist/octmux` is what the user actually runs. Never report a change as complete without rebuilding.
 
 2. **Update docs and memory:**
-   - Add an implementation log entry to the relevant `docs/PhaseN.md`
+   - Add an implementation log entry to the relevant `docs/PhaseN.md`. Each entry must include two metadata lines immediately after the `### YYYY-MM-DD--HH-MM — Title` heading:
+     ```
+     **Implemented by:** <agent name (model)> — YYYY-MM-DD--HH-MM
+     **Commit(s):** `hash1`, `hash2`   ← all hashes comma-separated on one line
+     ```
    - Refresh `updated_by` / `updated_at` frontmatter in every doc you touched
    - Update `/home/florian/.claude/projects/-mnt-nfs-Florian-Gin-AI-projects-octmux/memory/project-octmux.md` with phases shipped, architecture changes, and the new commit hash
 

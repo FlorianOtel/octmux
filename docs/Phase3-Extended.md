@@ -3,7 +3,7 @@ title: "octmux — Phase 3 Extended: Ink-based rendering layer"
 created_at: 2026-05-19--14-00
 created_by: Claude (Opus 4.7, chat planning session)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-22--21-46
+updated_at: 2026-05-22--22-01
 parent_plan: docs/Implementation-plan.md
 context: >
   Phase 3 shipped a custom raw-mode input layer (LineEditor) plus an ANSI
@@ -1240,9 +1240,12 @@ When starting a sub-phase:
 
 When finishing a sub-phase:
 
-1. Commit with `feat(octmux): Phase 3E.<n> — <short title>`.
-2. If shipping multiple sub-phases in one session: complete one before
+1. Prepend a log entry at the top of the "Implementation log" with:
+   - **Implemented by:** `<agent name (model)> — YYYY-MM-DD--HH-MM`
+   - **Commit(s):** `hash1`, `hash2` — all hashes comma-separated on one line
+2. Commit with `feat(octmux): Phase 3E.<n> — <short title>`.
+3. If shipping multiple sub-phases in one session: complete one before
    starting the next; do NOT interleave.
-3. Only after 3E.6: prepend a single consolidated log entry to the
+4. Only after 3E.6: prepend a single consolidated log entry to the
    parent plan's Implementation log and flip the parent's locked
    decision #3.

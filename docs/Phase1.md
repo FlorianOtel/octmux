@@ -3,7 +3,7 @@ title: "octmux — Phase 1: Hello-world REPL with streaming (+ 1.5 sub-phases)"
 created_at: 2026-05-18--22-31
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-22--21-46
+updated_at: 2026-05-22--22-01
 context: >
   Phase 1 establishes the foundational REPL with streaming support, including
   five sub-phases (1.5a through 1.5d) that add streaming UX polish, true
@@ -26,7 +26,9 @@ When starting a phase:
 When finishing a phase:
 
 1. Add a new entry at the top of "Implementation log" with today's
-   `YYYY-MM-DD--HH-MM` timestamp.
+   `YYYY-MM-DD--HH-MM` timestamp. Each entry must include:
+   - **Implemented by:** `<agent name (model)> — YYYY-MM-DD--HH-MM`
+   - **Commit(s):** `hash1`, `hash2` — all hashes comma-separated on one line
 2. Flip the phase's status in the parent plan to `✓ shipped — see log
    YYYY-MM-DD--HH-MM`.
 3. Refresh `updated_by` and `updated_at` in the frontmatter.

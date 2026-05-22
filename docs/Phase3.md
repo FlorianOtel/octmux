@@ -3,7 +3,7 @@ title: "octmux — Phase 3: Custom raw-mode input + Ink rendering + typed block 
 created_at: 2026-05-20--00-34
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-22--21-46
+updated_at: 2026-05-22--22-01
 context: >
   Phase 3 is the foundational UX phase split across three major sub-initiatives:
   Phase 3 (original raw-mode input), Phase 3 Extended (Ink-based rendering layer),
@@ -27,7 +27,9 @@ When starting a phase:
 When finishing a phase:
 
 1. Add a new entry at the top of "Implementation log" with today's
-   `YYYY-MM-DD--HH-MM` timestamp.
+   `YYYY-MM-DD--HH-MM` timestamp. Each entry must include:
+   - **Implemented by:** `<agent name (model)> — YYYY-MM-DD--HH-MM`
+   - **Commit(s):** `hash1`, `hash2` — all hashes comma-separated on one line
 2. Flip the phase's status in the parent plan to `✓ shipped — see log
    YYYY-MM-DD--HH-MM`.
 3. Refresh `updated_by` and `updated_at` in the frontmatter.

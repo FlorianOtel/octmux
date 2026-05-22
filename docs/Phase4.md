@@ -3,7 +3,7 @@ title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-22--21-46
+updated_at: 2026-05-22--22-01
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -24,7 +24,9 @@ When starting a phase:
 When finishing a phase:
 
 1. Add a new entry at the top of "Implementation log" with today's
-   `YYYY-MM-DD--HH-MM` timestamp.
+   `YYYY-MM-DD--HH-MM` timestamp. Each entry must include:
+   - **Implemented by:** `<agent name (model)> — YYYY-MM-DD--HH-MM`
+   - **Commit(s):** `hash1`, `hash2` — all hashes comma-separated on one line
 2. Flip the phase's status in the parent plan to `✓ shipped — see log
    YYYY-MM-DD--HH-MM`.
 3. Refresh `updated_by` and `updated_at` in the frontmatter.
