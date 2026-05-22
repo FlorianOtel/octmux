@@ -4,7 +4,7 @@ import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { LineEditor } from "./editor.ts";
 import { filterEvent, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
-import { parseShowCommand } from "./renderer/visibility.ts";
+import { parseShowCommand, parseExitCommand, parseRenameCommand, parseModelCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
@@ -42,6 +42,8 @@ export function App(props: AppProps) {
   const [question, setQuestion] = useState<{ reqID: string; questions: QuestionType[] } | null>(null);
   const [lastSubmitted, setLastSubmitted] = useState<string>("");
   const [procTimes, setProcTimes] = useState<{ thinking: number | null; tools: number | null }>({ thinking: null, tools: null });
+  const [sessionLabel, setSessionLabel] = useState(props.sessionLabel);
+  const [activeModel, setActiveModel] = useState<{ providerID: string; modelID: string } | null>(null);
 
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -127,24 +129,98 @@ export function App(props: AppProps) {
   });
 
   const handleSubmit = useCallback(async (text: string) => {
+    // /exit — clean shutdown
+    const exitResult = parseExitCommand(text);
+    if (exitResult.handled) {
+      renderer.commitUserInput(text);
+      renderer.commitSystemMessage("exiting…");
+      await props.onExit();
+      process.exit(0);
+      return;
+    }
+    // /rename <name> — rename session in DB and tmux windows
+    const renameResult = parseRenameCommand(text);
+    if (renameResult.handled) {
+      renderer.commitUserInput(text);
+      if (!renameResult.newLabel) {
+        renderer.commitSystemMessage("usage: /rename <name>");
+      } else {
+        try {
+          await props.client.session.update({ path: { id: props.sessionID }, body: { title: renameResult.newLabel } });
+          renderer.rename(renameResult.newLabel);
+          setSessionLabel(renameResult.newLabel);
+          renderer.commitSystemMessage(`session renamed to "${renameResult.newLabel}"`);
+        } catch (err) {
+          renderer.commitSystemMessage(`rename failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      return;
+    }
+    // /model — display or set AI model
+    const modelResult = parseModelCommand(text);
+    if (modelResult.handled) {
+      renderer.commitUserInput(text);
+      if (modelResult.action === "list") {
+        try {
+          const [provResp, sessResp] = await Promise.all([
+            props.client.provider.list(),
+            props.client.session.get({ path: { id: props.sessionID } }),
+          ]);
+          const provData = provResp.data!;
+          const sess = sessResp.data!;
+          const currentModel = activeModel
+            ? `${activeModel.providerID}/${activeModel.modelID}`
+            : sess.model
+              ? `${sess.model.providerID}/${sess.model.id}`
+              : "(server default)";
+          renderer.commitSystemMessage(`current model: ${currentModel}`);
+          renderer.commitSystemMessage("available models (connected providers):");
+          for (const p of provData.all) {
+            if (!provData.connected.includes(p.id)) continue;
+            for (const [mId, mInfo] of Object.entries(p.models)) {
+              const ctx = mInfo.limit.context >= 1000
+                ? `${Math.round(mInfo.limit.context / 1000)}k`
+                : String(mInfo.limit.context);
+              const marker = (activeModel?.providerID === p.id && activeModel?.modelID === mId) ||
+                (!activeModel && sess.model?.providerID === p.id && sess.model?.id === mId)
+                ? " *" : "";
+              renderer.commitSystemMessage(`  ${p.id}/${mId}  ${mInfo.name}  ctx:${ctx}${marker}`);
+            }
+          }
+        } catch (err) {
+          renderer.commitSystemMessage(`/model error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      } else if (modelResult.action === "set") {
+        setActiveModel({ providerID: modelResult.providerID!, modelID: modelResult.modelID! });
+        renderer.commitSystemMessage(`model set to ${modelResult.providerID}/${modelResult.modelID} (applies to next prompt)`);
+      } else {
+        renderer.commitSystemMessage("usage: /model  or  /model <providerID>/<modelID>");
+      }
+      return;
+    }
+    // /show — visibility toggles (unchanged)
     const showResult = parseShowCommand(text, renderer.visibility);
     if (showResult.handled) {
       renderer.commitUserInput(text);
       renderer.commitSystemMessage(showResult.reply ?? "");
       return;
     }
+    // Default: send to OpenCode server
     setLastSubmitted(text);
     renderer.commitUserInput(text);
     try {
       await props.client.session.promptAsync({
         path: { id: props.sessionID },
-        body: { parts: [{ type: "text", text }] },
+        body: {
+          parts: [{ type: "text", text }],
+          ...(activeModel ? { model: activeModel } : {}),
+        },
       });
     } catch (err) {
       setIsGenerating(false);
       renderer.commitError(`[send error] ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [props.client, props.sessionID, renderer]);
+  }, [props.client, props.sessionID, renderer, activeModel]);
 
   const handlePermission = useCallback(async (answer: "once" | "always" | "reject") => {
     if (!permission) return;
@@ -177,7 +253,7 @@ export function App(props: AppProps) {
       {question && <QuestionModal questions={question.questions} onAnswer={handleQuestion} />}
       <Box flexDirection="column" marginBottom={2}>
         <SubprocessStatus thinking={procTimes.thinking} tools={procTimes.tools} />
-        <Rule title={props.sessionLabel} width={w} align="right" />
+        <Rule title={sessionLabel} width={w} align="right" />
         <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question} onSubmit={handleSubmit} />
         <Rule width={w} />
         <StatusLine vis={renderer.visibility} />

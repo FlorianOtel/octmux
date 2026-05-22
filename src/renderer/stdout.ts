@@ -123,6 +123,8 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
 
   async dispose(): Promise<void> { /* no-op for stdout backend */ }
 
+  rename(_newLabel: string): void { /* no-op for stdout backend */ }
+
   getCommitted(): CommittedLine[] { return this._committed; }
   getTail(): { role: Role; text: string } | null { return this._tail; }
 }

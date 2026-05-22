@@ -31,6 +31,7 @@ export class TmuxPaneRenderer extends EventEmitter implements Renderer {
   // so tail -f output is immediately visible (no stdio line-buffering delay).
   // tool-call and tool-result have distinct ANSI prefixes even in the same pane.
   private _lineBufs   = new Map<Role, string>();
+  private _sessionLabel = "";
 
   constructor(visibility: Visibility) {
     super();
@@ -130,6 +131,13 @@ export class TmuxPaneRenderer extends EventEmitter implements Renderer {
   commitUserInput(t: string):     void { this._main.commitUserInput(t); }
   commitSystemMessage(t: string): void { this._main.commitSystemMessage(t); }
   commitError(m: string):         void { this._main.commitError(m); }
+
+  rename(newLabel: string): void {
+    for (const [paneKey, paneId] of this._paneIds) {
+      try { execFileSync("tmux", ["select-pane", "-t", paneId, "-T", `${newLabel}--${paneKey}`]); } catch {}
+    }
+    this._sessionLabel = newLabel;
+  }
 
   async dispose(): Promise<void> {
     for (const [paneKey, fifo] of this._fifos) {

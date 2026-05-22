@@ -3,7 +3,7 @@ title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-22--19-50
+updated_at: 2026-05-22--23-32
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -33,6 +33,30 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-22 — Phase 4.2: /model, /rename, /exit slash commands + /show consolidation
+
+**Implemented by:** Claude Code (Claude Haiku 4.5)
+
+**What changed:**
+Four slash-command implementations and command parsing consolidation. All local (non-forwarded) slash commands now live in a dedicated `src/commands.ts` module. The `parseShowCommand` function was moved from `visibility.ts` to `commands.ts` to keep all local parsers together. New commands: `/exit` (clean shutdown), `/rename <name>` (rename session in DB and tmux), `/model` (list providers/models or set active model for next prompt).
+
+**Files modified:**
+- `src/renderer/types.ts` — added `rename(newLabel: string): void;` to Renderer interface.
+- `src/renderer/stdout.ts` — implemented rename as no-op.
+- `src/renderer/tmux-window.ts` — implemented rename: renames origin window and all side windows to `<newLabel>--<key>`.
+- `src/renderer/tmux-pane.ts` — added `_sessionLabel` field; implemented rename to update pane titles.
+- `src/commands.ts` (new) — consolidated command parsers: `parseShowCommand` (moved from visibility.ts), `parseExitCommand`, `parseRenameCommand`, `parseModelCommand`.
+- `src/renderer/visibility.ts` — removed `parseShowCommand` function (moved to commands.ts).
+- `src/app.tsx` — rewired command dispatch in `handleSubmit`; added `sessionLabel` and `activeModel` state; updated import to use new `src/commands.ts` module; /model list shows current + available models from connected providers with context window sizes; /model set accepts `<providerID>/<modelID>` syntax and applies to next prompt.
+
+**Design notes:**
+- `/rename` updates the session title in the DB (via `client.session.update`) and renames tmux windows/panes via `renderer.rename()` immediately.
+- `/model list` fetches provider list and current session model, displays connected providers' models with context limits in human-readable form (e.g., "4k"), marks current model with asterisk.
+- `/model set <providerID>/<modelID>` sets local `activeModel` state which is included in next `promptAsync()` body. Does not persist to DB — applies only to the current prompt.
+- Command dispatch order: /exit, /rename, /model, /show, then default promptAsync.
+
+---
 
 ### 2026-05-22 — Phase 4.1c: Default attach to port 4096 + --auto-spawn warning
 

@@ -39,31 +39,3 @@ export class Visibility extends EventEmitter {
     this._summaryCache = out;
   }
 }
-
-export function parseShowCommand(
-  input: string,
-  vis: Visibility,
-): { handled: boolean; reply?: string } {
-  const m = input.trim().match(/^\/show(?:\s+(\S+))?(?:\s+(on|off))?$/);
-  if (!m) return { handled: false };
-  const [, what, action] = m;
-  if (!what) {
-    const rolesOff = (["thinking", "tool-call", "tool-result"] as Role[]).filter(
-      r => !vis.isVisible(r),
-    );
-    return {
-      handled: true,
-      reply: rolesOff.length === 0 ? "all visible" : `hidden: ${rolesOff.join(", ")}`,
-    };
-  }
-  const role: Role | null =
-    what === "thinking"    ? "thinking"    :
-    what === "tools"       ? "tool-call"   :
-    what === "tool-call"   ? "tool-call"   :
-    what === "tool-result" ? "tool-result" :
-    null;
-  if (!role || !action) return { handled: false };
-  vis.set(role, action === "on");
-  if (what === "tools") vis.set("tool-result", action === "on");
-  return { handled: true, reply: `${what} ${action}` };
-}
