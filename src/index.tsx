@@ -134,7 +134,7 @@ if (autoSpawn) {
         `✗  no opencode server on port 4096 (default).\n` +
         `\n` +
         `Start the server first, then retry:\n` +
-        `  systemctl start opencode-server        # systemd service\n` +
+        `  systemctl --user start opencode-server  # systemd user service\n` +
         `  opencode serve --port 4096             # or manually\n` +
         `\n` +
         `To attach to a different port:\n` +

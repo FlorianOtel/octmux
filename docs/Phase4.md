@@ -3,7 +3,7 @@ title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-22--22-01
+updated_at: 2026-05-23--00-48
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -35,6 +35,30 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-23--00-48 — Phase 4.1d: user systemd service + configurable port
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-23--00-48
+**Commit(s):** `TBD`
+
+**What changed:**
+Converted the opencode systemd service from system-wide (required root) to a per-user service.
+
+- `scripts/opencode-server.service` — full rewrite as user unit: removed `User=florian`,
+  `After=network.target`, `Environment=HOME=`, all hardcoded `/home/florian` paths; replaced
+  with `%h` expansion; added `OPENCODE_PORT=4096` env var with optional `EnvironmentFile`
+  override (`~/.config/opencode/opencode-server.env`); changed `WantedBy` to `default.target`;
+  updated journal comments to use `--user` flag.
+- `scripts/install-opencode-service.sh` — rewritten without root: installs to
+  `~/.config/systemd/user/`; uses `systemctl --user` throughout; errors if run as root;
+  adds port-override hint and `loginctl enable-linger` hint.
+- `src/index.tsx` — `systemctl start` → `systemctl --user start` in the rich
+  connection-failure error message.
+
+**Design note — logging:** user journal remains volatile by default (cleared on reboot),
+rotation handled by journald. Query: `journalctl --user -u opencode-server [-f]`.
+
+---
 
 ### 2026-05-22 — Phase 4.2 fix: /model interactive picker + context window display
 

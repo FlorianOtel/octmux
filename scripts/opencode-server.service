@@ -1,18 +1,25 @@
 [Unit]
 Description=OpenCode Headless HTTP Server
 Documentation=https://opencode.ai
-# Start after network is up (opencode binds to 127.0.0.1 by default, but
-# journald and hostname resolution are network-adjacent on some systems).
-After=network.target
+# opencode binds to 127.0.0.1 only — no network-level dependency needed.
+# After=network.target is a system target and ignored in user units anyway.
 
 [Service]
 Type=simple
-User=florian
-WorkingDirectory=/home/florian
+# No User= — user units run as the owning user automatically.
+# %h expands to the user's home directory at activation time.
+WorkingDirectory=%h
+
+# Port defaults to 4096. Override without editing this file:
+#   echo "OPENCODE_PORT=4097" > ~/.config/opencode/opencode-server.env
+#   systemctl --user restart opencode-server
+Environment=OPENCODE_PORT=4096
+# EnvironmentFile: '-' prefix = silently ignore if file doesn't exist.
+EnvironmentFile=-%h/.config/opencode/opencode-server.env
 
 # Full path required — opencode is installed per-user under ~/.opencode/bin.
-ExecStart=/home/florian/.opencode/bin/opencode serve \
-    --port 4096 \
+ExecStart=%h/.opencode/bin/opencode serve \
+    --port ${OPENCODE_PORT} \
     --print-logs \
     --log-level INFO
 
@@ -25,15 +32,15 @@ RestartSec=5s
 StartLimitIntervalSec=60
 StartLimitBurst=3
 
-# Route all output to journald. Query with:
-#   journalctl -u opencode-server -f
-#   journalctl -u opencode-server --since "1 hour ago"
+# Writes to the per-user journal (volatile by default — cleared on reboot).
+# Query: journalctl --user -u opencode-server [-f]
+#        journalctl --user -u opencode-server --since "1 hour ago"
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=opencode-server
-
-# Ensure opencode finds its provider config at ~/.config/opencode/.
-Environment=HOME=/home/florian
+# HOME is set automatically by the user manager — no Environment=HOME= needed.
 
 [Install]
-WantedBy=multi-user.target
+# default.target is the correct anchor for user services (not multi-user.target).
+# Service starts at login; survives logout after running once: loginctl enable-linger
+WantedBy=default.target
