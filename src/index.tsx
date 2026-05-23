@@ -6,7 +6,6 @@ import { findFreePort, spawnOpencodeServer, type ServerHandle } from "./server-l
 import { App } from "./app.tsx";
 import { Visibility } from "./renderer/visibility.ts";
 import { StdoutRenderer } from "./renderer/stdout.ts";
-import { TmuxPaneRenderer } from "./renderer/tmux-pane.ts";
 import { TmuxWindowRenderer } from "./renderer/tmux-window.ts";
 import type { Renderer } from "./renderer/types.ts";
 
@@ -18,13 +17,12 @@ const HELP = `octmux — text REPL UI for opencode
 
 Display mode (required — select one):
   --single          single-pane mode: all output inline (works in tmux and plain terminal)
-  --multi-pane      side panes for thinking + tool output (requires active tmux pane)
   --multi-window    side windows for thinking + tool output (requires active tmux pane)
 
 Options:
   --attach <port>   attach to a running opencode server on <port> (default: 4096)
   --auto-spawn      spawn a new opencode server automatically (⚠ see below)
-  --no-tmux-guard   skip tmux pane-context checks (for --multi-pane/--multi-window in CI)
+  --no-tmux-guard   skip tmux pane-context checks (for --multi-window in CI)
   --help, -h        show this help
   --version         show version
 
@@ -47,32 +45,30 @@ const noTmuxGuard = args.includes("--no-tmux-guard");
 const attachIdx   = args.indexOf("--attach");
 const attachPort  = attachIdx !== -1 ? parseInt(args[attachIdx + 1], 10) : NaN;
 const single      = args.includes("--single");
-const multiPane   = args.includes("--multi-pane");
 const multiWindow = args.includes("--multi-window");
 const autoSpawn   = args.includes("--auto-spawn");
-const originPaneId = process.env.TMUX_PANE ?? "";
 
 // No display mode selected — operator must choose explicitly.
-if (!single && !multiPane && !multiWindow) {
+if (!single && !multiWindow) {
   console.log(HELP);
   process.exit(0);
 }
 
-// --single, --multi-pane, --multi-window are mutually exclusive.
-if ([single, multiPane, multiWindow].filter(Boolean).length > 1) {
-  console.error("octmux: --single, --multi-pane, and --multi-window are mutually exclusive");
+// --single and --multi-window are mutually exclusive.
+if ([single, multiWindow].filter(Boolean).length > 1) {
+  console.error("octmux: --single and --multi-window are mutually exclusive");
   process.exit(2);
 }
 
-// --single works outside tmux; multi modes require an active tmux session.
+// --single works outside tmux; multi-window requires an active tmux session.
 if (!single && !process.env.TMUX && !noTmuxGuard) {
-  console.error("octmux --multi-pane/--multi-window must run inside tmux.\nStart a tmux session first, or pass --no-tmux-guard to override.");
+  console.error("octmux --multi-window must run inside tmux.\nStart a tmux session first, or pass --no-tmux-guard to override.");
   process.exit(1);
 }
 
-if (multiPane || multiWindow) {
+if (multiWindow) {
   if (!process.env.TMUX || !process.env.TMUX_PANE) {
-    console.error("octmux --multi-pane/--multi-window requires running inside a tmux pane (TMUX/TMUX_PANE not set).");
+    console.error("octmux --multi-window requires running inside a tmux pane (TMUX/TMUX_PANE not set).");
     process.exit(1);
   }
   try {
@@ -82,7 +78,7 @@ if (multiPane || multiWindow) {
     ], { encoding: "utf8" }).trim();
     if (myTty !== paneTty) {
       console.error(
-        `octmux --multi-pane/--multi-window: TMUX_PANE env is stale (inherited from tmux, not running inside it).\n` +
+        `octmux --multi-window: TMUX_PANE env is stale (inherited from tmux, not running inside it).\n` +
         `  This process stdin: ${myTty}\n` +
         `  Pane ${process.env.TMUX_PANE} PTY:  ${paneTty}\n` +
         `Run octmux from inside an actual tmux pane.`
@@ -168,22 +164,13 @@ const eventStream = await client.global.event({});
 process.stdout.write("\x1b[?1007h");
 process.on("exit", () => { try { process.stdout.write("\x1b[?1007l"); } catch {} });
 
-// ─── Renderer construction (must come before terminal clear for multi-pane) ──────────
-// In --multi-pane mode, setup() calls tmux split-window which sends SIGWINCH and resizes
-// the main pane. The terminal clear + cursor positioning must happen AFTER the resize so
-// process.stdout.rows/columns reflect the actual (narrower) pane dimensions.
+// ─── Renderer construction ────────────────────────────────────────────────────────
 
 const visibility = new Visibility();
 let renderer: Renderer;
 if (multiWindow) {
   const tmuxRenderer = new TmuxWindowRenderer(visibility);
   await tmuxRenderer.setup(sessionID.slice(0, 8));
-  await new Promise(res => setImmediate(res));
-  renderer = tmuxRenderer;
-} else if (multiPane) {
-  const tmuxRenderer = new TmuxPaneRenderer(visibility);
-  await tmuxRenderer.setup(originPaneId);
-  // Yield to the event loop so SIGWINCH from pane splits updates stdout.rows/columns.
   await new Promise(res => setImmediate(res));
   renderer = tmuxRenderer;
 } else {
