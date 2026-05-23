@@ -2,8 +2,8 @@
 title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-23--21-47
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-05-23--22-42
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -35,6 +35,39 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-23--22-42 — Phase 4.4.3: re-entry safety + outputEnabled gate (TmuxWindowRenderer foundation)
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--22-42
+**Commit(s):** `<commit_hash_to_backfill>`
+
+**What changed:**
+Added re-entry safety to `TmuxWindowRenderer` via a liveness check in `_ensureWindow` that detects stale window IDs (e.g., when the operator manually kills a side window mid-session) and recreates them. Also added a gating mechanism (`_outputEnabled` map + `isOutputEnabled`/`setOutputEnabled` methods) to suppress output streams for side windows without destroying them, enabling future slash-command controls (e.g., `/thinking off`).
+
+**Key architectural changes:**
+
+1. **Renderer interface** — added two methods:
+   - `isOutputEnabled(key: string): boolean` — query gate state
+   - `setOutputEnabled(key: string, on: boolean): void` — set gate state
+
+2. **TmuxWindowRenderer** — added three pieces:
+   - `_outputEnabled: Map<string, boolean>` initialized with defaults (true for "thinking", "tools")
+   - Public `isOutputEnabled`/`setOutputEnabled` methods
+   - Hardened `_ensureWindow` with liveness check: runs `tmux list-windows` to get live IDs; if cached ID is stale, closes FIFO, deletes map entries, and clears line buffers before creating a fresh window
+
+3. **Gate checks at three points:**
+   - `beginBlock`: skips `_ensureWindow` and window setup if gate is off
+   - `appendToBlock`: skips FIFO write if gate is off
+   - `endBlock`: skips final flush if gate is off
+
+4. **StdoutRenderer** — added no-op implementations for both new methods (always returns true for query; no-op for set).
+
+**Files modified:**
+- `src/renderer/types.ts` — added two methods to Renderer interface
+- `src/renderer/stdout.ts` — no-op implementations
+- `src/renderer/tmux-window.ts` — _outputEnabled map, public methods, hardened _ensureWindow with liveness check, gate checks in beginBlock/appendToBlock/endBlock
+
+---
 
 ### 2026-05-23--18-48 — Phase 4.4.1: orchestra-style status bar (model, ctx bar, project, branch)
 

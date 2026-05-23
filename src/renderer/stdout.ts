@@ -125,6 +125,10 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
 
   rename(_newLabel: string): void { /* no-op for stdout backend */ }
 
+  isOutputEnabled(_key: string): boolean { return true; }
+
+  setOutputEnabled(_key: string, _on: boolean): void { /* no-op for stdout backend */ }
+
   getCommitted(): CommittedLine[] { return this._committed; }
   getTail(): { role: Role; text: string } | null { return this._tail; }
 }

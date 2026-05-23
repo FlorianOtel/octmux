@@ -12,6 +12,8 @@ export interface Renderer {
   commitTurnEnd(): void;
   dispose(): Promise<void>;
   rename(newLabel: string): void;
+  isOutputEnabled(key: string): boolean;
+  setOutputEnabled(key: string, on: boolean): void;
   readonly kind: "stdout" | "tmux-window";
   readonly visibility: Visibility;
 }

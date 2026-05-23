@@ -32,12 +32,19 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   private _lineBufs   = new Map<Role, string>();
   private _sessionLabel = "";
   private _originWindowId = "";
+  // Keyed by window key ("thinking", "tools"). Default true for all registered keys.
+  // When false, beginBlock/appendToBlock/endBlock skip the side path entirely.
+  private _outputEnabled = new Map<string, boolean>();
 
   constructor(visibility: Visibility) {
     super();
     this.visibility = visibility;
     this._main = new StdoutRenderer(visibility);
     this._main.on("changed", () => this.emit("changed"));
+    // Register every window key with output enabled by default.
+    for (const key of new Set(Object.values(WINDOW_KEY))) {
+      this._outputEnabled.set(key, true);
+    }
   }
 
   async setup(sessionLabel: string): Promise<void> {
@@ -58,10 +65,37 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     ]);
   }
 
+  isOutputEnabled(key: string): boolean {
+    return this._outputEnabled.get(key) ?? true;
+  }
+
+  setOutputEnabled(key: string, on: boolean): void {
+    this._outputEnabled.set(key, on);
+  }
+
   // Create the window + log file for a given window key on first use.
   // Future: /rename will call `tmux rename-window` on all _windowIds; subagents follow the same `<label>--<key>` pattern.
   private _ensureWindow(windowKey: string): void {
-    if (this._fifos.has(windowKey)) return;
+    if (this._fifos.has(windowKey)) {
+      const liveIds = new Set(
+        execFileSync("tmux", ["list-windows", "-F", "#{window_id}"])
+          .toString()
+          .split("\n")
+          .map(s => s.trim())
+          .filter(Boolean),
+      );
+      const cachedId = this._windowIds.get(windowKey);
+      if (cachedId && liveIds.has(cachedId)) {
+        return;
+      }
+      const stale = this._fifos.get(windowKey);
+      if (stale) stale.close();
+      this._fifos.delete(windowKey);
+      this._windowIds.delete(windowKey);
+      for (const [role, key] of Object.entries(WINDOW_KEY) as [Role, string][]) {
+        if (key === windowKey) this._lineBufs.delete(role as Role);
+      }
+    }
     const fifo = makeFifo(windowKey, process.pid);
     this._fifos.set(windowKey, fifo);
     const id = execFileSync("tmux", [
@@ -81,6 +115,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     this._openBlocks.set(partID, role);
     const windowKey = WINDOW_KEY[role];
     if (windowKey) {
+      if (!this.isOutputEnabled(windowKey)) return;
       this._ensureWindow(windowKey);
     } else {
       this._main.beginBlock(partID, role, meta);
@@ -96,6 +131,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     }
     const windowKey = WINDOW_KEY[role];
     if (windowKey) {
+      if (!this.isOutputEnabled(windowKey)) return;
       const fifo = this._fifos.get(windowKey);
       if (!fifo) return;
       let buf = (this._lineBufs.get(role) ?? "") + text;
@@ -115,12 +151,14 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     const role = this._openBlocks.get(partID);
     const windowKey = role ? WINDOW_KEY[role] : undefined;
     if (role && windowKey) {
-      const fifo = this._fifos.get(windowKey);
-      if (fifo) {
-        const buf = this._lineBufs.get(role) ?? "";
-        if (buf) fifo.write(formatLine(role, buf, false) + "\n");
-        this._lineBufs.set(role, "");
-        fifo.write("\n");
+      if (this.isOutputEnabled(windowKey)) {
+        const fifo = this._fifos.get(windowKey);
+        if (fifo) {
+          const buf = this._lineBufs.get(role) ?? "";
+          if (buf) fifo.write(formatLine(role, buf, false) + "\n");
+          this._lineBufs.set(role, "");
+          fifo.write("\n");
+        }
       }
     } else {
       this._main.endBlock(partID, status);
