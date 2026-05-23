@@ -78,25 +78,28 @@ export function App(props: AppProps) {
     })();
   }, []);
 
-  // One-shot: fetch initial model + context window at startup
+  // When model changes: refresh context window in status bar, preserving used tokens.
+  // This fires on startup (when setActiveModel is called) and on /model switches.
+  useEffect(() => {
+    if (!activeModel) return;
+    getContextWindow(props.client, activeModel.providerID, activeModel.modelID)
+      .then(ctxWindow =>
+        setTokenUsage(prev => ({ used: prev?.used ?? 0, contextWindow: ctxWindow }))
+      );
+  }, [props.client, activeModel]);
+
+  // One-shot: fetch initial model from server and set activeModel.
+  // tokenUsage.contextWindow is then set by the activeModel-change effect above.
   useEffect(() => {
     (async () => {
-      if (activeModel === null) {
-        try {
-          const resp = await props.client.session.get({ path: { id: props.sessionID } });
-          const sess = resp.data;
-          if (sess?.model) {
-            setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
-            const ctxWindow = await getContextWindow(
-              props.client,
-              sess.model.providerID,
-              sess.model.id,
-            );
-            setTokenUsage({ used: 0, contextWindow: ctxWindow });
-          }
-        } catch {
-          // Silently swallow errors; activeModel stays null, bar shows fallback
+      try {
+        const resp = await props.client.session.get({ path: { id: props.sessionID } });
+        const sess = resp.data;
+        if (sess?.model) {
+          setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
         }
+      } catch {
+        // No model set on session yet; /model command will set activeModel
       }
     })();
   }, [props.client, props.sessionID]);
@@ -111,67 +114,78 @@ export function App(props: AppProps) {
         if (!evRaw) continue;
         const evList: ReplEvent[] = Array.isArray(evRaw) ? evRaw : [evRaw];
         for (const ev of evList) {
-          if (ev.kind === "block-start") {
-            renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName });
-            if (ev.role === "thinking")
-              setProcTimes(p => p.thinking === null ? { ...p, thinking: Date.now() } : p);
-            else if (ev.role === "tool-call" || ev.role === "tool-result")
-              setProcTimes(p => p.tools === null ? { ...p, tools: Date.now() } : p);
-          }
-          else if (ev.kind === "block-delta")  renderer.appendToBlock(ev.partID, ev.text);
-          else if (ev.kind === "block-end") {
-            renderer.endBlock(ev.partID, ev.status);
-            if (ev.role === "thinking") setProcTimes(p => ({ ...p, thinking: null }));
-            // Clear tools on tool-result end (normal path) or tool-call error (no result follows).
-            else if (ev.role === "tool-result" || (ev.role === "tool-call" && ev.status === "error"))
-              setProcTimes(p => ({ ...p, tools: null }));
-          }
-          else if (ev.kind === "error")        { renderer.commitError(ev.message); setIsGenerating(false); }
-          else if (ev.kind === "generating")   setIsGenerating(true);
-          else if (ev.kind === "session-idle") {
-            renderer.commitTurnEnd();
-            setIsGenerating(false);
-            setLastSubmitted("");
-            setProcTimes({ thinking: null, tools: null });
-            // Async IIFE: fetch latest message tokens and update status bar
-            (async () => {
-              try {
-                const messagesResp = await props.client.session.messages({ path: { id: props.sessionID } });
-                const messages = messagesResp.data ?? [];
-                // Find latest assistant message
-                let latestAssistant: typeof messages[number] | null = null;
-                for (let i = messages.length - 1; i >= 0; i--) {
-                  if (messages[i].info.role === "assistant") {
-                    latestAssistant = messages[i];
-                    break;
-                  }
-                }
-                if (latestAssistant) {
-                  const msg = latestAssistant.info;
-                  if (msg.role === "assistant") {
-                    const used = msg.tokens.input + msg.tokens.cache.read + msg.tokens.cache.write;
-                    if (activeModel) {
-                      const ctxWindow = await getContextWindow(
-                        props.client,
-                        activeModel.providerID,
-                        activeModel.modelID,
-                      );
-                      setTokenUsage({ used, contextWindow: ctxWindow });
+          try {
+            if (ev.kind === "block-start") {
+              renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName });
+              if (ev.role === "thinking")
+                setProcTimes(p => p.thinking === null ? { ...p, thinking: Date.now() } : p);
+              else if (ev.role === "tool-call" || ev.role === "tool-result")
+                setProcTimes(p => p.tools === null ? { ...p, tools: Date.now() } : p);
+            }
+            else if (ev.kind === "block-delta")  renderer.appendToBlock(ev.partID, ev.text);
+            else if (ev.kind === "block-end") {
+              renderer.endBlock(ev.partID, ev.status);
+              if (ev.role === "thinking") setProcTimes(p => ({ ...p, thinking: null }));
+              // Clear tools on tool-result end (normal path) or tool-call error (no result follows).
+              else if (ev.role === "tool-result" || (ev.role === "tool-call" && ev.status === "error"))
+                setProcTimes(p => ({ ...p, tools: null }));
+            }
+            else if (ev.kind === "error")        { renderer.commitError(ev.message); setIsGenerating(false); }
+            else if (ev.kind === "generating")   setIsGenerating(true);
+            else if (ev.kind === "session-idle") {
+              renderer.commitTurnEnd();
+              setIsGenerating(false);
+              setLastSubmitted("");
+              setProcTimes({ thinking: null, tools: null });
+              // Async IIFE: fetch latest message tokens and update status bar
+              (async () => {
+                try {
+                  const messagesResp = await props.client.session.messages({ path: { id: props.sessionID } });
+                  const messages = messagesResp.data ?? [];
+                  // Find latest assistant message
+                  let latestAssistant: typeof messages[number] | null = null;
+                  for (let i = messages.length - 1; i >= 0; i--) {
+                    if (messages[i].info.role === "assistant") {
+                      latestAssistant = messages[i];
+                      break;
                     }
                   }
+                  if (latestAssistant) {
+                    const msg = latestAssistant.info;
+                    if (msg.role === "assistant") {
+                      const tokens = msg.tokens;
+                      // Guard: non-Anthropic providers may not populate tokens
+                      if (tokens) {
+                        const used = tokens.input
+                          + (tokens.cache?.read ?? 0)
+                          + (tokens.cache?.write ?? 0);
+                        // Use the model the server actually responded with, not activeModel state.
+                        // Avoids stale-closure timing dependency and handles mid-session model switches.
+                        const ctxWindow = await getContextWindow(
+                          props.client,
+                          msg.providerID,
+                          msg.modelID,
+                        );
+                        setActiveModel({ providerID: msg.providerID, modelID: msg.modelID });
+                        setTokenUsage({ used, contextWindow: ctxWindow });
+                      }
+                    }
+                  }
+                } catch {
+                  // Silently swallow errors; bar stays at last value
                 }
-              } catch {
-                // Silently swallow errors; bar stays at last value
-              }
-            })();
+              })();
+            }
+            else if (ev.kind === "permission-asked") setPermission({ permID: ev.permID, title: ev.title });
+            else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
+          } catch (err) {
+            renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);
           }
-          else if (ev.kind === "permission-asked") setPermission({ permID: ev.permID, title: ev.title });
-          else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
         }
       }
     })();
     return () => { cancelled = true; };
-  }, [props.client, props.sessionID, props.eventStream, renderer, activeModel]);
+  }, [props.client, props.sessionID, props.eventStream, renderer]);
 
   // Ctrl-C: three cases.
   useInput((input, key) => {

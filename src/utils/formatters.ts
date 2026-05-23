@@ -78,15 +78,30 @@ export async function getContextWindow(
     const resp = await client.provider.list();
     const provData = resp.data;
     if (provData) {
+      // Pass 1: match provider ID first, then model by dict key OR mInfo.id field.
+      // The dict key format may differ from sess.model.id (e.g. "moonshot/kimi-k2.6" vs "kimi-k2.6").
       for (const p of provData.all) {
         if (p.id === providerID) {
           for (const [mId, mInfo] of Object.entries(p.models)) {
-            if (mId === modelID) {
-              const rawCtx = (mInfo as { limit?: { context?: number } }).limit?.context;
+            if (mId === modelID || mInfo.id === modelID) {
+              const rawCtx = mInfo.limit?.context;
               if (rawCtx && typeof rawCtx === "number") {
                 contextWindowCache.set(cacheKey, rawCtx);
                 return rawCtx;
               }
+            }
+          }
+        }
+      }
+      // Pass 2: provider ID mismatch — search all providers by model ID.
+      // Covers cases where the routing provider (e.g. openrouter) differs from providerID.
+      for (const p of provData.all) {
+        for (const [mId, mInfo] of Object.entries(p.models)) {
+          if (mId === modelID || mInfo.id === modelID) {
+            const rawCtx = mInfo.limit?.context;
+            if (rawCtx && typeof rawCtx === "number") {
+              contextWindowCache.set(cacheKey, rawCtx);
+              return rawCtx;
             }
           }
         }

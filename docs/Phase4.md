@@ -2,8 +2,8 @@
 title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-23--17-20
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-05-23--18-48
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -35,6 +35,37 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-23--18-48 — Phase 4.4.2: status bar UX bug fixes
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-23--18-48
+**Commit(s):** (pending)
+
+**What changed:**
+Fixed three status bar bugs introduced in Phase 4.3.1:
+
+1. **Context window stuck at 200K** — `getContextWindow` now uses a two-pass lookup: first matches by provider ID + model dict key or `mInfo.id` field; then falls back to all providers regardless of provider ID. Handles cases where OpenCode's `sess.model.id` format (`"kimi-k2.6"`) differs from the provider list's dict key (`"moonshot/kimi-k2.6"`).
+
+2. **tokenUsage never initialized** — Added a new `useEffect` that fires whenever `activeModel` changes. It calls `getContextWindow` and updates `tokenUsage.contextWindow` (preserving `used`). This replaces the inline `setTokenUsage` call in the startup effect, so the context window is correctly set both at startup (when the server-side model is fetched) and after any `/model` switch.
+
+3. **No token consumption recorded after turns** — The `session-idle` IIFE now uses `msg.providerID` / `msg.modelID` directly from the latest `AssistantMessage`, instead of reading `activeModel` from the closure. This eliminates the stale-closure timing dependency. Also added null guard on `msg.tokens` for non-Anthropic providers that may not populate the field. Removed `activeModel` from the SSE `useEffect` deps array (no longer needed in closure) to prevent loop teardown/restart on model changes.
+
+**Files changed:**
+- `src/utils/formatters.ts`: two-pass model lookup in `getContextWindow`.
+- `src/app.tsx`: new `activeModel`-change effect; simplified startup effect; session-idle IIFE uses message-level model fields; `activeModel` removed from SSE deps.
+
+### 2026-05-23--21-02 — Phase 4.3.1: fix toggle semantics + SSE loop resilience
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--21-02
+**Commit(s):** (pending)
+
+**What changed:**
+Fixed toggle semantics: toggle off now only hides panes/windows (visibility → false) without destroying them, so streaming continues in the background and resumes when toggled back on. Added SSE event loop resilience: each event handler is now wrapped in try/catch so a single renderer exception does not kill the entire event loop. Added explicit focus return in tmux-pane `_ensurePane` so octmux regains tmux focus after creating side panes.
+
+**Files changed:**
+- `src/renderer/tmux-window.ts`: removed `if (!on) { this._destroyWindow(key); }` from `setToggleEnabled()`.
+- `src/renderer/tmux-pane.ts`: removed `if (!on) { this._destroyPane(key); }` from `setToggleEnabled()`. Added `execFileSync("tmux", ["select-pane", "-t", this._originPaneId])` at end of `_ensurePane()`.
+- `src/app.tsx`: wrapped the inner `for (const ev of evList)` loop body in try/catch, catching renderer errors and passing them to `renderer.commitError()`.
 
 ### 2026-05-23--17-20 — Phase 4.4.1: orchestra-style status bar (model, ctx bar, project, branch)
 
