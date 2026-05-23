@@ -2,8 +2,8 @@
 title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-23--23-15
+updated_by: Claude Code (Claude Opus 4.7)
+updated_at: 2026-05-23--23-35
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -44,6 +44,8 @@ When finishing a phase:
 **What changed:** Moved the tmux liveness probe off the hot path. `_ensureWindow` now reads an in-memory `_liveIds: Set<string>` cache (zero subprocess cost on warm path); cache refreshed fire-and-forget via `execFile` (callback form) after every `_ensureWindow` call. `_liveIdsRefreshInFlight` single-flight guard prevents concurrent subprocess spawns. Eliminates the per-block ~10–50 ms event-loop block introduced in Phase 4.4.3 that caused thinking deltas to flush in bursts.
 
 **Trade-off:** at most one block of deltas may write to a dead FIFO (lost) if the operator kills a window mid-stream; the async refresh kicked at that block-start lands ~50 ms later and the next block-start recreates the window. Acceptable per operator priority: real-time streaming > zero-loss on manual kill.
+
+**Verified (operator, 2026-05-23):** real-time streaming to side windows confirmed; thinking content now arrives smoothly without the burst pattern observed under Phase 4.4.3's synchronous probe. Window re-creation after manual `tmux kill-window` works on next block-start with no perceptible delay.
 
 ---
 
@@ -146,6 +148,12 @@ Refactored `/show`, `/thinking`, and `/tools` commands to unify visibility toggl
 - `src/renderer/tmux-window.ts` — added `ROLES_BY_KEY` constant; hardened `_ensureWindow()` with existence check; added `_destroyWindow(key)` method; implemented `setToggleEnabled()`.
 - `src/commands.ts` — replaced `parseShowCommand()` with `handleShowCommand()` and `handleToggleCommand()`; removed import of `Visibility` (no longer needed directly).
 - `src/app.tsx` — updated import to use `handleShowCommand`, `handleToggleCommand`; replaced `/show` dispatch block with the two new function calls.
+
+> **Status (2026-05-23):** **REVERTED — commit `105b17a` is no longer in the tree.** This implementation caused a regression where side windows were never (re)created at all. Reverted shortly after landing. The intended functionality is being rebuilt in stages:
+>
+> - **Phase 4.4.3** (`1a4523c`): re-entry-safe (re)creation + `outputEnabled` gate foundation on `Renderer` interface (`isOutputEnabled`/`setOutputEnabled`).
+> - **Phase 4.4.4** (`ad60b1c`): async background liveness refresh — eliminates per-block tmux subprocess overhead.
+> - **Phase 4.5** (planned): wire `/<block>-output [on|off]` slash commands (`/thinking-output`, `/tools-output`, future `/subagent-output`) and `/show` listing of registered output gates, on top of the 4.4.3 + 4.4.4 boilerplate. This entry is intentionally left in place because Phase 4.5 will recycle its scope/architecture description.
 
 ---
 
