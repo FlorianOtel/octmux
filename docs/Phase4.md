@@ -3,7 +3,7 @@ title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-23--21-33
+updated_at: 2026-05-23--21-47
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -36,30 +36,16 @@ When finishing a phase:
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-23--21-15 — Remove --multi-pane and TmuxPaneRenderer
-
-**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--21-15
-**Commit(s):** `6b9493c`
-
-**What changed:**
-Deleted `src/renderer/tmux-pane.ts` entirely. Removed all `--multi-pane` references from CLI help, validation, and error messages. Cleaned up `src/index.tsx`: removed the multiPane variable, the originPaneId variable, the mode guard checking multiPane, the mutual-exclusion logic including multiPane, all multiPane-specific error messages, and the entire `else if (multiPane)` renderer construction branch. Updated `src/renderer/types.ts` to remove `"tmux-pane"` from the Renderer `kind` union. `--single` and `--multi-window` remain unaffected and fully functional.
-
-**Files changed:**
-- `src/renderer/tmux-pane.ts` — deleted entirely.
-- `src/index.tsx` — removed import, CLI help line, arg parsing (multiPane, originPaneId), all validation logic mentioning multiPane, renderer construction for multiPane mode.
-- `src/renderer/types.ts` — removed `"tmux-pane"` from `kind` union, now `"stdout" | "tmux-window"`.
-
 ### 2026-05-23--21-02 — Phase 4.3.1: fix toggle semantics + SSE loop resilience
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--21-02
 **Commit(s):** (pending)
 
 **What changed:**
-Fixed toggle semantics: toggle off now only hides panes/windows (visibility → false) without destroying them, so streaming continues in the background and resumes when toggled back on. Added SSE event loop resilience: each event handler is now wrapped in try/catch so a single renderer exception does not kill the entire event loop. Added explicit focus return in tmux-pane `_ensurePane` so octmux regains tmux focus after creating side panes.
+Fixed toggle semantics: toggle off now only hides windows (visibility → false) without destroying them, so streaming continues in the background and resumes when toggled back on. Added SSE event loop resilience: each event handler is now wrapped in try/catch so a single renderer exception does not kill the entire event loop.
 
 **Files changed:**
 - `src/renderer/tmux-window.ts`: removed `if (!on) { this._destroyWindow(key); }` from `setToggleEnabled()`.
-- `src/renderer/tmux-pane.ts`: removed `if (!on) { this._destroyPane(key); }` from `setToggleEnabled()`. Added `execFileSync("tmux", ["select-pane", "-t", this._originPaneId])` at end of `_ensurePane()`.
 - `src/app.tsx`: wrapped the inner `for (const ev of evList)` loop body in try/catch, catching renderer errors and passing them to `renderer.commitError()`.
 
 ### 2026-05-23--18-48 — Phase 4.4.1: orchestra-style status bar (model, ctx bar, project, branch)
@@ -99,7 +85,7 @@ Replaced the basic `[idle] hidden: ...` status line with an orchestra-style stat
 **Commit(s):** `105b17a`
 
 **What changed:**
-Refactored `/show`, `/thinking`, and `/tools` commands to unify visibility toggle logic and enable tmux window/pane creation and destruction on demand. All local command parsing and execution now lives in `src/commands.ts`; tmux lifecycle management is delegated to renderer implementations. The `/show` command becomes a pure status display; `/thinking` and `/tools` are dedicated toggle commands that manage tmux resource lifecycle.
+Refactored `/show`, `/thinking`, and `/tools` commands to unify visibility toggle logic and enable tmux window creation and destruction on demand. All local command parsing and execution now lives in `src/commands.ts`; tmux lifecycle management is delegated to renderer implementations. The `/show` command becomes a pure status display; `/thinking` and `/tools` are dedicated toggle commands that manage tmux resource lifecycle.
 
 **Key architectural changes:**
 
@@ -112,9 +98,8 @@ Refactored `/show`, `/thinking`, and `/tools` commands to unify visibility toggl
 3. **Renderer implementations:**
    - `StdoutRenderer.setToggleEnabled()` — uses local `ROLES_BY_KEY` constant to map keys ("thinking", "tools") to roles; calls `visibility.set()` for each.
    - `TmuxWindowRenderer.setToggleEnabled()` — same visibility update; if turning off, calls `_destroyWindow()` to close and clean up the window and FIFO.
-   - `TmuxPaneRenderer.setToggleEnabled()` — same visibility update; if turning off, calls `_destroyPane()` to close and clean up the pane and FIFO.
 
-4. **Lazy pane creation** — `TmuxPaneRenderer.setup()` now stores `_originPaneId` and skips the original pre-creation logic. Panes are created on-demand in `_ensurePane()` when a block of their role arrives (called from `beginBlock()`). Similarly, `TmuxWindowRenderer._ensureWindow()` now includes a hardening check: verifies the stored window still exists; if it's gone, clears maps and recreates.
+4. **Lazy window creation** — `TmuxWindowRenderer._ensureWindow()` includes a hardening check: verifies the stored window still exists; if it's gone, clears maps and recreates.
 
 5. **App dispatch** — `app.tsx` `handleSubmit()` replaced the single `/show` block with:
    ```typescript
@@ -127,13 +112,11 @@ Refactored `/show`, `/thinking`, and `/tools` commands to unify visibility toggl
 - `src/renderer/types.ts` — added `setToggleEnabled(key: string, on: boolean): void` to Renderer interface.
 - `src/renderer/stdout.ts` — added `ROLES_BY_KEY` constant; implemented `setToggleEnabled()`.
 - `src/renderer/tmux-window.ts` — added `ROLES_BY_KEY` constant; hardened `_ensureWindow()` with existence check; added `_destroyWindow(key)` method; implemented `setToggleEnabled()`.
-- `src/renderer/tmux-pane.ts` — refactored setup for lazy creation: `setup()` now stores `_originPaneId`; added `_ensurePane(key)` and `_destroyPane(key)` methods; updated `beginBlock()` to call `_ensurePane()` for side roles; implemented `setToggleEnabled()`.
 - `src/commands.ts` — replaced `parseShowCommand()` with `handleShowCommand()` and `handleToggleCommand()`; removed import of `Visibility` (no longer needed directly).
 - `src/app.tsx` — updated import to use `handleShowCommand`, `handleToggleCommand`; replaced `/show` dispatch block with the two new function calls.
 
 ---
 
->>>>>>> ecf35f9 (feat(octmux): Phase 4.3.1 — orchestra-style status bar)
 ### 2026-05-22 — Phase 4.2 fix: /model interactive picker + context window display
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
@@ -171,13 +154,12 @@ Four slash-command implementations and command parsing consolidation. All local 
 - `src/renderer/types.ts` — added `rename(newLabel: string): void;` to Renderer interface.
 - `src/renderer/stdout.ts` — implemented rename as no-op.
 - `src/renderer/tmux-window.ts` — implemented rename: renames origin window and all side windows to `<newLabel>--<key>`.
-- `src/renderer/tmux-pane.ts` — added `_sessionLabel` field; implemented rename to update pane titles.
 - `src/commands.ts` (new) — consolidated command parsers: `parseShowCommand` (moved from visibility.ts), `parseExitCommand`, `parseRenameCommand`, `parseModelCommand`.
 - `src/renderer/visibility.ts` — removed `parseShowCommand` function (moved to commands.ts).
 - `src/app.tsx` — rewired command dispatch in `handleSubmit`; added `sessionLabel` and `activeModel` state; updated import to use new `src/commands.ts` module; /model list shows current + available models from connected providers with context window sizes; /model set accepts `<providerID>/<modelID>` syntax and applies to next prompt.
 
 **Design notes:**
-- `/rename` updates the session title in the DB (via `client.session.update`) and renames tmux windows/panes via `renderer.rename()` immediately.
+- `/rename` updates the session title in the DB (via `client.session.update`) and renames tmux windows via `renderer.rename()` immediately.
 - `/model list` fetches provider list and current session model, displays connected providers' models with context limits in human-readable form (e.g., "4k"), marks current model with asterisk.
 - `/model set <providerID>/<modelID>` sets local `activeModel` state which is included in next `promptAsync()` body. Does not persist to DB — applies only to the current prompt.
 - Command dispatch order: /exit, /rename, /model, /show, then default promptAsync.
