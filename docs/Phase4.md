@@ -36,24 +36,6 @@ When finishing a phase:
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-23--18-48 — Phase 4.4.2: status bar UX bug fixes
-
-**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-23--18-48
-**Commit(s):** `4f702a8`
-
-**What changed:**
-Fixed three status bar bugs introduced in Phase 4.3.1:
-
-1. **Context window stuck at 200K** — `getContextWindow` now uses a two-pass lookup: first matches by provider ID + model dict key or `mInfo.id` field; then falls back to all providers regardless of provider ID. Handles cases where OpenCode's `sess.model.id` format (`"kimi-k2.6"`) differs from the provider list's dict key (`"moonshot/kimi-k2.6"`).
-
-2. **tokenUsage never initialized** — Added a new `useEffect` that fires whenever `activeModel` changes. It calls `getContextWindow` and updates `tokenUsage.contextWindow` (preserving `used`). This replaces the inline `setTokenUsage` call in the startup effect, so the context window is correctly set both at startup (when the server-side model is fetched) and after any `/model` switch.
-
-3. **No token consumption recorded after turns** — The `session-idle` IIFE now uses `msg.providerID` / `msg.modelID` directly from the latest `AssistantMessage`, instead of reading `activeModel` from the closure. This eliminates the stale-closure timing dependency. Also added null guard on `msg.tokens` for non-Anthropic providers that may not populate the field. Removed `activeModel` from the SSE `useEffect` deps array (no longer needed in closure) to prevent loop teardown/restart on model changes.
-
-**Files changed:**
-- `src/utils/formatters.ts`: two-pass model lookup in `getContextWindow`.
-- `src/app.tsx`: new `activeModel`-change effect; simplified startup effect; session-idle IIFE uses message-level model fields; `activeModel` removed from SSE deps.
-
 ### 2026-05-23--21-02 — Phase 4.3.1: fix toggle semantics + SSE loop resilience
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--21-02
@@ -67,32 +49,34 @@ Fixed toggle semantics: toggle off now only hides panes/windows (visibility → 
 - `src/renderer/tmux-pane.ts`: removed `if (!on) { this._destroyPane(key); }` from `setToggleEnabled()`. Added `execFileSync("tmux", ["select-pane", "-t", this._originPaneId])` at end of `_ensurePane()`.
 - `src/app.tsx`: wrapped the inner `for (const ev of evList)` loop body in try/catch, catching renderer errors and passing them to `renderer.commitError()`.
 
-### 2026-05-23--17-20 — Phase 4.4.1: orchestra-style status bar (model, ctx bar, project, branch)
+### 2026-05-23--18-48 — Phase 4.4.1: orchestra-style status bar (model, ctx bar, project, branch)
 
-**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--17-20
-**Commit(s):** `ecf35f9`, `6834548`
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--17-20 (initial); Claude Code (Claude Sonnet 4.6) — 2026-05-23--18-48 (UX fixes)
+**Commit(s):** `ecf35f9`, `6834548`, `4f702a8`
 
 **What changed:**
 Replaced the basic `[idle] hidden: ...` status line with an orchestra-style status bar that renders the active model name + context window, a 20-cell gruvbox-colored context-usage bar (updated on `session-idle`), a cost placeholder, the project basename, and git branch name.
 
-**Design:**
+**Design (initial — ecf35f9, 6834548):**
 - New `src/utils/formatters.ts` with helper functions: `formatTokens()` (human-readable K/M notation), `fetchGitBranch()` (one-shot git read), `getContextWindow()` (cached lookup via `provider.list()` or fallback map), `prettyModelName()` (display alias), `contextLabel()` (formatted context label).
 - New `src/components/StatusLine.tsx`: single `<Text>` line component (preserves fixed height). Accepts `modelLabel`, `tokenUsage`, `projectName`, `gitBranch` props. Bar fill uses `▓`/`░` glyphs with three-stop gruvbox color gradient: green <50%, yellow 50–79%, red ≥80%.
-- `src/app.tsx` wired:
-  - New state: `gitBranch` (fetched once at mount), `tokenUsage` (set to null, updated on `session-idle`).
-  - New constant: `projectName = path.basename(process.cwd())`.
-  - Mount-time effects: one-shot `fetchGitBranch()`, one-shot session fetch to initialize `activeModel` + context window.
-  - `session-idle` handler: async IIFE calls `client.session.messages()`, finds latest assistant message, extracts token counts (`input + cache.read + cache.write`), updates `tokenUsage` state.
-  - StatusLine invocation: computes `modelLabel` from `activeModel` + `contextLabel()`, passes new props.
+- `src/app.tsx` wired: new `gitBranch` + `tokenUsage` state; mount effects (git fetch, session init); `session-idle` IIFE updates token counts; StatusLine invocation with new props.
 
 **Dropped:**
 - The `[idle]` indicator and hidden-role badges are no longer displayed (operator accepted).
-- The `vis` prop is no longer passed to StatusLine; `Visibility` class is retained in renderers.
+
+**UX bug fixes (4f702a8):**
+
+1. **Context window stuck at 200K** — `getContextWindow` now uses a two-pass lookup: first matches by provider ID + model dict key or `mInfo.id` field; then falls back to all providers regardless of provider ID. Handles cases where `sess.model.id` (e.g. `"kimi-k2.6"`) differs from the provider list's dict key (e.g. `"moonshot/kimi-k2.6"`).
+
+2. **tokenUsage never initialized after `/model` switch** — Added a `useEffect` keyed on `activeModel`. It fetches the context window and updates `tokenUsage.contextWindow` (preserving `used`) whenever the model changes. The startup effect was simplified to only set `activeModel`; the new effect handles the rest.
+
+3. **No token consumption recorded after turns** — The `session-idle` IIFE now reads `msg.providerID` / `msg.modelID` directly from the latest `AssistantMessage` instead of the `activeModel` closure. This eliminates the stale-closure timing dependency and handles mid-session model switches. Also added null guard on `msg.tokens` for non-Anthropic providers. `activeModel` removed from SSE `useEffect` deps to prevent loop teardown/restart on model changes.
 
 **Files modified:**
-- `src/utils/formatters.ts` (new) — all formatter and data-fetch helpers.
-- `src/components/StatusLine.tsx` — replaced with new orchestra-style bar component.
-- `src/app.tsx` — added imports, state, effects, event handler update, StatusLine invocation.
+- `src/utils/formatters.ts` (new in ecf35f9, updated in 4f702a8) — formatters + two-pass context window lookup.
+- `src/components/StatusLine.tsx` — orchestra-style bar component (color on bar only).
+- `src/app.tsx` — state, effects, event handler, StatusLine invocation; UX fixes in 4f702a8.
 
 ---
 
