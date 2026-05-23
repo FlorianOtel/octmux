@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { execFileSync } from "node:child_process";
+import { execFileSync, execFile } from "node:child_process";
 import type { Block, Role } from "../blocks.ts";
 import { formatLine } from "../blocks.ts";
 import { makeFifo, type FifoHandle } from "./fifo.ts";
@@ -35,6 +35,14 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   // Keyed by window key ("thinking", "tools"). Default true for all registered keys.
   // When false, beginBlock/appendToBlock/endBlock skip the side path entirely.
   private _outputEnabled = new Map<string, boolean>();
+  // Cache of live tmux window IDs, refreshed asynchronously after each
+  // _ensureWindow call. Starts empty; first block-start goes directly to
+  // fresh-creation path, which populates the cache.
+  private _liveIds: Set<string> = new Set();
+  // Single-flight guard — ensures at most one async tmux list-windows
+  // subprocess is in flight at any moment, regardless of how many
+  // rapid beginBlock calls arrive concurrently.
+  private _liveIdsRefreshInFlight = false;
 
   constructor(visibility: Visibility) {
     super();
@@ -73,21 +81,38 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     this._outputEnabled.set(key, on);
   }
 
-  // Create the window + log file for a given window key on first use.
-  // Future: /rename will call `tmux rename-window` on all _windowIds; subagents follow the same `<label>--<key>` pattern.
+  /**
+   * Fire-and-forget async refresh of the live-window ID cache.
+   * Single-flight: if a refresh is already in flight, subsequent kicks
+   * are no-ops until that call completes. On tmux error the existing
+   * cache is kept intact (transient failures must not corrupt our view).
+   */
+  private _refreshLiveIdsAsync(): void {
+    if (this._liveIdsRefreshInFlight) return;
+    this._liveIdsRefreshInFlight = true;
+    execFile("tmux", ["list-windows", "-F", "#{window_id}"], (err, stdout) => {
+      this._liveIdsRefreshInFlight = false;
+      if (err) return;
+      this._liveIds = new Set(
+        stdout.split("\n").map(s => s.trim()).filter(Boolean),
+      );
+    });
+  }
+
+  // Create the window + log file for a given window key on first use,
+  // or recreate it if the cached window ID is no longer live.
+  // Hot path reads _liveIds (in-memory) only — no synchronous tmux call.
+  // A background async refresh is kicked after every invocation so that
+  // the next call sees a fresh cache without paying any blocking cost.
   private _ensureWindow(windowKey: string): void {
     if (this._fifos.has(windowKey)) {
-      const liveIds = new Set(
-        execFileSync("tmux", ["list-windows", "-F", "#{window_id}"])
-          .toString()
-          .split("\n")
-          .map(s => s.trim())
-          .filter(Boolean),
-      );
       const cachedId = this._windowIds.get(windowKey);
-      if (cachedId && liveIds.has(cachedId)) {
+      if (cachedId && this._liveIds.has(cachedId)) {
+        this._refreshLiveIdsAsync();
         return;
       }
+      // Cached ID absent from _liveIds — window was killed.
+      // Close stale FIFO BEFORE deleting the map entry (no fd leak).
       const stale = this._fifos.get(windowKey);
       if (stale) stale.close();
       this._fifos.delete(windowKey);
@@ -95,7 +120,10 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
       for (const [role, key] of Object.entries(WINDOW_KEY) as [Role, string][]) {
         if (key === windowKey) this._lineBufs.delete(role as Role);
       }
+      // Fall through to fresh creation.
     }
+
+    // Fresh creation — synchronous new-window is unavoidable here.
     const fifo = makeFifo(windowKey, process.pid);
     this._fifos.set(windowKey, fifo);
     const id = execFileSync("tmux", [
@@ -105,9 +133,13 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
       `tail -f ${fifo.path}`,
     ]).toString().trim();
     this._windowIds.set(windowKey, id);
-    // Prevent tmux from auto-renaming the window to "tail" once the command starts.
+    // Add new ID to live cache immediately so the next _ensureWindow
+    // sees it without waiting for the background refresh.
+    this._liveIds.add(id);
     execFileSync("tmux", ["set-window-option", "-t", id, "automatic-rename", "off"]);
     execFileSync("tmux", ["set-window-option", "-t", id, "allow-rename", "off"]);
+
+    this._refreshLiveIdsAsync();
   }
 
   beginBlock(partID: string, role: Role, meta?: Block["meta"]): void {

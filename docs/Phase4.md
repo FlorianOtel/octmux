@@ -3,7 +3,7 @@ title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-23--22-42
+updated_at: 2026-05-23--23-15
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -35,6 +35,17 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-23--23-15 — Phase 4.4.4: async background liveness refresh (eliminate per-block tmux overhead)
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--23-15
+**Commit(s):** `<hash>`
+
+**What changed:** Moved the tmux liveness probe off the hot path. `_ensureWindow` now reads an in-memory `_liveIds: Set<string>` cache (zero subprocess cost on warm path); cache refreshed fire-and-forget via `execFile` (callback form) after every `_ensureWindow` call. `_liveIdsRefreshInFlight` single-flight guard prevents concurrent subprocess spawns. Eliminates the per-block ~10–50 ms event-loop block introduced in Phase 4.4.3 that caused thinking deltas to flush in bursts.
+
+**Trade-off:** at most one block of deltas may write to a dead FIFO (lost) if the operator kills a window mid-stream; the async refresh kicked at that block-start lands ~50 ms later and the next block-start recreates the window. Acceptable per operator priority: real-time streaming > zero-loss on manual kill.
+
+---
 
 ### 2026-05-23--22-42 — Phase 4.4.3: re-entry safety + outputEnabled gate (TmuxWindowRenderer foundation)
 
