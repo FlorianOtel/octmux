@@ -2,8 +2,8 @@
 title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-23--00-48
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-05-23--15-19
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -36,6 +36,76 @@ When finishing a phase:
 
 ## Implementation log (reverse chronological — newest at top)
 
+### 2026-05-23--15-19 — Phase 4.3.1: orchestra-style status bar (model, ctx bar, project, branch)
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--15-19
+**Commit(s):** `<hash>`
+
+**What changed:**
+Replaced the basic `[idle] hidden: ...` status line with an orchestra-style status bar that renders the active model name + context window, a 20-cell gruvbox-colored context-usage bar (updated on `session-idle`), a cost placeholder, the project basename, and git branch name.
+
+**Design:**
+- New `src/utils/formatters.ts` with helper functions: `formatTokens()` (human-readable K/M notation), `fetchGitBranch()` (one-shot git read), `getContextWindow()` (cached lookup via `provider.list()` or fallback map), `prettyModelName()` (display alias), `contextLabel()` (formatted context label).
+- New `src/components/StatusLine.tsx`: single `<Text>` line component (preserves fixed height). Accepts `modelLabel`, `tokenUsage`, `projectName`, `gitBranch` props. Bar fill uses `▓`/`░` glyphs with three-stop gruvbox color gradient: green <50%, yellow 50–79%, red ≥80%.
+- `src/app.tsx` wired:
+  - New state: `gitBranch` (fetched once at mount), `tokenUsage` (set to null, updated on `session-idle`).
+  - New constant: `projectName = path.basename(process.cwd())`.
+  - Mount-time effects: one-shot `fetchGitBranch()`, one-shot session fetch to initialize `activeModel` + context window.
+  - `session-idle` handler: async IIFE calls `client.session.messages()`, finds latest assistant message, extracts token counts (`input + cache.read + cache.write`), updates `tokenUsage` state.
+  - StatusLine invocation: computes `modelLabel` from `activeModel` + `contextLabel()`, passes new props.
+
+**Dropped:**
+- The `[idle]` indicator and hidden-role badges are no longer displayed (operator accepted).
+- The `vis` prop is no longer passed to StatusLine; `Visibility` class is retained in renderers.
+
+**Files modified:**
+- `src/utils/formatters.ts` (new) — all formatter and data-fetch helpers.
+- `src/components/StatusLine.tsx` — replaced with new orchestra-style bar component.
+- `src/app.tsx` — added imports, state, effects, event handler update, StatusLine invocation.
+
+---
+
+### 2026-05-23--16-40 — Phase 4.3: /show status + /thinking /tools toggle commands
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--16-40
+**Commit(s):** `105b17a`
+
+**What changed:**
+Refactored `/show`, `/thinking`, and `/tools` commands to unify visibility toggle logic and enable tmux window/pane creation and destruction on demand. All local command parsing and execution now lives in `src/commands.ts`; tmux lifecycle management is delegated to renderer implementations. The `/show` command becomes a pure status display; `/thinking` and `/tools` are dedicated toggle commands that manage tmux resource lifecycle.
+
+**Key architectural changes:**
+
+1. **Renderer interface** — added `setToggleEnabled(key: string, on: boolean): void` to enable uniform toggle control across all renderer backends.
+
+2. **Command layer (`src/commands.ts`)** — two new functions replace the legacy `parseShowCommand`:
+   - `handleShowCommand(input: string, renderer: Renderer): boolean` — matches `/show` with no arguments, reads visibility state, reports status in format `"thinking: on | tools: off"`, commits user input + system message, returns true/false.
+   - `handleToggleCommand(input: string, renderer: Renderer): boolean` — matches `/thinking` or `/tools` with optional `on|off` action. Query mode (no action): reads state and reports. Toggle mode (action specified): calls `renderer.setToggleEnabled()` to update visibility and manage tmux resources.
+
+3. **Renderer implementations:**
+   - `StdoutRenderer.setToggleEnabled()` — uses local `ROLES_BY_KEY` constant to map keys ("thinking", "tools") to roles; calls `visibility.set()` for each.
+   - `TmuxWindowRenderer.setToggleEnabled()` — same visibility update; if turning off, calls `_destroyWindow()` to close and clean up the window and FIFO.
+   - `TmuxPaneRenderer.setToggleEnabled()` — same visibility update; if turning off, calls `_destroyPane()` to close and clean up the pane and FIFO.
+
+4. **Lazy pane creation** — `TmuxPaneRenderer.setup()` now stores `_originPaneId` and skips the original pre-creation logic. Panes are created on-demand in `_ensurePane()` when a block of their role arrives (called from `beginBlock()`). Similarly, `TmuxWindowRenderer._ensureWindow()` now includes a hardening check: verifies the stored window still exists; if it's gone, clears maps and recreates.
+
+5. **App dispatch** — `app.tsx` `handleSubmit()` replaced the single `/show` block with:
+   ```typescript
+   if (handleToggleCommand(text, renderer)) return;
+   if (handleShowCommand(text, renderer)) return;
+   ```
+   Both functions handle commitUserInput/commitSystemMessage internally.
+
+**Files modified:**
+- `src/renderer/types.ts` — added `setToggleEnabled(key: string, on: boolean): void` to Renderer interface.
+- `src/renderer/stdout.ts` — added `ROLES_BY_KEY` constant; implemented `setToggleEnabled()`.
+- `src/renderer/tmux-window.ts` — added `ROLES_BY_KEY` constant; hardened `_ensureWindow()` with existence check; added `_destroyWindow(key)` method; implemented `setToggleEnabled()`.
+- `src/renderer/tmux-pane.ts` — refactored setup for lazy creation: `setup()` now stores `_originPaneId`; added `_ensurePane(key)` and `_destroyPane(key)` methods; updated `beginBlock()` to call `_ensurePane()` for side roles; implemented `setToggleEnabled()`.
+- `src/commands.ts` — replaced `parseShowCommand()` with `handleShowCommand()` and `handleToggleCommand()`; removed import of `Visibility` (no longer needed directly).
+- `src/app.tsx` — updated import to use `handleShowCommand`, `handleToggleCommand`; replaced `/show` dispatch block with the two new function calls.
+
+---
+
+>>>>>>> ecf35f9 (feat(octmux): Phase 4.3.1 — orchestra-style status bar)
 ### 2026-05-22 — Phase 4.2 fix: /model interactive picker + context window display
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)

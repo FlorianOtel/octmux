@@ -1,6 +1,7 @@
 import { Box, Static, Text, useStdout, useInput } from "ink";
 import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import type { createOpencodeClient } from "@opencode-ai/sdk/client";
+import * as path from "path";
 import { LineEditor } from "./editor.ts";
 import { filterEvent, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
@@ -13,6 +14,7 @@ import { PermissionModal } from "./components/PermissionModal.tsx";
 import { QuestionModal } from "./components/QuestionModal.tsx";
 import { SubprocessStatus } from "./components/SubprocessStatus.tsx";
 import { ModelPickerModal, type ModelPickerItem } from "./components/ModelPickerModal.tsx";
+import { fetchGitBranch, getContextWindow, prettyModelName, contextLabel } from "./utils/formatters.ts";
 
 type QuestionType = {
   question: string;
@@ -46,9 +48,14 @@ export function App(props: AppProps) {
   const [sessionLabel, setSessionLabel] = useState(props.sessionLabel);
   const [activeModel, setActiveModel] = useState<{ providerID: string; modelID: string } | null>(null);
   const [modelPicker, setModelPicker] = useState<{ items: ModelPickerItem[]; idx: number } | null>(null);
+  const [gitBranch, setGitBranch] = useState<string>("");
+  const [tokenUsage, setTokenUsage] = useState<{ used: number; contextWindow: number } | null>(null);
 
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Project name: basename of current working directory
+  const projectName = path.basename(process.cwd());
 
   const { stdout } = useStdout();
   const w = stdout?.columns ?? 80;
@@ -62,6 +69,37 @@ export function App(props: AppProps) {
     (cb) => { renderer.on("changed", cb); return () => renderer.off("changed", cb); },
     () => renderer.getTail(),
   );
+
+  // One-shot: fetch git branch at startup
+  useEffect(() => {
+    (async () => {
+      const branch = await fetchGitBranch();
+      setGitBranch(branch);
+    })();
+  }, []);
+
+  // One-shot: fetch initial model + context window at startup
+  useEffect(() => {
+    (async () => {
+      if (activeModel === null) {
+        try {
+          const resp = await props.client.session.get({ path: { id: props.sessionID } });
+          const sess = resp.data;
+          if (sess?.model) {
+            setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
+            const ctxWindow = await getContextWindow(
+              props.client,
+              sess.model.providerID,
+              sess.model.id,
+            );
+            setTokenUsage({ used: 0, contextWindow: ctxWindow });
+          }
+        } catch {
+          // Silently swallow errors; activeModel stays null, bar shows fallback
+        }
+      }
+    })();
+  }, [props.client, props.sessionID]);
 
   // SSE loop: thin translation layer — all rendering delegated to renderer.
   useEffect(() => {
@@ -95,6 +133,37 @@ export function App(props: AppProps) {
             setIsGenerating(false);
             setLastSubmitted("");
             setProcTimes({ thinking: null, tools: null });
+            // Async IIFE: fetch latest message tokens and update status bar
+            (async () => {
+              try {
+                const messagesResp = await props.client.session.messages({ path: { id: props.sessionID } });
+                const messages = messagesResp.data ?? [];
+                // Find latest assistant message
+                let latestAssistant: typeof messages[number] | null = null;
+                for (let i = messages.length - 1; i >= 0; i--) {
+                  if (messages[i].info.role === "assistant") {
+                    latestAssistant = messages[i];
+                    break;
+                  }
+                }
+                if (latestAssistant) {
+                  const msg = latestAssistant.info;
+                  if (msg.role === "assistant") {
+                    const used = msg.tokens.input + msg.tokens.cache.read + msg.tokens.cache.write;
+                    if (activeModel) {
+                      const ctxWindow = await getContextWindow(
+                        props.client,
+                        activeModel.providerID,
+                        activeModel.modelID,
+                      );
+                      setTokenUsage({ used, contextWindow: ctxWindow });
+                    }
+                  }
+                }
+              } catch {
+                // Silently swallow errors; bar stays at last value
+              }
+            })();
           }
           else if (ev.kind === "permission-asked") setPermission({ permID: ev.permID, title: ev.title });
           else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
@@ -304,7 +373,16 @@ export function App(props: AppProps) {
         <Rule title={sessionLabel} width={w} align="right" />
         <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question || !!modelPicker} onSubmit={handleSubmit} />
         <Rule width={w} />
-        <StatusLine vis={renderer.visibility} />
+        <StatusLine
+          modelLabel={
+            activeModel
+              ? `${prettyModelName(activeModel.modelID)} (${contextLabel(tokenUsage?.contextWindow ?? 200_000)})`
+              : sessionLabel
+          }
+          tokenUsage={tokenUsage}
+          projectName={projectName}
+          gitBranch={gitBranch}
+        />
       </Box>
     </>
   );
