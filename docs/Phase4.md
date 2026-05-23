@@ -39,7 +39,7 @@ When finishing a phase:
 ### 2026-05-23--18-48 — Phase 4.4.2: status bar UX bug fixes
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-23--18-48
-**Commit(s):** (pending)
+**Commit(s):** `4f702a8`
 
 **What changed:**
 Fixed three status bar bugs introduced in Phase 4.3.1:
