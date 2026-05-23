@@ -85,11 +85,21 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       // First time (len=0 creation): open block and emit generating.
       if (part.text.length === 0 && !seenPartIDs.has(part.id)) {
         seenPartIDs.add(part.id);
+        // Text starting means reasoning is done — close any open thinking blocks first
+        // so app.tsx clears the thinking timer before text streaming begins.
+        const events: ReplEvent[] = [];
+        for (const [thinkPartID, role] of openParts) {
+          if (role === "thinking") {
+            events.push({ kind: "block-end", partID: thinkPartID, role: "thinking" });
+          }
+        }
+        for (const ev of events) openParts.delete(ev.partID);
         openParts.set(part.id, "text");
-        return [
+        events.push(
           { kind: "block-start", partID: part.id, role: "text" },
           { kind: "generating" },
-        ];
+        );
+        return events;
       }
       return null;
     }
