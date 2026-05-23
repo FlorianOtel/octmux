@@ -39,7 +39,7 @@ When finishing a phase:
 ### 2026-05-23--17-20 — Phase 4.3.1: orchestra-style status bar (model, ctx bar, project, branch)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--17-20
-**Commit(s):** `ecf35f9`
+**Commit(s):** `ecf35f9`, `6834548`
 
 **What changed:**
 Replaced the basic `[idle] hidden: ...` status line with an orchestra-style status bar that renders the active model name + context window, a 20-cell gruvbox-colored context-usage bar (updated on `session-idle`), a cost placeholder, the project basename, and git branch name.
