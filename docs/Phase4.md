@@ -36,18 +36,6 @@ When finishing a phase:
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-23--21-02 — Phase 4.3.1: fix toggle semantics + SSE loop resilience
-
-**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--21-02
-**Commit(s):** (pending)
-
-**What changed:**
-Fixed toggle semantics: toggle off now only hides windows (visibility → false) without destroying them, so streaming continues in the background and resumes when toggled back on. Added SSE event loop resilience: each event handler is now wrapped in try/catch so a single renderer exception does not kill the entire event loop.
-
-**Files changed:**
-- `src/renderer/tmux-window.ts`: removed `if (!on) { this._destroyWindow(key); }` from `setToggleEnabled()`.
-- `src/app.tsx`: wrapped the inner `for (const ev of evList)` loop body in try/catch, catching renderer errors and passing them to `renderer.commitError()`.
-
 ### 2026-05-23--18-48 — Phase 4.4.1: orchestra-style status bar (model, ctx bar, project, branch)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--17-20 (initial); Claude Code (Claude Sonnet 4.6) — 2026-05-23--18-48 (UX fixes)

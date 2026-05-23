@@ -13,24 +13,6 @@ context: >
   all three initiatives in chronological order, with full details of each sub-phase.
 ---
 
-## ⚠ Deprecation notice — `--multi-pane` removed (2026-05-23)
-
-`--multi-pane` and its implementation class `TmuxPaneRenderer` were removed in Phase 4
-(commit `6b9493c`). The pane approach is fundamentally incompatible with real-time
-streaming: tmux serialises rendering within a window, so thinking/tool output in side
-panes lags behind the main pane whenever text is streaming. See
-`docs/multi-window--vs--multi-pane.md` for the full root-cause analysis.
-
-Going forward:
-- **`--multi-window`** is the only multi-view mode. It is the recommended default.
-- **`--single`** is the single-pane fallback (no tmux required).
-
-Historical log entries in this document that describe `TmuxPaneRenderer` or
-`--multi-pane` code reflect what was built and later removed. They are preserved
-as-is for historical accuracy.
-
----
-
 # Phase pre-implementation checklist - Read this first
 
 When starting a phase:
@@ -55,6 +37,25 @@ When finishing a phase:
 
 ---
 
+## ⚠ Deprecation notice — `--multi-pane` removed (2026-05-23)
+
+`--multi-pane` and its implementation class `TmuxPaneRenderer` were removed in Phase 4
+(commit `6b9493c`). The pane approach is fundamentally incompatible with real-time
+streaming: tmux serialises rendering within a window, so thinking/tool output in side
+panes lags behind the main pane whenever text is streaming. See
+`docs/multi-window--vs--multi-pane.md` for the full root-cause analysis.
+
+Going forward:
+- **`--multi-window`** is the only multi-view mode. It is the recommended default.
+- **`--single`** is the single-pane fallback (no tmux required).
+
+Historical log entries in this document that describe `TmuxPaneRenderer` or
+`--multi-pane` code reflect what was built and later removed. They are preserved
+as-is for historical accuracy.
+
+---
+
+
 ## Phase 3 Extended: Ink-based rendering layer
 
 _This section contains the full planning and implementation log for Phase 3 Extended,
@@ -63,6 +64,20 @@ Ink-based (React for CLI) component tree, reducing LineEditor to a pure state
 container. All Phase 3 behavior was preserved under the new Ink rendering model._
 
 ### Implementation log (reverse chronological — newest at top)
+
+### 2026-05-23--21-15 — Remove --multi-pane and TmuxPaneRenderer
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--21-15
+**Commit(s):** `6b9493c`
+
+**What changed:**
+Deleted `src/renderer/tmux-pane.ts` entirely. Removed all `--multi-pane` references from CLI help, validation, and error messages. Cleaned up `src/index.tsx`: removed the multiPane variable, the originPaneId variable, the mode guard checking multiPane, the mutual-exclusion logic including multiPane, all multiPane-specific error messages, and the entire `else if (multiPane)` renderer construction branch. Updated `src/renderer/types.ts` to remove `"tmux-pane"` from the Renderer `kind` union. `--single` and `--multi-window` remain unaffected and fully functional.
+
+**Files changed:**
+- `src/renderer/tmux-pane.ts` — deleted entirely.
+- `src/index.tsx` — removed import, CLI help line, arg parsing (multiPane, originPaneId), all validation logic mentioning multiPane, renderer construction for multiPane mode.
+- `src/renderer/types.ts` — removed `"tmux-pane"` from `kind` union, now `"stdout" | "tmux-window"`.
+
 
 #### 2026-05-20--19-00 — UX papercuts: cursor rendering, navigation, streaming flicker
 
