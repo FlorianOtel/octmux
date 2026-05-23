@@ -1,0 +1,59 @@
+{
+  "plan_ref": "PLAN.md (Phase 3U.2 — Direct-to-terminal streaming: kill the flicker)",
+  "tasks": [
+    {
+      "id": 1,
+      "summary": "Add formatLine + Role import to app.tsx",
+      "status": "done",
+      "notes": "Import added at top of file"
+    },
+    {
+      "id": 2,
+      "summary": "Replace HistoryEntry type with CommittedLine",
+      "status": "done",
+      "notes": "Type now uses Role and ansi string instead of text"
+    },
+    {
+      "id": 3,
+      "summary": "Replace state + refs for line-granularity rendering",
+      "status": "done",
+      "notes": "Removed: history, streamBuf, streamBufRef, flushTimerRef. Added: committed, tail, tailBufRef, activeBlockRef"
+    },
+    {
+      "id": 4,
+      "summary": "Add flushTail and handleBlockDelta functions",
+      "status": "done",
+      "notes": "Core functions for line-splitting and committing complete lines"
+    },
+    {
+      "id": 5,
+      "summary": "Rewrite SSE loop dispatch",
+      "status": "done",
+      "notes": "Removed text-delta branch, added block-delta and block-end handlers"
+    },
+    {
+      "id": 6,
+      "summary": "Rewrite handleSubmit",
+      "status": "done",
+      "notes": "Uses committed state and formatLine instead of history"
+    },
+    {
+      "id": 7,
+      "summary": "Rewrite JSX render block",
+      "status": "done",
+      "notes": "Static items now render committed lines with pre-formatted ANSI; tail renders in-progress partial line"
+    },
+    {
+      "id": 8,
+      "summary": "Build check and verification",
+      "status": "done",
+      "notes": "All three checks pass: BUILD OK, REMOVED OK, NEW SYMBOLS OK"
+    },
+    {
+      "id": 9,
+      "summary": "Update docs/Phase3-UX.md",
+      "status": "done",
+      "notes": "Added 3U.2 implementation log entry, updated status from pending to complete, refreshed updated_at timestamp"
+    }
+  ]
+}

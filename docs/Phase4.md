@@ -36,7 +36,7 @@ When finishing a phase:
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-23--17-20 — Phase 4.3.1: orchestra-style status bar (model, ctx bar, project, branch)
+### 2026-05-23--17-20 — Phase 4.4.1: orchestra-style status bar (model, ctx bar, project, branch)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--17-20
 **Commit(s):** `ecf35f9`, `6834548`
