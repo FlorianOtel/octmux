@@ -39,7 +39,7 @@ When finishing a phase:
 ### 2026-05-23--23-15 — Phase 4.4.4: async background liveness refresh (eliminate per-block tmux overhead)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--23-15
-**Commit(s):** `<hash>`
+**Commit(s):** `ad60b1c`
 
 **What changed:** Moved the tmux liveness probe off the hot path. `_ensureWindow` now reads an in-memory `_liveIds: Set<string>` cache (zero subprocess cost on warm path); cache refreshed fire-and-forget via `execFile` (callback form) after every `_ensureWindow` call. `_liveIdsRefreshInFlight` single-flight guard prevents concurrent subprocess spawns. Eliminates the per-block ~10–50 ms event-loop block introduced in Phase 4.4.3 that caused thinking deltas to flush in bursts.
 
