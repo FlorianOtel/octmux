@@ -3,7 +3,7 @@ title: "octmux — Phase 3: Custom raw-mode input + Ink rendering + typed block 
 created_at: 2026-05-20--00-34
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-22--23-00
+updated_at: 2026-05-23--21-33
 context: >
   Phase 3 is the foundational UX phase split across three major sub-initiatives:
   Phase 3 (original raw-mode input), Phase 3 Extended (Ink-based rendering layer),
@@ -11,6 +11,24 @@ context: >
   superseded by Phase 3 Extended, which then was extended by Phase 3 UX. This
   document contains the complete implementation logs and planning documents for
   all three initiatives in chronological order, with full details of each sub-phase.
+---
+
+## ⚠ Deprecation notice — `--multi-pane` removed (2026-05-23)
+
+`--multi-pane` and its implementation class `TmuxPaneRenderer` were removed in Phase 4
+(commit `6b9493c`). The pane approach is fundamentally incompatible with real-time
+streaming: tmux serialises rendering within a window, so thinking/tool output in side
+panes lags behind the main pane whenever text is streaming. See
+`docs/multi-window--vs--multi-pane.md` for the full root-cause analysis.
+
+Going forward:
+- **`--multi-window`** is the only multi-view mode. It is the recommended default.
+- **`--single`** is the single-pane fallback (no tmux required).
+
+Historical log entries in this document that describe `TmuxPaneRenderer` or
+`--multi-pane` code reflect what was built and later removed. They are preserved
+as-is for historical accuracy.
+
 ---
 
 # Phase pre-implementation checklist - Read this first
@@ -249,7 +267,9 @@ is now a thin wrapper that calls `handleKey` in its `useInput` handler.
 _This section contains the full planning and implementation log for Phase 3 UX,
 dated 2026-05-21. This phase introduced a typed Block model, eliminated streaming
 flicker through Static scrollback, added per-role visibility toggles, and implemented
-two tmux multiplex backends (panes and windows)._
+two tmux multiplex backends (`--multi-pane` via `TmuxPaneRenderer` and `--multi-window`
+via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Phase 4
+(see deprecation notice above)._
 
 ### Implementation log (reverse chronological — newest at top)
 
@@ -362,7 +382,7 @@ Phase 3 represents three major architectural iterations of the octmux UX layer:
 
 2. **Phase 3 Extended** — replaced the raw-mode renderer with Ink (React for CLI), preserving all Phase 3 behavior under a cleaner component architecture. LineEditor became a pure state machine; Ink's `useInput` hook drives it. All features preserved: Emacs bindings, multi-line via Alt-Enter, history, bracketed paste, double-Esc clear. This enabled a bottom-anchored layout and proper modal flows.
 
-3. **Phase 3 UX** — eliminated streaming flicker by moving content to `<Static>` at line granularity, introduced a typed Block model with role-based rendering, added per-role visibility toggles, and implemented two tmux multiplex backends (panes and windows) via the Renderer interface.
+3. **Phase 3 UX** — eliminated streaming flicker by moving content to `<Static>` at line granularity, introduced a typed Block model with role-based rendering, added per-role visibility toggles, and implemented two tmux multiplex backends via the `Renderer` interface: `TmuxPaneRenderer` (`--multi-pane`, since deprecated) and `TmuxWindowRenderer` (`--multi-window`, the current recommended mode).
 
-The result: a fully functional REPL with streaming responses, interactive modals, proper layout anchoring, and the infrastructure for future multi-pane sub-agent support.
+The result: a fully functional REPL with streaming responses, interactive modals, proper layout anchoring, and a clean `Renderer` interface that today backs `--single` (stdout) and `--multi-window` (tmux windows).
 

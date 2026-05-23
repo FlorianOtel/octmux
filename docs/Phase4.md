@@ -2,8 +2,8 @@
 title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-23--21-15
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-05-23--21-33
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -39,7 +39,7 @@ When finishing a phase:
 ### 2026-05-23--21-15 — Remove --multi-pane and TmuxPaneRenderer
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--21-15
-**Commit(s):** (pending)
+**Commit(s):** `6b9493c`
 
 **What changed:**
 Deleted `src/renderer/tmux-pane.ts` entirely. Removed all `--multi-pane` references from CLI help, validation, and error messages. Cleaned up `src/index.tsx`: removed the multiPane variable, the originPaneId variable, the mode guard checking multiPane, the mutual-exclusion logic including multiPane, all multiPane-specific error messages, and the entire `else if (multiPane)` renderer construction branch. Updated `src/renderer/types.ts` to remove `"tmux-pane"` from the Renderer `kind` union. `--single` and `--multi-window` remain unaffected and fully functional.

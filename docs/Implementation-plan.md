@@ -3,7 +3,7 @@ title: "octmux — Implementation Plan"
 created_at: 2026-05-18--21-58
 created_by: Claude Code (Claude Sonnet 4.6 1M)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-22--22-15
+updated_at: 2026-05-23--21-33
 context: >
   octmux is a text-only barebones REPL UI for OpenCode that mimics the Claude
   Code CLI feel: text REPL, one bottom status line, Emacs-style line edits,
@@ -47,21 +47,22 @@ itself.
    container; Ink's `useInput` hook drives it. Bottom-anchor via Ink's
    Static-above-dynamic layout. All Emacs bindings, multi-line, bracketed paste,
    history, double-Esc clear preserved. No readline.
-4. **Output layer + pane scope.** Output is a typed block model (`text` / `thinking`
+4. **Output layer + window scope.** Output is a typed block model (`text` / `thinking`
    / `tool-call` / `tool-result` / `user` / `error`) with a `Renderer` interface.
-   **Ink's responsibility is strictly bounded to the single origin pane's interactive
+   **Ink's responsibility is strictly bounded to the single origin window's interactive
    chrome** — input editor, rules, status line, and modals. Ink does not own
-   multi-pane/multi-window layout. The default `StdoutRenderer` writes ANSI-formatted
+   multi-window layout. The default `StdoutRenderer` writes ANSI-formatted
    lines via `<Static>` at line granularity; the terminal handles layout for streamed
-   content. **tmux is the pane manager and framing engine** — pane/window creation,
+   content. **tmux is the window manager and framing engine** — window creation,
    geometry, titles, focus, resize, detach/reattach. octmux issues no `set-option`
    or `set-window-option` commands except for `automatic-rename off` (needed to
    prevent tmux renaming `new-window` constructs to the running command).
-   `TmuxPaneRenderer` (`--multi-pane`) and `TmuxWindowRenderer` (`--multi-window`,
-   recommended default for SSH/TTY) are the two multiplex backends, both routing
-   `tool-call` and `tool-result` to a shared `"tools"` sink. **opentmux is the
-   future cross-pane coherence layer** — built on the role → log-file → tmux-construct
-   contract that Phase 3-UX establishes.
+   `TmuxWindowRenderer` (`--multi-window`, recommended default for SSH/TTY) is the
+   tmux multiplex backend, routing `tool-call` and `tool-result` to a shared `"tools"`
+   sink in a side window. **opentmux is the future cross-window coherence layer** —
+   built on the role → log-file → tmux-window contract that Phase 3-UX establishes.
+   _(Note: `TmuxPaneRenderer` / `--multi-pane` were removed in Phase 4 — see
+   `docs/multi-window--vs--multi-pane.md` for rationale.)_
 5. **Slash commands:** full set with interactive UX.
    - Local with custom UX: `/exit`, `/clear`, `/help`, `/model`, `/agents`, `/show`.
    - All other `/foo` forwarded to `POST /session/{id}/command` (orchestra
@@ -84,7 +85,6 @@ src/
     stdout.ts            StdoutRenderer: Static-backed, default backend
     visibility.ts        per-role on/off toggles + /show slash-command parser
     fifo.ts              log-file IPC (regular append-mode temp files, not FIFOs)
-    tmux-pane.ts         TmuxPaneRenderer: --multi-pane, 2 eager side panes
     tmux-window.ts       TmuxWindowRenderer: --multi-window, lazy side windows
   commands.ts            local slash-command parsers (parseExitCommand, parseRenameCommand, parseModelCommand, parseShowCommand)
   components/
@@ -342,7 +342,7 @@ All six sub-phases shipped. octmux is a working REPL: type a prompt, Enter submi
 
 **Status:** ✓ shipped — see log 2026-05-21 in `docs/Phase3.md`.
 
-All eight sub-phases shipped. Highlights: flicker-free Static scrollback; typed Block model with ANSI role prefixes; per-role visibility toggles (`/show thinking off`); `Renderer` interface with `StdoutRenderer`, `TmuxPaneRenderer`, and `TmuxWindowRenderer` backends; `--multi-window` (recommended, lazy windows) and `--multi-pane` (eager panes) multiplex flags; `tool-call` + `tool-result` consolidated to a shared `"tools"` sink in both renderers. Origin window renamed to opencode session label; side windows use `<label>--<key>` naming convention (double-dash); `SubprocessStatus` component shows animated spinner + elapsed timer for active subprocesses; timers clear on role-specific `block-end` events (thinking clears when reasoning ends; tools clears on `tool-result block-end` or `tool-call` error). See `docs/Phase3.md` for full spec, design rationale, and implementation log.
+All eight sub-phases shipped. Highlights: flicker-free Static scrollback; typed Block model with ANSI role prefixes; per-role visibility toggles (`/show thinking off`); `Renderer` interface with `StdoutRenderer` and `TmuxWindowRenderer` backends; `--multi-window` (recommended, lazy side windows) multiplex flag; `tool-call` + `tool-result` consolidated to a shared `"tools"` sink; origin window renamed to opencode session label; side windows use `<label>--<key>` naming convention (double-dash); `SubprocessStatus` component shows animated spinner + elapsed timer for active subprocesses; timers clear on role-specific `block-end` events. _(Phase 4 subsequently removed `TmuxPaneRenderer` / `--multi-pane` — see `docs/multi-window--vs--multi-pane.md`.)_ See `docs/Phase3.md` for full spec, design rationale, and implementation log.
 
 ---
 
@@ -505,7 +505,6 @@ multi-session views, themes) is post-MVP.
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/editor.ts` — LineEditor state machine
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/types.ts` — `Renderer` interface
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/stdout.ts` — `StdoutRenderer` (default)
-- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/tmux-pane.ts` — `TmuxPaneRenderer` (`--multi-pane`)
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/tmux-window.ts` — `TmuxWindowRenderer` (`--multi-window`)
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/visibility.ts` — per-role visibility, `/show` parser
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/commands.ts` — local slash-command parsers (Phase 4.2+)
