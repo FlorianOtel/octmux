@@ -39,7 +39,7 @@ When finishing a phase:
 ### 2026-05-23--22-42 — Phase 4.4.3: re-entry safety + outputEnabled gate (TmuxWindowRenderer foundation)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--22-42
-**Commit(s):** `<commit_hash_to_backfill>`
+**Commit(s):** `1a4523c`
 
 **What changed:**
 Added re-entry safety to `TmuxWindowRenderer` via a liveness check in `_ensureWindow` that detects stale window IDs (e.g., when the operator manually kills a side window mid-session) and recreates them. Also added a gating mechanism (`_outputEnabled` map + `isOutputEnabled`/`setOutputEnabled` methods) to suppress output streams for side windows without destroying them, enabling future slash-command controls (e.g., `/thinking off`).
