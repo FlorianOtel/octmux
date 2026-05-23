@@ -3,7 +3,7 @@ title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-23--15-19
+updated_at: 2026-05-23--17-20
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -36,9 +36,9 @@ When finishing a phase:
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-23--15-19 — Phase 4.3.1: orchestra-style status bar (model, ctx bar, project, branch)
+### 2026-05-23--17-20 — Phase 4.3.1: orchestra-style status bar (model, ctx bar, project, branch)
 
-**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--15-19
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--17-20
 **Commit(s):** `ecf35f9`
 
 **What changed:**

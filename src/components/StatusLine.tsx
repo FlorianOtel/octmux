@@ -54,8 +54,12 @@ export function StatusLine({
   // Build git branch suffix
   const gitSuffix = gitBranch ? ` | ⎇ ${gitBranch}` : "";
 
-  // Full status line
-  const content = `✦ ${modelLabel} | ctx ${bar} ${percentage}% ${usedStr}/${ctxStr} | ~$0.00 | ◆ ${projectName}${gitSuffix}`;
-
-  return <Text color={barColor}>{content}</Text>;
+  // Full status line: color only the bar, not the rest
+  return (
+    <Text>
+      {`✦ ${modelLabel} | ctx `}
+      <Text color={barColor}>{bar}</Text>
+      {` ${percentage}% ${usedStr}/${ctxStr} | ~$0.00 | ◆ ${projectName}${gitSuffix}`}
+    </Text>
+  );
 }

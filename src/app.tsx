@@ -171,7 +171,7 @@ export function App(props: AppProps) {
       }
     })();
     return () => { cancelled = true; };
-  }, [props.client, props.sessionID, props.eventStream, renderer]);
+  }, [props.client, props.sessionID, props.eventStream, renderer, activeModel]);
 
   // Ctrl-C: three cases.
   useInput((input, key) => {
