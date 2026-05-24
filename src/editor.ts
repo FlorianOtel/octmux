@@ -50,8 +50,17 @@ export class LineEditor extends EventEmitter {
 
   deleteForward(): void {
     const line = this.lines[this.row];
-    this.lines[this.row] = line.slice(0, this.col) + line.slice(this.col + 1);
-    this.emit("changed");
+    if (this.col < line.length) {
+      // Delete the character under the cursor.
+      this.lines[this.row] = line.slice(0, this.col) + line.slice(this.col + 1);
+      this.emit("changed");
+    } else if (this.row < this.lines.length - 1) {
+      // At end of line: forward-delete the newline by joining with the next line.
+      const next = this.lines[this.row + 1];
+      this.lines.splice(this.row + 1, 1);
+      this.lines[this.row] = line + next;
+      this.emit("changed");
+    }
   }
 
   insertNewline(): void {  // Alt-Enter

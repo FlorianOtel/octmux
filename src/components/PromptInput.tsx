@@ -12,6 +12,12 @@ type Props = {
 export function PromptInput({ editor, disabled = false, onSubmit }: Props) {
   const [, forceUpdate] = useReducer((n: number) => n + 1, 0);
   const lastEscRef = useRef<number>(0);
+  // Ink 5's useInput cannot distinguish physical Backspace (\x7f) from the
+  // Delete key (\x1b[3~) — both produce key.delete=true with input=''.
+  // We capture the raw stdin sequence here so handleKey can tell them apart.
+  // prependListener ensures this fires before Ink's own stdin handler, so the
+  // ref is populated before our useInput callback reads it.
+  const rawSeqRef = useRef<string>('');
 
   useEffect(() => {
     editor.on("changed", forceUpdate);
@@ -22,8 +28,14 @@ export function PromptInput({ editor, disabled = false, onSubmit }: Props) {
     };
   }, [editor, onSubmit]);
 
+  useEffect(() => {
+    const captureRaw = (data: Buffer) => { rawSeqRef.current = data.toString(); };
+    process.stdin.prependListener('data', captureRaw);
+    return () => { process.stdin.off('data', captureRaw); };
+  }, []);
+
   useInput((input, key) => {
-    lastEscRef.current = handleKey(input, key, editor, lastEscRef.current);
+    lastEscRef.current = handleKey(input, key, editor, lastEscRef.current, rawSeqRef.current);
   }, { isActive: !disabled });
 
   const lines = editor.getLines();

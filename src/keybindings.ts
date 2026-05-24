@@ -19,7 +19,13 @@ import type { LineEditor } from "./editor.ts";
 //   The Ink source has a comment: "TODO: enquirer detects delete key as
 //   backspace, but I had to split them up to avoid breaking changes in Ink.
 //   Merge them back together in the next major version."
-//   → Both key.backspace and key.delete must trigger backspace behaviour.
+//
+//   The physical Delete key sends \x1b[3~ (VT100 sequence), which Ink also
+//   maps to key.delete = true with input = '' — identical to Backspace.
+//   The ONLY way to distinguish them is via the raw stdin byte sequence,
+//   captured before Ink processes it (see PromptInput.tsx rawSeqRef).
+//   → key.delete + rawSeq==='\x1b[3~' → deleteForward (physical Delete key)
+//   → key.delete + other rawSeq, or key.backspace → backspace (delete-left)
 //
 // QUIRK 2 — Alt-Enter does NOT set key.return.
 //   Alt-Enter sends the sequence \x1b\r (ESC + CR).
@@ -72,10 +78,12 @@ import type { LineEditor } from "./editor.ts";
  *
  * Call from a useInput handler; pass lastEscTime from a ref and store the
  * returned value back into the same ref so double-Esc detection works across
- * calls:
+ * calls. Also pass rawSeq (the raw stdin byte sequence captured before Ink
+ * processes it) so that the physical Delete key can be distinguished from
+ * physical Backspace — both produce key.delete=true in Ink 5's API.
  *
  *   useInput((input, key) => {
- *     lastEscRef.current = handleKey(input, key, editor, lastEscRef.current);
+ *     lastEscRef.current = handleKey(input, key, editor, lastEscRef.current, rawSeqRef.current);
  *   });
  *
  * Returns lastEscTime unchanged for every key except Escape, where it returns
@@ -86,6 +94,7 @@ export function handleKey(
   key: Key,
   editor: LineEditor,
   lastEscTime: number,
+  rawSeq: string = '',
 ): number {
 
   // ── Enter / newline ─────────────────────────────────────────────────────────
@@ -105,13 +114,16 @@ export function handleKey(
 
   } else if (key.backspace || key.delete) {
     // QUIRK 1: \x7f (Backspace) → key.delete; \x08 (Ctrl-H) → key.backspace.
-    // Both mean "delete the character to the left of the cursor".
-    editor.backspace();
+    // The physical Delete key (\x1b[3~) also gives key.delete=true — identical
+    // to Backspace in Ink's API. Use rawSeq to tell them apart.
+    if (rawSeq === '\x1b[3~') {
+      editor.deleteForward();   // physical Delete key → delete right
+    } else {
+      editor.backspace();       // Backspace (\x7f) or Ctrl-H (\x08) → delete left
+    }
 
   } else if (key.ctrl && input === "d") {
-    // Ctrl-D: Emacs delete-char (forward delete).
-    // The physical Delete key is consumed by key.delete above, so it reaches
-    // backspace() instead — acceptable trade-off given Ink 5's conflation.
+    // Ctrl-D: Emacs delete-char (forward delete), alternative to Delete key.
     editor.deleteForward();
 
   // ── Application-level keys (handled outside this module) ────────────────────
