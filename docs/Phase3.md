@@ -3,7 +3,7 @@ title: "octmux — Phase 3: Custom raw-mode input + Ink rendering + typed block 
 created_at: 2026-05-20--00-34
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-23--21-33
+updated_at: 2026-05-25--00-00
 context: >
   Phase 3 is the foundational UX phase split across three major sub-initiatives:
   Phase 3 (original raw-mode input), Phase 3 Extended (Ink-based rendering layer),
@@ -212,6 +212,14 @@ push instead of string concat.
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
 **Commit(s):** `d39ed8ed`
+
+> **Hotfix 2026-05-25 — `9f10455`:** Delete key now deletes forward (right) instead of left.
+> Ink 5 maps both Backspace (`\x7f`) and physical Delete (`\x1b[3~`) to `key.delete=true` with
+> identical `input=''` — indistinguishable via the public API. Fix: `prependListener` on raw
+> `process.stdin` in `PromptInput.tsx` captures the byte sequence before Ink processes it;
+> `handleKey` routes `\x1b[3~` to `deleteForward()` and all other `key.delete` cases to
+> `backspace()`. Also fixed `deleteForward()` in `editor.ts` to join the next line when the
+> cursor is at end-of-line (was a no-op before).
 
 **What shipped:**
 
