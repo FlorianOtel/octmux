@@ -116,7 +116,9 @@ export function App(props: AppProps) {
       const lines = editor.getLines();
       const row = editor.getRow();
       const firstLine = lines[0] ?? "";
-      if (row !== 0 || !firstLine.startsWith("/")) {
+      // Open only after the operator has typed at least one character past
+      // the leading "/" — listing every command on bare "/" is too noisy.
+      if (row !== 0 || !firstLine.startsWith("/") || firstLine.length < 2) {
         setSlashCompletion(null);
         return;
       }

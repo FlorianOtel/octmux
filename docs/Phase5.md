@@ -3,7 +3,7 @@ title: "octmux — Phase 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
 updated_by: Claude Code (Claude Opus 4.7 1M)
-updated_at: 2026-05-25--19-10
+updated_at: 2026-05-25--19-40
 context: >
   Implementation log for Phase 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -105,13 +105,17 @@ the existing entries.
 - **`expandCommands()` order matches `COMMANDS` order**, with each dynamic
   entry's expansion inlined at its position. Completion overlay relies on
   this for predictable ordering; do not introduce alphabetical sorting.
-- **Overlay assumes single-line, row-0 slash commands.** The buffer-watch
-  effect in `app.tsx` only opens the overlay when `editor.getRow() === 0`
-  and `lines[0].startsWith("/")`. Multi-line buffers that happen to have
-  `/` on row 0 with cursor elsewhere are intentional no-overlay state. If
-  this changes, `loadText(candidate + " ")` in `handleSlashSelect` will
-  destroy lines 1+ on completion — change `loadText` to a more surgical
-  replace if multi-line slash commands ever become valid.
+- **Overlay assumes single-line, row-0 slash commands with at least one
+  character past the leading `/`.** The buffer-watch effect in `app.tsx`
+  only opens the overlay when `editor.getRow() === 0`,
+  `lines[0].startsWith("/")`, AND `lines[0].length >= 2`. Multi-line
+  buffers that happen to have `/` on row 0 with cursor elsewhere are
+  intentional no-overlay state. Bare `/` is also intentional no-overlay
+  state (the full unfiltered command list is too noisy — narrowing starts
+  on the first character after `/`). If this changes, `loadText(candidate
+  + " ")` in `handleSlashSelect` will destroy lines 1+ on completion —
+  change `loadText` to a more surgical replace if multi-line slash
+  commands ever become valid.
 - **Input highlighting skips the cursor-inside-token case.** Highlight
   applies only when `cursorCol > highlightEnd`. If you ever need highlight
   while the cursor is inside the matched token, you must nest the
@@ -165,6 +169,13 @@ contracts above still hold. Update it if you change them.
 
 ## Implementation log (reverse chronological — newest at top)
 
+### 2026-05-25--19-40 — Phase 5 hotfix — delay overlay until first char after `/`
+
+**Implemented by:** Claude Code (Claude Opus 4.7 1M) — 2026-05-25--19-40
+**Commit(s):** `<pending>`
+
+**What changed:** Buffer-watch effect in `src/app.tsx` now also bails out when `lines[0].length < 2` (i.e. the buffer is exactly `/`). Bare `/` no longer pops the overlay with the full unfiltered command list — operator must type at least one character past the slash to start narrowing. All other overlay logic (Tab/Enter/Esc, arrow nav, exact-match close-on-space, highlight) unchanged. Inline description in §Design choices and the "Read first" section's row-0 / single-line constraint were updated accordingly.
+
 ### 2026-05-25--17-10 — Phase 5 — /help + slash completion overlay + input highlighting
 
 **Implemented by:** Claude Code (Claude Opus 4.7 1M) via /brain pipeline (Planner: Sonnet 4.6, Actor: Haiku 4.5, Reviewer: Sonnet 4.6) — 2026-05-25--17-10
@@ -188,7 +199,7 @@ contracts above still hold. Update it if you change them.
 
 - **R1 (Registry pattern):** Command metadata lives in one shared registry (`src/command-registry.ts`). Dispatch (in `app.tsx`) is a simple if/elif chain. This avoids a complex rewrite to support dynamic command lists — no ladder climbing, minimal refactor.
 - **D3 (Expansion pattern):** `/help` reads the registry and outputs all commands. Completion overlay uses `expandCommands()` from the same registry; future dynamic commands (orchestra `/brain`, `/agents`) simply add an `expandFn` to their `CommandSpec`, and the overlay automatically shows them. No completion-layer rebuild.
-- **C1 (Overlay lifecycle):** Overlay opens automatically when buffer starts with `/` AND cursor is on row 0 (live buffer watch via `editor.changed`). Closes on: Tab (complete), Enter (submits the whole line; the buffer-clear that follows triggers the effect to set overlay state to null — overlay does not itself intercept Enter), single Esc (dismiss overlay only, keep buffer untouched — the existing double-Esc clear-buffer flow only fires when no overlay is open). The overlay also closes when the operator has typed a space after an exact-match command name (e.g. typing `/show ` closes because `/show` is exactly one candidate and the operator has moved past the command name to type args).
+- **C1 (Overlay lifecycle):** Overlay opens automatically when buffer starts with `/`, cursor is on row 0, AND at least one character has been typed past the leading slash (live buffer watch via `editor.changed`). Bare `/` alone does NOT open the overlay — the unfiltered list is too noisy; narrowing starts on the first key after `/` (hotfix 2026-05-25--19-40). Closes on: Tab (complete), Enter (submits the whole line; the buffer-clear that follows triggers the effect to set overlay state to null — overlay does not itself intercept Enter), single Esc (dismiss overlay only, keep buffer untouched — the existing double-Esc clear-buffer flow only fires when no overlay is open). The overlay also closes when the operator has typed a space after an exact-match command name (e.g. typing `/show ` closes because `/show` is exactly one candidate and the operator has moved past the command name to type args).
 - **TAB completes, Enter submits:** Tab key within overlay completes the selected candidate into the buffer and dismisses overlay. Enter key is never intercepted by the overlay — it always submits the whole line to the server/parser. This matches typical shell/REPL UX.
 
 **Status:** pending operator verification. Reviewer reported one off-by-one fix (lines 42–44 in `SlashCompletionOverlay.tsx`): `Math.min(candidates.length, 9)` → `Math.min(candidates.length, 10)` + `moreCount = candidates.length - 9` → `candidates.length - 10`. Fixed and verified in this commit.
