@@ -95,6 +95,7 @@ export function handleKey(
   editor: LineEditor,
   lastEscTime: number,
   rawSeq: string = '',
+  overlayOpen: boolean = false,
 ): number {
 
   // ── Enter / newline ─────────────────────────────────────────────────────────
@@ -148,12 +149,16 @@ export function handleKey(
 
   } else if (key.upArrow) {
     // ↑ : at top row → recall previous history entry; otherwise move cursor up
-    if (editor.isAtTopRow()) editor.histPrev();
-    else editor.moveUpRow();
+    if (!overlayOpen) {
+      if (editor.isAtTopRow()) editor.histPrev();
+      else editor.moveUpRow();
+    }
   } else if (key.downArrow) {
     // ↓ : at bottom row → recall next history entry; otherwise move cursor down
-    if (editor.isAtBottomRow()) editor.histNext();
-    else editor.moveDownRow();
+    if (!overlayOpen) {
+      if (editor.isAtBottomRow()) editor.histNext();
+      else editor.moveDownRow();
+    }
 
   // ── Escape ───────────────────────────────────────────────────────────────────
 
@@ -161,9 +166,11 @@ export function handleKey(
     // Single Esc: record the timestamp.
     // Double Esc (two presses within 500 ms): clear the entire buffer.
     // This mirrors the Ctrl-G / double-Esc "abort" convention in many REPLs.
-    const now = Date.now();
-    if (now - lastEscTime < 500) editor.clearBuffer();
-    return now;  // propagate updated time back to the caller's ref
+    if (!overlayOpen) {
+      const now = Date.now();
+      if (now - lastEscTime < 500) editor.clearBuffer();
+      return now;  // propagate updated time back to the caller's ref
+    }
 
   // ── Meta (Alt) word-movement / kill ─────────────────────────────────────────
   //

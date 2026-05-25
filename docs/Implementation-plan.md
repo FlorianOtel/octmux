@@ -2,8 +2,8 @@
 title: "octmux — Implementation Plan"
 created_at: 2026-05-18--21-58
 created_by: Claude Code (Claude Sonnet 4.6 1M)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-23--21-33
+updated_by: Claude Code (Claude Opus 4.7)
+updated_at: 2026-05-25--17-10
 context: >
   octmux is a text-only barebones REPL UI for OpenCode that mimics the Claude
   Code CLI feel: text REPL, one bottom status line, Emacs-style line edits,
@@ -386,7 +386,7 @@ commands on top — `/` input branches before reaching `promptAsync`.
 
 ### Phase 5 — Slash commands: local + forwarded (2 days)
 
-**Status:** partially shipped. `/exit`, `/model` (with interactive picker), `/rename`, and `/show` consolidation were delivered early in Phase 4.2 (see `docs/Phase4.md`). Remaining: `/clear`, `/help`, `/agents`, and the LLM-forwarding path for unknown slash commands.
+**Status:** /help and live slash-command completion shipped via re-scoped Phase 5 (see `docs/Phase5.md`). Previously shipped: `/exit`, `/model` (with interactive picker), `/rename`, and `/show` consolidation (Phase 4.2). Remaining (deferred): `/clear`, `/agents`, server fall-through for unknown `/foo`.
 
 **Goal:** built-ins with custom UX; forward everything else.
 

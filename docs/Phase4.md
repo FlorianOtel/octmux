@@ -3,11 +3,13 @@ title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Opus 4.7)
-updated_at: 2026-05-25--16-01
+updated_at: 2026-05-25--17-10
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
-  the complete planning and implementation logs for Phase 4.
+  the complete planning and implementation logs for Phase 4. Phase 5 work
+  (/help command, live slash-completion overlay, input highlighting) continues
+  in docs/Phase5.md as of 2026-05-25--17-10.
 ---
 
 # Phase pre-implementation checklist - Read this first

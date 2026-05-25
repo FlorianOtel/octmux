@@ -1,8 +1,22 @@
 import { OUTPUT_KEYS } from "./renderer/output-keys.ts";
+import { COMMANDS } from "./command-registry.ts";
 
 const GREEN = "\x1b[32m";
 const RED   = "\x1b[31m";
 const RESET = "\x1b[0m";
+
+// List all known slash commands with their usage and descriptions.
+export function parseHelpCommand(
+  input: string,
+): { handled: boolean; reply?: string } {
+  const m = input.trim().match(/^\/help\s*$/);
+  if (!m) return { handled: false };
+  const lines: string[] = ["slash commands:"];
+  for (const cmd of COMMANDS) {
+    lines.push(`  ${cmd.usage}  — ${cmd.description}`);
+  }
+  return { handled: true, reply: lines.join("\n") };
+}
 
 // Display output gate status for all keys.
 export function parseShowCommand(

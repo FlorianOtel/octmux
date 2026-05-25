@@ -5,7 +5,7 @@ import * as path from "path";
 import { LineEditor } from "./editor.ts";
 import { filterEvent, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
-import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand } from "./commands.ts";
+import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
@@ -14,6 +14,8 @@ import { PermissionModal } from "./components/PermissionModal.tsx";
 import { QuestionModal } from "./components/QuestionModal.tsx";
 import { SubprocessStatus } from "./components/SubprocessStatus.tsx";
 import { ModelPickerModal, type ModelPickerItem } from "./components/ModelPickerModal.tsx";
+import { SlashCompletionOverlay } from "./components/SlashCompletionOverlay.tsx";
+import { expandCommands } from "./command-registry.ts";
 import { fetchGitBranch, getContextWindow, prettyModelName, contextLabel } from "./utils/formatters.ts";
 
 type QuestionType = {
@@ -50,6 +52,10 @@ export function App(props: AppProps) {
   const [modelPicker, setModelPicker] = useState<{ items: ModelPickerItem[]; idx: number } | null>(null);
   const [gitBranch, setGitBranch] = useState<string>("");
   const [tokenUsage, setTokenUsage] = useState<{ used: number; contextWindow: number } | null>(null);
+  const [slashCompletion, setSlashCompletion] = useState<{
+    candidates: string[];
+    selectedIdx: number;
+  } | null>(null);
 
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -103,6 +109,33 @@ export function App(props: AppProps) {
       }
     })();
   }, [props.client, props.sessionID]);
+
+  // Slash-completion: subscribe to editor changes and recompute overlay state
+  useEffect(() => {
+    const recompute = () => {
+      const lines = editor.getLines();
+      const row = editor.getRow();
+      const firstLine = lines[0] ?? "";
+      if (row !== 0 || !firstLine.startsWith("/")) {
+        setSlashCompletion(null);
+        return;
+      }
+      const token = firstLine.split(/\s/)[0];
+      const all = expandCommands();
+      const filtered = all.filter(c => c.startsWith(token));
+      if (firstLine.includes(" ") && filtered.length === 1 && filtered[0] === token) {
+        setSlashCompletion(null);
+        return;
+      }
+      setSlashCompletion(prev => ({
+        candidates: filtered,
+        selectedIdx: prev ? Math.min(prev.selectedIdx, Math.max(0, filtered.length - 1)) : 0,
+      }));
+    };
+    editor.on("changed", recompute);
+    recompute();
+    return () => editor.off("changed", recompute);
+  }, [editor]);
 
   // SSE loop: thin translation layer — all rendering delegated to renderer.
   useEffect(() => {
@@ -311,6 +344,14 @@ export function App(props: AppProps) {
       }
       return;
     }
+    // /help — list all known slash commands
+    const helpResult = parseHelpCommand(text);
+    if (helpResult.handled) {
+      renderer.commitUserInput(text);
+      const lines = (helpResult.reply ?? "").split("\n");
+      for (const line of lines) renderer.commitSystemMessage(line);
+      return;
+    }
     // /show — output gate status
     const showResult = parseShowCommand(text, renderer);
     if (showResult.handled) {
@@ -371,6 +412,35 @@ export function App(props: AppProps) {
     setModelPicker(null);
   }, []);
 
+  const handleSlashSelect = useCallback((candidate: string) => {
+    editor.loadText(candidate + " ");
+    setSlashCompletion(null);
+  }, [editor]);
+
+  const handleSlashCancel = useCallback(() => {
+    setSlashCompletion(null);
+  }, []);
+
+  const handleSlashMoveUp = useCallback(() => {
+    setSlashCompletion(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        selectedIdx: Math.max(0, prev.selectedIdx - 1),
+      };
+    });
+  }, []);
+
+  const handleSlashMoveDown = useCallback(() => {
+    setSlashCompletion(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        selectedIdx: Math.min(prev.candidates.length - 1, prev.selectedIdx + 1),
+      };
+    });
+  }, []);
+
   return (
     <>
       <Static items={committed}>
@@ -389,10 +459,20 @@ export function App(props: AppProps) {
           onCancel={handleModelCancel}
         />
       )}
+      {slashCompletion && !permission && !question && !modelPicker && (
+        <SlashCompletionOverlay
+          candidates={slashCompletion.candidates}
+          selectedIdx={slashCompletion.selectedIdx}
+          onSelect={handleSlashSelect}
+          onCancel={handleSlashCancel}
+          onMoveUp={handleSlashMoveUp}
+          onMoveDown={handleSlashMoveDown}
+        />
+      )}
       <Box flexDirection="column" marginBottom={2}>
         <SubprocessStatus thinking={procTimes.thinking} tools={procTimes.tools} />
         <Rule title={sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question || !!modelPicker} onSubmit={handleSubmit} />
+        <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question || !!modelPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} />
         <Rule width={w} />
         <StatusLine
           modelLabel={
