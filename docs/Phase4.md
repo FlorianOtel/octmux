@@ -39,7 +39,7 @@ When finishing a phase:
 ### 2026-05-25--14-11 — Phase 4.5: /show + /<key>-output slash commands on 4.4.3+4.4.4 foundation
 
 **Implemented by:** Claude Code (Claude Opus 4.7) — 2026-05-25--14-11
-**Commit(s):** `<pending>`
+**Commit(s):** `25c644a`
 
 **What changed:**
 
@@ -181,7 +181,7 @@ Refactored `/show`, `/thinking`, and `/tools` commands to unify visibility toggl
 - `src/commands.ts` — replaced `parseShowCommand()` with `handleShowCommand()` and `handleToggleCommand()`; removed import of `Visibility` (no longer needed directly).
 - `src/app.tsx` — updated import to use `handleShowCommand`, `handleToggleCommand`; replaced `/show` dispatch block with the two new function calls.
 
-> **Status (2026-05-25): DEPRECATED — superseded by Phase 4.5.** This first attempt failed because tmux window (re)creation was not re-entry safe; the load-bearing preparation was subsequently delivered in **Phase 4.4.3** (`1a4523c` — re-entry safety + `outputEnabled` gate) and **Phase 4.4.4** (`ad60b1c` — async background liveness refresh). The user-facing commands originally scoped here shipped in **Phase 4.5** (`<pending>` — see that entry for the authoritative description). This entry is retained as historical record of the failed first attempt.
+> **Status (2026-05-25): DEPRECATED — superseded by Phase 4.5.** This first attempt failed because tmux window (re)creation was not re-entry safe; the load-bearing preparation was subsequently delivered in **Phase 4.4.3** (`1a4523c` — re-entry safety + `outputEnabled` gate) and **Phase 4.4.4** (`ad60b1c` — async background liveness refresh). The user-facing commands originally scoped here shipped in **Phase 4.5** (`25c644a` — see that entry for the authoritative description). This entry is retained as historical record of the failed first attempt.
 
 ---
 
