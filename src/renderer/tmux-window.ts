@@ -74,6 +74,17 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     // Window / FIFO lifecycle is owned exclusively by _ensureWindow, invoked
     // exclusively from beginBlock (Phase 4.4.3 load-bearing path).
     this._outputEnabled.set(key, on);
+    // Phase 4.5.2 — kick a non-blocking liveness-cache refresh on toggle-on.
+    // During the gate-off period, no beginBlock fires _ensureWindow, so the
+    // _liveIds cache (Phase 4.4.4) can become arbitrarily stale — if the
+    // operator killed the side window during gate-off, the next block-start
+    // after toggle-on would write to a dead FIFO (block 1 lost). The refresh
+    // here lands ~50 ms later, well before the operator finishes typing the
+    // next prompt in the typical case, so the next _ensureWindow reads fresh
+    // cache and recreates if needed. No window/FIFO/block effects — only an
+    // internal cache update. See docs/Phase4.md §Phase 4.5.2 for the full
+    // rationale and the Option B alternative (force-sync-probe via flag).
+    if (on) this._refreshLiveIdsAsync();
   }
 
   /**

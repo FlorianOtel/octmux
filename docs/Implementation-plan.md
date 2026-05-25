@@ -3,7 +3,7 @@ title: "octmux — Implementation Plan"
 created_at: 2026-05-18--21-58
 created_by: Claude Code (Claude Sonnet 4.6 1M)
 updated_by: Claude Code (Claude Opus 4.7)
-updated_at: 2026-05-25--19-10
+updated_at: 2026-05-25--20-59
 context: >
   octmux is a text-only barebones REPL UI for OpenCode that mimics the Claude
   Code CLI feel: text REPL, one bottom status line, Emacs-style line edits,
@@ -574,3 +574,26 @@ When finishing a phase:
    YYYY-MM-DD--HH-MM`.
 3. Refresh `updated_by` and `updated_at` in the frontmatter of all docs touched.
 4. Commit with `feat(octmux): Phase N — <short title>`.
+
+## Open questions (to revisit after further operator testing)
+
+This section is a short index of design decisions made conditionally — i.e.
+the chosen approach is the smallest viable fix, but an alternative is
+already specified and held in reserve in case operator testing reveals the
+chosen approach is insufficient. Each entry is one line plus a pointer to
+the full design rationale in the relevant per-phase log.
+
+1. **Toggle-on liveness-cache refresh (Phase 4.5.2):** active implementation
+   is **Option A** — a non-blocking `_refreshLiveIdsAsync()` kick inside
+   `TmuxWindowRenderer.setOutputEnabled` on `on=true`. Recovers block 1
+   after toggle-on in the typical operator-timing case (~50 ms refresh vs.
+   multi-second prompt typing). Race window survives for sub-50ms
+   toggle-then-submit timing (rare for humans, common for scripted tests).
+   **Option B** — a `_forcedProbeKeys: Set<string>` flag plus a one-time
+   synchronous `tmux list-windows` probe at the next `_ensureWindow` for
+   that key — provides 100% reliable block 1 recovery at the cost of a
+   single Phase 4.4.3-style burst-pattern moment for that one block.
+   Option B is fully specified (field declaration, both call-site snippets,
+   compatibility argument) and additive on top of Option A. Promote A→A+B
+   if operator testing shows real block 1 loss in normal workflows. See
+   `docs/Phase4.md` §Phase 4.5.2 for the complete design.
