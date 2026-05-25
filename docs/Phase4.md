@@ -84,8 +84,8 @@ When finishing a phase:
 
 ### 2026-05-25--19-43 — Phase 4.5.1: Hotfix — revert eager window creation in setOutputEnabled + codify pure-gate contract for all current/future toggles
 
-**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent) — 2026-05-25--19-43
-**Commit(s):** `<pending>`
+**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent dispatched by Claude Opus 4.7) — 2026-05-25--19-43
+**Commit(s):** `0a2aa07`
 
 **What changed:**
 
