@@ -70,13 +70,10 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   }
 
   setOutputEnabled(key: string, on: boolean): void {
+    // Pure gate — see src/renderer/output-keys.ts for the full contract.
+    // Window / FIFO lifecycle is owned exclusively by _ensureWindow, invoked
+    // exclusively from beginBlock (Phase 4.4.3 load-bearing path).
     this._outputEnabled.set(key, on);
-    // Eager window creation when toggling ON so the operator sees the side
-    // window appear immediately rather than waiting for the next block-start.
-    // Guarded on _sessionLabel being set (i.e., setup() has completed).
-    if (on && this._sessionLabel) {
-      this._ensureWindow(key);
-    }
   }
 
   /**

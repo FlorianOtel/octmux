@@ -1,6 +1,43 @@
 import type { Role } from "../blocks.ts";
 
-// Maps each output role to the output gate key it belongs to.
+// Output-gate registry — single source of truth for which streaming block
+// classes route to dedicated tmux side windows (--multi-window mode) or get
+// inline-rendered (--single mode), and which gate keys the operator can
+// control via /<key>-output [on|off].
+//
+// CONTRACT — read before adding a new key (e.g. "subagent"):
+//
+// 1. To add a new streaming block class, add ONE line to OUTPUT_KEY mapping
+//    its Role to a gate key (e.g. `subagent: "subagent"`). That single line
+//    automatically wires up:
+//      - the /<key>-output [on|off] slash command (parseBlockOutputCommand
+//        validates against OUTPUT_KEYS),
+//      - the /show status line,
+//      - the /help listing (via the COMMANDS registry dynamic expander),
+//      - the live slash-completion overlay,
+//      - the gate-default-true initialization in both renderers' constructors.
+//
+// 2. All toggles inherit PURE-GATE semantics:
+//      - setOutputEnabled(key, on) sets the gate Map entry and does NOTHING
+//        else. It MUST NOT call _ensureWindow, spawn windows, open FIFOs,
+//        emit events, or have any other side effect.
+//      - Window / FIFO / streaming lifecycle is owned EXCLUSIVELY by
+//        _ensureWindow, invoked EXCLUSIVELY from beginBlock (the Phase 4.4.3
+//        load-bearing path). Re-entry safety and async liveness caching
+//        (Phase 4.4.4) live there.
+//      - When the gate is off, beginBlock/appendToBlock/endBlock early-exit
+//        AFTER registering partID in _openBlocks (so a later toggle-on flips
+//        seamlessly with no lost block bookkeeping).
+//
+// 3. WHY this invariant exists: Phase 4.5 (commit 25c644a) tried adding an
+//    eager _ensureWindow call inside setOutputEnabled so the side window
+//    would appear immediately on /<key>-output on. That eager call interacted
+//    badly with the Phase 4.4.4 async liveness cache and broke streaming to
+//    the re-created window. The behavior was reverted in Phase 4.5.1; see
+//    docs/Phase4.md for the full post-mortem. The lazy-on-block-start UX
+//    (window appears on the next matching block, not on toggle) is the
+//    accepted trade-off.
+//
 // tool-call and tool-result share one "tools" gate so the full
 // call → result sequence can be toggled together.
 export const OUTPUT_KEY: Partial<Record<Role, string>> = {

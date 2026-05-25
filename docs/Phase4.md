@@ -3,13 +3,57 @@ title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Opus 4.7)
-updated_at: 2026-05-25--17-10
+updated_at: 2026-05-25--19-43
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
   the complete planning and implementation logs for Phase 4. Phase 5 work
   (/help command, live slash-completion overlay, input highlighting) continues
   in docs/Phase5.md as of 2026-05-25--17-10.
+---
+
+# Read first when adding a streaming output toggle (e.g. /subagent-output)
+
+This section is the contract for adding a new per-block-class streaming output toggle on top of the renderer machinery built in Phase 4.4.3 + 4.4.4 + 4.5 + 4.5.1. Read it before adding a new gate key (current keys: `thinking`, `tools`; planned: `subagent`).
+
+## The pure-gate invariant
+
+`TmuxWindowRenderer.setOutputEnabled(key, on)` and `StdoutRenderer.setOutputEnabled(key, on)` are **pure setters** on a `Map<string, boolean>`. They mutate the gate entry and do nothing else. No window creation. No FIFO open/close. No tmux subprocess. No events emitted.
+
+Window / FIFO / streaming lifecycle is owned exclusively by `TmuxWindowRenderer._ensureWindow(key)`, invoked exclusively from `beginBlock` (the Phase 4.4.3 load-bearing path). Re-entry safety (detect manually-killed windows and recreate) and the Phase 4.4.4 async liveness cache (`_liveIds`) live there.
+
+When the gate is off:
+- `beginBlock` registers partID in `_openBlocks` THEN early-exits before `_ensureWindow`. This is intentional — it lets a mid-block toggle-on flip seamlessly with no lost block bookkeeping.
+- `appendToBlock` and `endBlock` early-exit after the gate check, writing nothing.
+
+When the gate flips back on, the next matching block-start runs `_ensureWindow` and the window materializes on its own.
+
+This invariant is uniform across both renderers and across all gate keys, current and future. Future toggles (`/subagent-output`, etc.) inherit it for free.
+
+## How to add a new toggle
+
+The single source of truth for which roles route to which gate is `src/renderer/output-keys.ts`. To add e.g. a `subagent` toggle:
+
+1. Add `subagent` to `Role` in `src/blocks.ts` (if not already a role) and ensure the upstream event source (currently `src/events.ts`) emits `block-start` / `appendToBlock` / `block-end` for it.
+2. Add one line to `OUTPUT_KEY` in `src/renderer/output-keys.ts`: `subagent: "subagent"`.
+3. That's it. The rest auto-wires:
+   - `parseBlockOutputCommand` validates against `OUTPUT_KEYS` — `/subagent-output [on|off]` works immediately.
+   - `parseShowCommand` iterates `OUTPUT_KEYS` — `/show` lists it immediately.
+   - `command-registry.ts`'s `/<key>-output` dynamic entry expands via `OUTPUT_KEYS.map(...)` — `/help` and the completion overlay show it.
+   - Both renderers' constructors iterate `OUTPUT_KEYS` to default the gate to true.
+
+No code changes in `commands.ts`, `app.tsx`, `tmux-window.ts`, `stdout.ts`, or `command-registry.ts` are required.
+
+## Why the eager-creation experiment was rejected
+
+Phase 4.5 (commit `25c644a`) tried adding an eager `_ensureWindow` call inside `setOutputEnabled` so the side window would appear immediately on `/<key>-output on`. The operator reported that the window appeared re-created but no content streamed to it, and `dispose` printed `can't find window: @17` to stderr at session end.
+
+The eager call broke the Phase 4.4.3 invariant in two ways:
+1. **Stale-cache hit** — `_liveIds` reports the cached ID alive when it's actually dead; the eager call returns early without recreating; the map still points at the dead ID, and no block-start has fired to trigger lazy recreation; later `dispose` tries to kill the dead window.
+2. **Cache-miss recreation** — runs the cleanup-then-fresh-create sequence outside any active streaming context; subsequent block-start may not race favorably with the file-handle / tail-pipe lifecycle the eager call set up.
+
+Phase 4.5.1 reverted the eager call. The lazy-on-block-start UX (window appears on the next matching block, not on toggle) is the accepted trade-off. Future toggle implementers MUST NOT re-introduce eager window creation in `setOutputEnabled` — doing so re-introduces the same regression class for every gate key.
+
 ---
 
 # Phase pre-implementation checklist - Read this first
@@ -37,6 +81,40 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-25--19-43 — Phase 4.5.1: Hotfix — revert eager window creation in setOutputEnabled + codify pure-gate contract for all current/future toggles
+
+**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent) — 2026-05-25--19-43
+**Commit(s):** `<pending>`
+
+**What changed:**
+
+Removed the eager `_ensureWindow(key)` call from `TmuxWindowRenderer.setOutputEnabled` (introduced in Phase 4.5, commit `25c644a`). `setOutputEnabled` is now a pure setter on the `_outputEnabled` Map for all gate keys in `OUTPUT_KEYS` — current (`thinking`, `tools`) and future (e.g. `subagent`). Window lifecycle reverts entirely to the Phase 4.4.3 + 4.4.4 lazy-on-block-start mechanism via `beginBlock` → `_ensureWindow`.
+
+Added top-of-file CONTRACT comment block to `src/renderer/output-keys.ts` codifying the pure-gate invariant at the file every future toggle implementer will edit. Added new top-of-doc "Read first when adding a streaming output toggle (e.g. /subagent-output)" section to `docs/Phase4.md` with the full contract in prose form, including the worked example of adding a hypothetical `/subagent-output` toggle and a post-mortem of why the eager-creation experiment was rejected.
+
+**Why the fix:**
+
+Operator-reported regression in `--multi-window` mode: after `/thinking-output off` then `/thinking-output on`, the side window appeared re-created but no content streamed to it, and `dispose` printed `can't find window: @17` to stderr at session end. Root cause: the eager `_ensureWindow` call interacted with the Phase 4.4.4 async liveness cache in two ways the Phase 4.4.3 invariant never anticipated — stale-cache hit (leaves dead window ID in map; later `dispose` errors) and cache-miss recreation (runs cleanup-then-fresh-create outside any active streaming context, leaving the renderer in a state the rest of the code wasn't designed for).
+
+Fix scope is uniform across all toggles: `setOutputEnabled` becomes a pure Map setter for every gate key, present and future. The contract is codified in two surfaces (code comment in `output-keys.ts` + prose section in `Phase4.md`) so future toggle implementers cannot miss it.
+
+**Behavioral consequences (explicit trade-off):**
+
+- `/<key>-output on` with no prior content: no window appears immediately. The window materializes on the next matching block-start.
+- `/<key>-output on` with side window still alive: gate flips, next `appendToBlock` writes to the existing window.
+- `/<key>-output on` after operator manually killed the window: identical to Phase 4.4.3 / 4.4.4 behavior — next block-start runs `_ensureWindow`, async cache refresh from a prior block invalidates the stale ID, recreation happens, stream resumes. Phase 4.4.4 trade-off ("at most one block of deltas may write to a dead FIFO") preserved.
+- `/<key>-output off`: no window management, no streaming.
+- `/show` reports live gate state, unaffected.
+
+**Files modified:**
+- `src/renderer/tmux-window.ts` (revert eager block in setOutputEnabled)
+- `src/renderer/output-keys.ts` (add CONTRACT comment)
+- `docs/Phase4.md` (new "Read first" top-of-doc section + Phase 4.5.1 entry + Phase 4.5 forward-pointer)
+
+**Verified:** pending operator smoke test.
+
+---
 
 ### 2026-05-25--14-11 — Phase 4.5: /show + /<key>-output slash commands on 4.4.3+4.4.4 foundation
 
@@ -66,7 +144,9 @@ Gate is uniform across both `--single` and `--multi-window` mode semantics. Per-
 - `src/commands.ts`
 - `src/app.tsx`
 
-**Verified (operator, 2026-05-25):** `/show`, `/thinking-output [on|off]`, `/tools-output [on|off]` all behave as designed in both `--single` and `--multi-window` modes. Toggle reply transition format (`prev->new`, including no-op `on->on` / `off->off`) confirmed. Eager window creation on toggle-on confirmed — side window appears immediately rather than waiting for next block-start. Unknown `/<key>-output` returns the discoverable error.
+**Verified (operator, 2026-05-25):** `/show`, `/thinking-output [on|off]`, `/tools-output [on|off]` all behave as designed in both `--single` and `--multi-window` modes. Toggle reply transition format (`prev->new`, including no-op `on->on` / `off->off`) confirmed. Unknown `/<key>-output` returns the discoverable error.
+
+> **Note (Phase 4.5.1, see entry above):** the eager window creation on toggle-on introduced in this entry caused a streaming regression in `--multi-window` mode (window re-created but no content streamed; `dispose` printed `can't find window: @17`) and was reverted in Phase 4.5.1. The trade-off: side windows no longer appear immediately on `/<key>-output on`; they appear on the next matching block-start (Phase 4.4.3 lazy creation). Phase 4.5's other deliverables (`/show`, `/<key>-output` toggle/query/transition-reply, `StdoutRenderer` gate uniformity, shared `output-keys.ts` registry) remain in effect and are the foundation that all future `/<key>-output` toggles inherit from.
 
 ---
 
@@ -113,6 +193,8 @@ Added re-entry safety to `TmuxWindowRenderer` via a liveness check in `_ensureWi
 - `src/renderer/types.ts` — added two methods to Renderer interface
 - `src/renderer/stdout.ts` — no-op implementations
 - `src/renderer/tmux-window.ts` — _outputEnabled map, public methods, hardened _ensureWindow with liveness check, gate checks in beginBlock/appendToBlock/endBlock
+
+> **Forward-pointer (Phase 4.5 + Phase 4.5.1):** this entry's `_outputEnabled` map + `isOutputEnabled` / `setOutputEnabled` methods are the load-bearing foundation that the Phase 4.5 user-facing `/<key>-output [on|off]` slash commands (commit `25c644a`) wire into. Phase 4.5 also added an eager `_ensureWindow` call inside `setOutputEnabled` to make the side window appear immediately on toggle-on; that experiment regressed streaming in `--multi-window` mode and was reverted by **Phase 4.5.1** (see top of log), which restored the strict invariant established here: `setOutputEnabled` is a pure Map setter and window lifecycle belongs exclusively to `_ensureWindow` invoked from `beginBlock`. The Phase 4.5.1 docs include a "Read first when adding a streaming output toggle" section at the top of this file plus a CONTRACT comment block in `src/renderer/output-keys.ts` codifying the invariant for all current and future toggles (`thinking`, `tools`, future `subagent`, etc.).
 
 ---
 
