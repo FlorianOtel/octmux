@@ -172,7 +172,7 @@ contracts above still hold. Update it if you change them.
 ### 2026-05-25--19-40 — Phase 5 hotfix — delay overlay until first char after `/`
 
 **Implemented by:** Claude Code (Claude Opus 4.7 1M) — 2026-05-25--19-40
-**Commit(s):** `<pending>`
+**Commit(s):** `2325dec`
 
 **What changed:** Buffer-watch effect in `src/app.tsx` now also bails out when `lines[0].length < 2` (i.e. the buffer is exactly `/`). Bare `/` no longer pops the overlay with the full unfiltered command list — operator must type at least one character past the slash to start narrowing. All other overlay logic (Tab/Enter/Esc, arrow nav, exact-match close-on-space, highlight) unchanged. Inline description in §Design choices and the "Read first" section's row-0 / single-line constraint were updated accordingly.
 
