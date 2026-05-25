@@ -3,6 +3,7 @@ import type { Block, Role } from "../blocks.ts";
 import { formatLine } from "../blocks.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer } from "./types.ts";
+import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
 
 export type CommittedLine = { id: number; role: Role; ansi: string };
 
@@ -16,10 +17,14 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
   private _activePart: { partID: string; role: Role } | null = null;
   private _openBlocks = new Map<string, Role>();
   private _nextId = 0;
+  private _outputEnabled = new Map<string, boolean>();
 
   constructor(visibility: Visibility) {
     super();
     this.visibility = visibility;
+    for (const key of OUTPUT_KEYS) {
+      this._outputEnabled.set(key, true);
+    }
   }
 
   private _flushTail(): void {
@@ -37,6 +42,8 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
 
   beginBlock(partID: string, role: Role, _meta?: Block["meta"]): void {
     if (!this.visibility.isVisible(role)) return;
+    const _outKey = OUTPUT_KEY[role];
+    if (_outKey && !this.isOutputEnabled(_outKey)) return;
     this._openBlocks.set(partID, role);
   }
 
@@ -47,6 +54,8 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
       this.visibility.increment(role);
       return;
     }
+    const _outKey = OUTPUT_KEY[role];
+    if (_outKey && !this.isOutputEnabled(_outKey)) return;
     // Block transition: flush prior tail + 2-line visual separator.
     // NOTE for 3U.5: TmuxPaneRenderer must NOT forward these blank separator lines to FIFOs.
     if (this._activePart && this._activePart.partID !== partID) {
@@ -76,6 +85,11 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
 
   endBlock(partID: string, _status?: "ok" | "error"): void {
     const role = this._openBlocks.get(partID);
+    const _outKey = role ? OUTPUT_KEY[role] : undefined;
+    if (_outKey && !this.isOutputEnabled(_outKey)) {
+      this._openBlocks.delete(partID);
+      return;
+    }
     if (role && this.visibility.isVisible(role) && this._activePart?.partID === partID) {
       this._flushTail();
     }
@@ -125,9 +139,9 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
 
   rename(_newLabel: string): void { /* no-op for stdout backend */ }
 
-  isOutputEnabled(_key: string): boolean { return true; }
+  isOutputEnabled(key: string): boolean { return this._outputEnabled.get(key) ?? true; }
 
-  setOutputEnabled(_key: string, _on: boolean): void { /* no-op for stdout backend */ }
+  setOutputEnabled(key: string, on: boolean): void { this._outputEnabled.set(key, on); }
 
   getCommitted(): CommittedLine[] { return this._committed; }
   getTail(): { role: Role; text: string } | null { return this._tail; }

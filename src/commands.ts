@@ -1,33 +1,43 @@
-import type { Visibility } from "./renderer/visibility.ts";
-import type { Role } from "./blocks.ts";
+import { OUTPUT_KEYS } from "./renderer/output-keys.ts";
 
-// Moved from renderer/visibility.ts — logic unchanged.
+const GREEN = "\x1b[32m";
+const RED   = "\x1b[31m";
+const RESET = "\x1b[0m";
+
+// Display output gate status for all keys.
 export function parseShowCommand(
   input: string,
-  vis: Visibility,
+  renderer: { isOutputEnabled(k: string): boolean },
 ): { handled: boolean; reply?: string } {
-  const m = input.trim().match(/^\/show(?:\s+(\S+))?(?:\s+(on|off))?$/);
+  const m = input.trim().match(/^\/show\s*$/);
   if (!m) return { handled: false };
-  const [, what, action] = m;
-  if (!what) {
-    const rolesOff = (["thinking", "tool-call", "tool-result"] as Role[]).filter(
-      r => !vis.isVisible(r),
-    );
-    return {
-      handled: true,
-      reply: rolesOff.length === 0 ? "all visible" : `hidden: ${rolesOff.join(", ")}`,
-    };
+  const parts: string[] = [];
+  for (const key of OUTPUT_KEYS) {
+    const isOn = renderer.isOutputEnabled(key);
+    parts.push(isOn ? `${GREEN}${key}:on${RESET}` : `${RED}${key}:off${RESET}`);
   }
-  const role: Role | null =
-    what === "thinking"    ? "thinking"    :
-    what === "tools"       ? "tool-call"   :
-    what === "tool-call"   ? "tool-call"   :
-    what === "tool-result" ? "tool-result" :
-    null;
-  if (!role || !action) return { handled: false };
-  vis.set(role, action === "on");
-  if (what === "tools") vis.set("tool-result", action === "on");
-  return { handled: true, reply: `${what} ${action}` };
+  return { handled: true, reply: "output gates — " + parts.join(" | ") };
+}
+
+// Toggle or query output gate state.
+export function parseBlockOutputCommand(
+  input: string,
+  renderer: { isOutputEnabled(k: string): boolean; setOutputEnabled(k: string, on: boolean): void },
+): { handled: boolean; reply?: string } {
+  const m = input.trim().match(/^\/(\w+)-output(?:\s+(on|off))?\s*$/);
+  if (!m) return { handled: false };
+  const [, key, arg] = m;
+  if (!OUTPUT_KEYS.includes(key)) {
+    return { handled: true, reply: `unknown output key "${key}" — available: ${OUTPUT_KEYS.join(", ")}` };
+  }
+  if (!arg) {
+    const isOn = renderer.isOutputEnabled(key);
+    return { handled: true, reply: `${key}-output is ${isOn ? "on" : "off"}` };
+  }
+  const prev = renderer.isOutputEnabled(key) ? "on" : "off";
+  const on = arg === "on";
+  renderer.setOutputEnabled(key, on);
+  return { handled: true, reply: `${key}-output ${prev}->${arg}` };
 }
 
 export function parseExitCommand(

@@ -6,17 +6,9 @@ import { makeFifo, type FifoHandle } from "./fifo.ts";
 import { StdoutRenderer, type CommittedLine } from "./stdout.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer } from "./types.ts";
+import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
 
-// Maps each side role to the window key it streams into.
-// tool-call and tool-result share one "tools" window so the full
-// call → result sequence is visible in a single scrollback buffer.
-const WINDOW_KEY: Partial<Record<Role, string>> = {
-  thinking:      "thinking",
-  "tool-call":   "tools",
-  "tool-result": "tools",
-};
-
-const SIDE_ROLES: Role[] = Object.keys(WINDOW_KEY) as Role[];
+const SIDE_ROLES: Role[] = Object.keys(OUTPUT_KEY) as Role[];
 
 export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   readonly kind = "tmux-window" as const;
@@ -50,7 +42,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     this._main = new StdoutRenderer(visibility);
     this._main.on("changed", () => this.emit("changed"));
     // Register every window key with output enabled by default.
-    for (const key of new Set(Object.values(WINDOW_KEY))) {
+    for (const key of OUTPUT_KEYS) {
       this._outputEnabled.set(key, true);
     }
   }
@@ -79,6 +71,12 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
 
   setOutputEnabled(key: string, on: boolean): void {
     this._outputEnabled.set(key, on);
+    // Eager window creation when toggling ON so the operator sees the side
+    // window appear immediately rather than waiting for the next block-start.
+    // Guarded on _sessionLabel being set (i.e., setup() has completed).
+    if (on && this._sessionLabel) {
+      this._ensureWindow(key);
+    }
   }
 
   /**
@@ -117,7 +115,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
       if (stale) stale.close();
       this._fifos.delete(windowKey);
       this._windowIds.delete(windowKey);
-      for (const [role, key] of Object.entries(WINDOW_KEY) as [Role, string][]) {
+      for (const [role, key] of Object.entries(OUTPUT_KEY) as [Role, string][]) {
         if (key === windowKey) this._lineBufs.delete(role as Role);
       }
       // Fall through to fresh creation.
@@ -145,7 +143,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   beginBlock(partID: string, role: Role, meta?: Block["meta"]): void {
     if (!this.visibility.isVisible(role)) return;
     this._openBlocks.set(partID, role);
-    const windowKey = WINDOW_KEY[role];
+    const windowKey = OUTPUT_KEY[role];
     if (windowKey) {
       if (!this.isOutputEnabled(windowKey)) return;
       this._ensureWindow(windowKey);
@@ -161,7 +159,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
       this.visibility.increment(role);
       return;
     }
-    const windowKey = WINDOW_KEY[role];
+    const windowKey = OUTPUT_KEY[role];
     if (windowKey) {
       if (!this.isOutputEnabled(windowKey)) return;
       const fifo = this._fifos.get(windowKey);
@@ -181,7 +179,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
 
   endBlock(partID: string, status?: "ok" | "error"): void {
     const role = this._openBlocks.get(partID);
-    const windowKey = role ? WINDOW_KEY[role] : undefined;
+    const windowKey = role ? OUTPUT_KEY[role] : undefined;
     if (role && windowKey) {
       if (this.isOutputEnabled(windowKey)) {
         const fifo = this._fifos.get(windowKey);

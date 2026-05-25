@@ -3,7 +3,7 @@ title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Opus 4.7)
-updated_at: 2026-05-23--23-35
+updated_at: 2026-05-25--16-01
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -35,6 +35,38 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-25--14-11 — Phase 4.5: /show + /<key>-output slash commands on 4.4.3+4.4.4 foundation
+
+**Implemented by:** Claude Code (Claude Opus 4.7) — 2026-05-25--14-11
+**Commit(s):** `<pending>`
+
+**What changed:**
+
+New shared module `src/renderer/output-keys.ts` exports `OUTPUT_KEY` (Role → output-key mapping) and `OUTPUT_KEYS` (deduped key list). This is the single source of truth for both renderers + commands.ts.
+
+`TmuxWindowRenderer` migrated to import `OUTPUT_KEY`/`OUTPUT_KEYS` from the shared module (removed local `WINDOW_KEY`). Behaviour-preserving — the constructor and gate machinery still operate as in Phase 4.4.3+4.4.4. Gate checks in `beginBlock`/`appendToBlock`/`endBlock` remain uniform. `setOutputEnabled(key, true)` now eagerly calls `_ensureWindow(key)` so the side window appears the moment the gate is flipped on — fixes the lazy-creation asymmetry where toggling on after toggling off (or before any content has streamed) would leave the operator with no visible window until the next block-start.
+
+`StdoutRenderer` upgraded from no-op gate (Phase 4.4.3 placeholder) to real gate: `_outputEnabled: Map<string, boolean>` field, real `isOutputEnabled`/`setOutputEnabled` methods, gate checks in `beginBlock`/`appendToBlock`/`endBlock`. In `--single` mode, `/<key>-output off` now suppresses inline scrollback rendering for that block class.
+
+`commands.ts`: `parseShowCommand` replaced — old visibility-toggle behaviour (with `/show <role> on|off` syntax) is gone. New `/show` (no args) reads renderer state and emits a coloured one-line status (ANSI green for on, red for off, pipe-separated). New `parseBlockOutputCommand` handles `/<key>-output [on|off]` — generic regex captures any key, validates against `OUTPUT_KEYS`, returns discoverable error for unknown keys, reports current state when no arg given (`"<key>-output is <on|off>"`), and on toggle replies with the transition (`"<key>-output prev->new"`, e.g. `on->off`, `off->on`, or no-op forms `on->on` / `off->off`) so the operator always sees the resulting state. ANSI constants `GREEN`/`RED`/`RESET` defined inline. `Visibility` and `Role` imports removed (no longer needed). Other parsers (`parseExitCommand`, `parseRenameCommand`, `parseModelCommand`) unchanged.
+
+`app.tsx`: import line extended with `parseBlockOutputCommand`. Old `/show` dispatch block replaced with new pair (`/show` status + `/<key>-output` toggle/query). Dispatch order unchanged: `/exit`, `/rename`, `/model`, `/show`, `/<key>-output`, default send.
+
+`Visibility` class is left intact — only its slash command was removed. `isVisible(role)` checks in both renderers' `beginBlock`/`appendToBlock` paths continue to run (defaulting to all-visible since no user command can toggle them anymore). Kept as inert internal infrastructure.
+
+Gate is uniform across both `--single` and `--multi-window` mode semantics. Per-renderer mechanism differs (FIFO write suppression in multi-window; `_openBlocks` registration + commit suppression in single) but observable user behaviour is the same.
+
+**Files modified:**
+- `src/renderer/output-keys.ts` (new)
+- `src/renderer/tmux-window.ts`
+- `src/renderer/stdout.ts`
+- `src/commands.ts`
+- `src/app.tsx`
+
+**Verified (operator, 2026-05-25):** `/show`, `/thinking-output [on|off]`, `/tools-output [on|off]` all behave as designed in both `--single` and `--multi-window` modes. Toggle reply transition format (`prev->new`, including no-op `on->on` / `off->off`) confirmed. Eager window creation on toggle-on confirmed — side window appears immediately rather than waiting for next block-start. Unknown `/<key>-output` returns the discoverable error.
+
+---
 
 ### 2026-05-23--23-15 — Phase 4.4.4: async background liveness refresh (eliminate per-block tmux overhead)
 
@@ -149,11 +181,7 @@ Refactored `/show`, `/thinking`, and `/tools` commands to unify visibility toggl
 - `src/commands.ts` — replaced `parseShowCommand()` with `handleShowCommand()` and `handleToggleCommand()`; removed import of `Visibility` (no longer needed directly).
 - `src/app.tsx` — updated import to use `handleShowCommand`, `handleToggleCommand`; replaced `/show` dispatch block with the two new function calls.
 
-> **Status (2026-05-23):** **REVERTED — commit `105b17a` is no longer in the tree.** This implementation caused a regression where side windows were never (re)created at all. Reverted shortly after landing. The intended functionality is being rebuilt in stages:
->
-> - **Phase 4.4.3** (`1a4523c`): re-entry-safe (re)creation + `outputEnabled` gate foundation on `Renderer` interface (`isOutputEnabled`/`setOutputEnabled`).
-> - **Phase 4.4.4** (`ad60b1c`): async background liveness refresh — eliminates per-block tmux subprocess overhead.
-> - **Phase 4.5** (planned): wire `/<block>-output [on|off]` slash commands (`/thinking-output`, `/tools-output`, future `/subagent-output`) and `/show` listing of registered output gates, on top of the 4.4.3 + 4.4.4 boilerplate. This entry is intentionally left in place because Phase 4.5 will recycle its scope/architecture description.
+> **Status (2026-05-25): DEPRECATED — superseded by Phase 4.5.** This first attempt failed because tmux window (re)creation was not re-entry safe; the load-bearing preparation was subsequently delivered in **Phase 4.4.3** (`1a4523c` — re-entry safety + `outputEnabled` gate) and **Phase 4.4.4** (`ad60b1c` — async background liveness refresh). The user-facing commands originally scoped here shipped in **Phase 4.5** (`<pending>` — see that entry for the authoritative description). This entry is retained as historical record of the failed first attempt.
 
 ---
 

@@ -5,7 +5,7 @@ import * as path from "path";
 import { LineEditor } from "./editor.ts";
 import { filterEvent, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
-import { parseShowCommand, parseExitCommand, parseRenameCommand, parseModelCommand } from "./commands.ts";
+import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
@@ -311,11 +311,18 @@ export function App(props: AppProps) {
       }
       return;
     }
-    // /show — visibility toggles (unchanged)
-    const showResult = parseShowCommand(text, renderer.visibility);
+    // /show — output gate status
+    const showResult = parseShowCommand(text, renderer);
     if (showResult.handled) {
       renderer.commitUserInput(text);
       renderer.commitSystemMessage(showResult.reply ?? "");
+      return;
+    }
+    // /<key>-output [on|off] — output gate toggle/query
+    const outputResult = parseBlockOutputCommand(text, renderer);
+    if (outputResult.handled) {
+      renderer.commitUserInput(text);
+      renderer.commitSystemMessage(outputResult.reply ?? "");
       return;
     }
     // Default: send to OpenCode server
