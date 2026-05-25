@@ -54,7 +54,7 @@ The eager call broke the Phase 4.4.3 invariant in two ways:
 
 Phase 4.5.1 reverted the eager call. The lazy-on-block-start UX (window appears on the next matching block, not on toggle) is the accepted trade-off. Future toggle implementers MUST NOT re-introduce eager window creation in `setOutputEnabled` — doing so re-introduces the same regression class for every gate key.
 
-**Phase 4.5.2 follow-up — the one permitted side effect.** Phase 4.5.1's strict invariant exposed a second-order issue: during a long gate-off period, no `beginBlock` fires `_ensureWindow`, so the Phase 4.4.4 `_liveIds` cache never gets refreshed. If the operator killed the side window during gate-off, the next block-start after toggle-on would silently write to a dead FIFO (block 1 lost). Phase 4.5.2 (commit `<pending>`) added a single permitted side effect to `setOutputEnabled`: on `on=true`, kick a non-blocking `_refreshLiveIdsAsync()` so the cache is fresh by the next block-start. Cache mutation only — no window/FIFO/block touched, no blocking I/O. The full pure-gate prohibitions on `_ensureWindow`, window spawning, FIFO open/close, and synchronous tmux subprocesses remain in force. See the Phase 4.5.2 implementation log entry for the design rationale and a fully-specified Option B (force-sync-probe via flag) held in reserve for the rare sub-50ms toggle-then-submit race.
+**Phase 4.5.2 follow-up — the one permitted side effect.** Phase 4.5.1's strict invariant exposed a second-order issue: during a long gate-off period, no `beginBlock` fires `_ensureWindow`, so the Phase 4.4.4 `_liveIds` cache never gets refreshed. If the operator killed the side window during gate-off, the next block-start after toggle-on would silently write to a dead FIFO (block 1 lost). Phase 4.5.2 (commit `bde7d9a`) added a single permitted side effect to `setOutputEnabled`: on `on=true`, kick a non-blocking `_refreshLiveIdsAsync()` so the cache is fresh by the next block-start. Cache mutation only — no window/FIFO/block touched, no blocking I/O. The full pure-gate prohibitions on `_ensureWindow`, window spawning, FIFO open/close, and synchronous tmux subprocesses remain in force. See the Phase 4.5.2 implementation log entry for the design rationale and a fully-specified Option B (force-sync-probe via flag) held in reserve for the rare sub-50ms toggle-then-submit race.
 
 ---
 
@@ -87,7 +87,7 @@ When finishing a phase:
 ### 2026-05-25--20-59 — Phase 4.5.2: Hotfix for Phase 4.5.1 — non-blocking liveness-cache refresh on toggle-on (Option A); Option B held in reserve
 
 **Implemented by:** Claude Code (Claude Opus 4.7 1M) — 2026-05-25--20-59
-**Commit(s):** `<pending>`
+**Commit(s):** `bde7d9a`
 
 **Why this hotfix on top of 4.5.1:**
 
