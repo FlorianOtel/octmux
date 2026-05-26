@@ -2,8 +2,8 @@
 title: "octmux — Phase 6 implementation log"
 created_at: 2026-05-26--14-12
 created_by: Claude Code (Claude Haiku 4.5)
-updated_by: Claude Code (Claude Opus 4.7)
-updated_at: 2026-05-26--17-47
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-05-26--18-41
 context: >
   Implementation log for Phase 6 of octmux: /rag slash command with four modes
   (search, on, off, only), RAG context retrieval from SoHoAI knowledge base,
@@ -108,6 +108,26 @@ The `Role: "rag"` pattern can be replicated for new block types:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-26--18-41 — Superseded by Phase 7
+
+**Status:** SUPERSEDED
+
+The TypeScript `/rag` implementation shipped in Phase 6 (roles `"rag"`, `src/rag.ts`, `ragMode`, `emitRagBlock`, StatusLine chip) has been completely removed and replaced with Phase 7's native opencode markdown command + discovery and forwarding architecture.
+
+**Why the rip-out:**
+1. **Bug:** Phase 6's hardcoded 0.45 score-filter strangled all search hits.
+2. **Structural mismatch:** Client-side RAG state (`ragMode`) conflicted with LLM-mediated mode tracking (the LLM interprets `/rag on` as "auto-search", not the harness).
+
+**Phase 7 fixes both:**
+- Removes all TypeScript RAG plumbing — RAG is now a native markdown command at `~/.config/opencode/commands/rag.md`.
+- LLM sees rag.md instructions and controls mode behavior (no harness state).
+- RAG output routes to the existing `tools` gate (no new window).
+- Generalizes to all future opencode markdown commands via discovery + forwarding.
+
+See `docs/Phase7.md` for the new architecture.
+
+---
 
 ### 2026-05-26--17-47 — hotfix: suppress slash-completion overlay during history navigation
 

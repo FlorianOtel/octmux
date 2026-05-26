@@ -8,12 +8,20 @@ const RESET = "\x1b[0m";
 // List all known slash commands with their usage and descriptions.
 export function parseHelpCommand(
   input: string,
+  opencodeCommands?: Map<string, { name: string; description?: string }>,
 ): { handled: boolean; reply?: string } {
   const m = input.trim().match(/^\/help\s*$/);
   if (!m) return { handled: false };
-  const lines: string[] = ["slash commands:"];
+  const lines: string[] = ["octmux commands:"];
   for (const cmd of COMMANDS) {
     lines.push(`  ${cmd.usage}  — ${cmd.description}`);
+  }
+  if (opencodeCommands && opencodeCommands.size > 0) {
+    lines.push("");
+    lines.push("opencode commands:");
+    for (const [name, cmd] of opencodeCommands) {
+      lines.push(`  /${name}  — ${cmd.description || "(no description)"}`);
+    }
   }
   return { handled: true, reply: lines.join("\n") };
 }
@@ -85,22 +93,3 @@ export function parseModelCommand(
   };
 }
 
-export function parseRagCommand(
-  input: string,
-): { handled: boolean; action?: "search" | "on" | "off" | "only" | "status"; query?: string } {
-  const m = input.trim().match(/^\/rag(?:\s+(search|on|off|only)(?:\s+([\s\S]+))?)?\s*$/);
-  if (!m) return { handled: false };
-  const [, action, query] = m;
-  if (!action) {
-    return { handled: true, action: "status" };
-  }
-  const normalizedAction = action as "search" | "on" | "off" | "only";
-  if (normalizedAction === "search" && !query) {
-    return { handled: true, action: "search", query: undefined };
-  }
-  return {
-    handled: true,
-    action: normalizedAction,
-    query: query ? query.trim() : undefined,
-  };
-}

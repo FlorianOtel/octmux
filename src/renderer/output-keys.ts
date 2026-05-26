@@ -62,7 +62,6 @@ export const OUTPUT_KEY: Partial<Record<Role, string>> = {
   thinking:      "thinking",
   "tool-call":   "tools",
   "tool-result": "tools",
-  rag:           "rag",
 };
 
 // Unique deduped list of all output gate keys.

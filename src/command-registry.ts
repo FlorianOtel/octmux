@@ -30,12 +30,6 @@ export const COMMANDS: CommandSpec[] = [
     description: "show output gate status for thinking/tools",
   },
   {
-    name: "/rag",
-    usage: "/rag <search <query> | on | off | only>",
-    description: "RAG retrieval from SoHoAI knowledge base (modes: search, on, off, only)",
-    dynamic: () => ["/rag search", "/rag on", "/rag off", "/rag only"],
-  },
-  {
     name: "/<key>-output",
     usage: "/<key>-output [on|off]",
     description: "toggle or query the output gate for a block type (e.g. thinking, tools)",
@@ -51,7 +45,7 @@ export const COMMANDS: CommandSpec[] = [
 // Resolves dynamic entries to concrete completion candidates,
 // replaces static entries with their `name` field directly.
 // Result: flat string[] of all completable slash-tokens.
-export function expandCommands(): string[] {
+export function expandCommands(extraCandidates?: string[]): string[] {
   const result: string[] = [];
   for (const cmd of COMMANDS) {
     if (cmd.dynamic) {
@@ -59,6 +53,9 @@ export function expandCommands(): string[] {
     } else {
       result.push(cmd.name);
     }
+  }
+  if (extraCandidates && extraCandidates.length > 0) {
+    result.push(...extraCandidates);
   }
   return result;
 }
