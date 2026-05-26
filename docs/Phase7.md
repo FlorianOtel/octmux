@@ -93,7 +93,7 @@ Only `name` and `description` fields are used for display. The live `GET /comman
 
 ### 2026-05-26--18-41 — Phase 7 implementation
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-26--18-41
-**Commit(s):** (to be filled in Step 15)
+**Commit(s):** `eef35de`
 
 **Summary of changes:**
 - **File system:** Installed `~/.config/opencode/commands/rag.md` (copy of `~/.claude/commands/rag.md`). Restarted systemd `opencode-server` unit; verified rag command present in `GET /command` response.
