@@ -2,12 +2,16 @@
 title: "octmux — Phase 6 implementation log"
 created_at: 2026-05-26--14-12
 created_by: Claude Code (Claude Haiku 4.5)
+updated_by: Claude Code (Claude Opus 4.7)
+updated_at: 2026-05-26--17-47
 context: >
   Implementation log for Phase 6 of octmux: /rag slash command with four modes
   (search, on, off, only), RAG context retrieval from SoHoAI knowledge base,
   auto-search interception on prompts when rag mode is active, single-fetch
   refactor for efficiency, streamed rag block rendering, and StatusLine chip
-  display showing active rag mode.
+  display showing active rag mode. Hotfix 6.1: suppress the slash-completion
+  overlay during history navigation so ↑/↓ keep scrolling past entries instead
+  of being captured by the popup when a past entry begins with "/".
 ---
 
 # Phase 6: /rag slash command with search/on/off/only modes and auto-search interception
@@ -104,6 +108,53 @@ The `Role: "rag"` pattern can be replicated for new block types:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-26--17-47 — hotfix: suppress slash-completion overlay during history navigation
+
+**Implemented by:** Claude Code (Claude Opus 4.7) — 2026-05-26--17-47
+**Commit(s):** `<pending>`
+
+**What changed:**
+
+Regression reported after Phase 6 shipped: pressing ↑ to scroll through input
+history would trap the user as soon as the recalled entry began with a `/`. The
+slash-completion overlay opened on the recalled `/command` text, captured
+subsequent ↑/↓ keys (cycling its `selectedIdx`), and the user could not keep
+scrolling. The same trap fired for any past `/<known-command>` — `/rag`,
+`/model`, `/help`, `/rename`, etc.
+
+**Root cause:** `LineEditor.histPrev/histNext` call `_loadHistory()`, which
+emits `"changed"`. The slash-completion `recompute` in `app.tsx` subscribes to
+that event and unconditionally re-opened the overlay when the first line
+started with `/`. Once the overlay was mounted, `PromptInput.overlayOpen` was
+true, and the arrow-key arms in `keybindings.ts` early-exited — so ↑/↓ no
+longer reached `histPrev/histNext`. The overlay's own `useInput` then consumed
+them.
+
+**Fix:** Two files, ~10 lines net.
+
+- `src/editor.ts`: new public getter `isInHistoryNav(): boolean` returning
+  `histIdx !== -1`. The state was already tracked internally for the
+  draft-save/restore logic; this just exposes it.
+- `src/app.tsx`: the slash-completion `recompute` checks `editor.isInHistoryNav()`
+  first; if true, it clears the overlay and returns. Once the user exits
+  history nav (↓ past the last entry restores the draft, or Esc-Esc clears,
+  or Enter submits — all of which reset `histIdx` to -1), the overlay resumes
+  normal behavior on the next "changed" event.
+
+The minimal-surface gate was chosen over more invasive options (e.g. resetting
+`histIdx` on every edit, or tracking a `lastChangeKind` enum in LineEditor)
+because the user's instruction was explicit: *"Stop auto-fill / auto-completion
+when browsing through the command history."* The gate matches that semantics
+exactly, with no behavior change for the typing path.
+
+**Verification:** Build clean (`bun build`, 2.01s, zero TS errors). Manual
+smoke test path (operator): `↑` from empty input to a past `/rag on` entry;
+confirm overlay does NOT appear; press `↑` again and confirm the previous
+history entry loads; `↓↓↓` back to present and confirm overlay re-arms when
+typing `/r`.
+
+---
 
 ### 2026-05-26--14-12 — /rag slash command (Phase 6)
 

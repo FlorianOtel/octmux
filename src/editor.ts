@@ -218,6 +218,13 @@ export class LineEditor extends EventEmitter {
   isAtTopRow(): boolean { return this.row === 0; }
   isAtBottomRow(): boolean { return this.row === this.lines.length - 1; }
 
+  // True iff the buffer was loaded via histPrev/histNext and the user has not
+  // yet returned to the present draft (↓ past last entry) or cleared/submitted.
+  // The slash-completion overlay uses this to stay closed during history
+  // navigation — otherwise scrolling to a past "/command" entry would pop the
+  // overlay and steal the arrow keys, trapping the user mid-scroll.
+  isInHistoryNav(): boolean { return this.histIdx !== -1; }
+
   // -----------------------------------------------------------------------
   // Private helpers
   // -----------------------------------------------------------------------

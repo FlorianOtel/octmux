@@ -116,6 +116,15 @@ export function App(props: AppProps) {
   // Slash-completion: subscribe to editor changes and recompute overlay state
   useEffect(() => {
     const recompute = () => {
+      // Suppress the overlay while the user is scrolling through past history
+      // entries. Otherwise reaching a past "/command" entry would auto-open the
+      // overlay, the overlay would capture ↑/↓, and the user would be trapped
+      // mid-scroll. Once they return to the present draft (↓ past last) or
+      // clear/submit, histIdx resets to -1 and the overlay resumes normally.
+      if (editor.isInHistoryNav()) {
+        setSlashCompletion(null);
+        return;
+      }
       const lines = editor.getLines();
       const row = editor.getRow();
       const firstLine = lines[0] ?? "";
