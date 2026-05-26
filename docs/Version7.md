@@ -129,7 +129,7 @@ Only `name` and `description` fields are used for display. The live `GET /comman
 
 ### 2026-05-26--22-30 — Version 7.1: warn on tool_call=false for forwarded commands
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-26--22-30
-**Commit(s):** `pending`
+**Commit(s):** `3cc4910`
 
 **Context:** A `/rag search` invocation against the default `sohoai/glm-5.1` model
 (declared `tool_call: false` in `~/.config/opencode/opencode.json`) caused the
