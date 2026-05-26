@@ -108,7 +108,7 @@ The `Role: "rag"` pattern can be replicated for new block types:
 ### 2026-05-26--14-12 — /rag slash command (Phase 6)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-26--14-12
-**Commit(s):** `` (placeholder — backfilled after commit)
+**Commit(s):** `3bd84cd`
 
 **What changed:**
 
