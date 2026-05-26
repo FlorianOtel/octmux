@@ -112,7 +112,7 @@ The `Role: "rag"` pattern can be replicated for new block types:
 ### 2026-05-26--17-47 — hotfix: suppress slash-completion overlay during history navigation
 
 **Implemented by:** Claude Code (Claude Opus 4.7) — 2026-05-26--17-47
-**Commit(s):** `<pending>`
+**Commit(s):** `4d5ac86`
 
 **What changed:**
 
