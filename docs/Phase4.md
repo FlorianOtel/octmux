@@ -487,7 +487,7 @@ Timer start/stop semantics: `thinking` timer starts on `block-start` for the thi
 ### 2026-05-26 — SubprocessStatus: replace 2-char ASCII spinner with circleHalves
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-26--12-46
-**Commit(s):** TBD
+**Commit(s):** `b727424`
 
 **What shipped:**
 `SubprocessStatus` spinner replaced: `["--", "->", ">>", "->"]` at 500 ms/frame → `circleHalves` (`["◐", "◓", "◑", "◒"]`) at 50 ms/frame. Single character instead of two; standard spinner from sindresorhus/cli-spinners. No other changes.
