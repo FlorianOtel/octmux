@@ -6,6 +6,7 @@ export type StatusLineProps = {
   tokenUsage: { used: number; contextWindow: number } | null;
   projectName: string;
   gitBranch: string;            // "" if not in git repo
+  ragMode?: "on" | "only" | null;
 };
 
 /**
@@ -17,6 +18,7 @@ export function StatusLine({
   tokenUsage,
   projectName,
   gitBranch,
+  ragMode,
 }: StatusLineProps) {
   // Compute bar fill
   let filledCount = 0;
@@ -59,7 +61,9 @@ export function StatusLine({
     <Text>
       {`✦ ${modelLabel} | ctx `}
       <Text color={barColor}>{bar}</Text>
-      {` ${percentage}% ${usedStr}/${ctxStr} | ~$0.00 | ◆ ${projectName}${gitSuffix}`}
+      {` ${percentage}% ${usedStr}/${ctxStr} | ~$0.00 `}
+      {ragMode && <Text color="magenta">{`| rag:${ragMode} `}</Text>}
+      {`| ◆ ${projectName}${gitSuffix}`}
     </Text>
   );
 }

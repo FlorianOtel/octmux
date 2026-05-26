@@ -30,6 +30,12 @@ export const COMMANDS: CommandSpec[] = [
     description: "show output gate status for thinking/tools",
   },
   {
+    name: "/rag",
+    usage: "/rag <search <query> | on | off | only>",
+    description: "RAG retrieval from SoHoAI knowledge base (modes: search, on, off, only)",
+    dynamic: () => ["/rag search", "/rag on", "/rag off", "/rag only"],
+  },
+  {
     name: "/<key>-output",
     usage: "/<key>-output [on|off]",
     description: "toggle or query the output gate for a block type (e.g. thinking, tools)",

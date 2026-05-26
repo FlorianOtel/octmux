@@ -2,10 +2,12 @@ import { Box, Static, Text, useStdout, useInput } from "ink";
 import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 import * as path from "path";
+import { randomUUID } from "node:crypto";
 import { LineEditor } from "./editor.ts";
 import { filterEvent, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
-import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand } from "./commands.ts";
+import { searchRag, formatBlockText, formatPromptPrefix, type RagHit } from "./rag.ts";
+import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseRagCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
@@ -56,6 +58,7 @@ export function App(props: AppProps) {
     candidates: string[];
     selectedIdx: number;
   } | null>(null);
+  const [ragMode, setRagMode] = useState<"on" | "only" | null>(null);
 
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -248,6 +251,25 @@ export function App(props: AppProps) {
     }
   });
 
+  // Emit a RAG search block: fetch hits, render them, and return hits for reuse.
+  async function emitRagBlock(query: string): Promise<RagHit[] | null> {
+    const partID = "rag-" + randomUUID();
+    renderer.beginBlock(partID, "rag");
+    renderer.appendToBlock(partID, "searching…\n");
+
+    const result = await searchRag(query);
+
+    if ("error" in result) {
+      renderer.appendToBlock(partID, "[error: " + result.error + "]\n");
+      renderer.endBlock(partID, "error");
+      return null;
+    }
+
+    renderer.appendToBlock(partID, formatBlockText(result.hits) + "\n");
+    renderer.endBlock(partID, "ok");
+    return result.hits;
+  }
+
   const handleSubmit = useCallback(async (text: string) => {
     // /exit — clean shutdown
     const exitResult = parseExitCommand(text);
@@ -368,8 +390,67 @@ export function App(props: AppProps) {
       renderer.commitSystemMessage(outputResult.reply ?? "");
       return;
     }
+    // /rag <search <query> | on | off | only> — RAG mode control
+    const ragResult = parseRagCommand(text);
+    if (ragResult.handled) {
+      renderer.commitUserInput(text);
+      switch (ragResult.action) {
+        case "search":
+          if (!ragResult.query) {
+            renderer.commitSystemMessage("usage: /rag search <query>");
+            break;
+          }
+          await emitRagBlock(ragResult.query);
+          break;
+        case "on":
+          setRagMode("on");
+          renderer.commitSystemMessage("RAG mode ON — will search SoHoAI before each answer");
+          break;
+        case "only":
+          setRagMode("only");
+          renderer.commitSystemMessage("RAG-only mode ON — answers exclusively from retrieved documents");
+          break;
+        case "off":
+          setRagMode(null);
+          renderer.commitSystemMessage("RAG mode OFF — answering from training knowledge only");
+          break;
+        case "status":
+        default:
+          renderer.commitSystemMessage(
+            `rag mode: ${ragMode ?? "off"}  (usage: /rag <search <q> | on | off | only>)`
+          );
+      }
+      return;
+    }
     // Default: send to OpenCode server
     setLastSubmitted(text);
+    // Auto-search interception: if ragMode is active, emit rag block before the prompt
+    if (ragMode !== null) {
+      const hits = await emitRagBlock(text);
+      const preamble = hits ? formatPromptPrefix(hits, ragMode) : "";
+      // In "only" mode with no hits passing threshold: skip sending to OpenCode
+      if (ragMode === "only" && !preamble) {
+        renderer.commitUserInput(text);
+        renderer.commitSystemMessage("no relevant documents found — answer skipped (rag mode = only)");
+        return;
+      }
+      const effectiveText = preamble ? preamble + "\n\n" + text : text;
+      renderer.commitUserInput(text);
+      try {
+        await props.client.session.promptAsync({
+          path: { id: props.sessionID },
+          body: {
+            parts: [{ type: "text", text: effectiveText }],
+            ...(activeModel ? { model: activeModel } : {}),
+          },
+        });
+      } catch (err) {
+        setIsGenerating(false);
+        renderer.commitError(`[send error] ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+    // Standard path: no RAG mode active
     renderer.commitUserInput(text);
     try {
       await props.client.session.promptAsync({
@@ -383,7 +464,7 @@ export function App(props: AppProps) {
       setIsGenerating(false);
       renderer.commitError(`[send error] ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [props.client, props.sessionID, renderer, activeModel]);
+  }, [props.client, props.sessionID, renderer, activeModel, ragMode]);
 
   const handlePermission = useCallback(async (answer: "once" | "always" | "reject") => {
     if (!permission) return;
@@ -485,6 +566,7 @@ export function App(props: AppProps) {
           tokenUsage={tokenUsage}
           projectName={projectName}
           gitBranch={gitBranch}
+          ragMode={ragMode}
         />
       </Box>
     </>

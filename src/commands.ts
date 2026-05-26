@@ -84,3 +84,23 @@ export function parseModelCommand(
     modelID: arg.slice(slash + 1),
   };
 }
+
+export function parseRagCommand(
+  input: string,
+): { handled: boolean; action?: "search" | "on" | "off" | "only" | "status"; query?: string } {
+  const m = input.trim().match(/^\/rag(?:\s+(search|on|off|only)(?:\s+([\s\S]+))?)?\s*$/);
+  if (!m) return { handled: false };
+  const [, action, query] = m;
+  if (!action) {
+    return { handled: true, action: "status" };
+  }
+  const normalizedAction = action as "search" | "on" | "off" | "only";
+  if (normalizedAction === "search" && !query) {
+    return { handled: true, action: "search", query: undefined };
+  }
+  return {
+    handled: true,
+    action: normalizedAction,
+    query: query ? query.trim() : undefined,
+  };
+}

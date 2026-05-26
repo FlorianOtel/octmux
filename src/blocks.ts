@@ -1,4 +1,4 @@
-export type Role = "user" | "text" | "thinking" | "tool-call" | "tool-result" | "error";
+export type Role = "user" | "text" | "thinking" | "tool-call" | "tool-result" | "error" | "rag";
 
 export type Block = {
   id: string;
@@ -33,6 +33,7 @@ export function formatLine(role: Role, line: string, isFirstLine: boolean): stri
     case "tool-call":   return ANSI.cyan + (isFirstLine ? "⚙ " : "  ") + line + ANSI.reset;
     case "tool-result": return ANSI.dim  + (isFirstLine ? "  ↳ " : "    ") + line + ANSI.reset;
     case "error":       return ANSI.red  + "[error] " + line + ANSI.reset;
+    case "rag":         return ANSI.magenta + (isFirstLine ? "▽ " : "  ") + line + ANSI.reset;
   }
 }
 
