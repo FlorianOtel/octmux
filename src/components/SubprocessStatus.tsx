@@ -1,13 +1,13 @@
 import { Box, Text } from "ink";
 import { useState, useEffect } from "react";
 
-// Spinner frames — 2-char wide so the label column stays stable.
-const FRAMES = ["--", "->", ">>", "->"] as const;
+// circleHalves spinner (sindresorhus/cli-spinners) — 1-char, 50 ms/frame.
+const FRAMES = ["◐", "◓", "◑", "◒"] as const;
 
 function ProcLine({ label, startTime }: { label: string; startTime: number }) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setTick(t => t + 1), 500);
+    const id = setInterval(() => setTick(t => t + 1), 50);
     return () => clearInterval(id);
   }, []);
   const elapsed = Math.floor((Date.now() - startTime) / 1000);

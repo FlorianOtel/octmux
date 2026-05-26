@@ -2,8 +2,8 @@
 title: "octmux — Phase 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Opus 4.7)
-updated_at: 2026-05-25--20-59
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-05-26--12-46
 context: >
   Phase 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -481,6 +481,16 @@ journalctl -u opencode-server -f
 `TmuxWindowRenderer` origin window renamed to opencode session label; side window names changed to `<label>--thinking` / `<label>--tools` (double-dash); `SubprocessStatus` component added — animated 2-char spinner + elapsed timer per active subprocess, shown above the input chrome.
 
 Timer start/stop semantics: `thinking` timer starts on `block-start` for the thinking role, clears on its `block-end` (i.e. when the reasoning phase ends, before the text response begins — not at turn end). `tools` timer starts on the first `tool-call block-start`, clears on `tool-result block-end` (normal path — result delivery ends the sequence) or on `tool-call block-end` with `status="error"` (error path — no result follows). Both timers are also cleared on `session-idle` as a safety net. `procTimes` state in `app.tsx` tracks the start timestamps; zero-height when both are null.
+
+---
+
+### 2026-05-26 — SubprocessStatus: replace 2-char ASCII spinner with circleHalves
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-26--12-46
+**Commit(s):** TBD
+
+**What shipped:**
+`SubprocessStatus` spinner replaced: `["--", "->", ">>", "->"]` at 500 ms/frame → `circleHalves` (`["◐", "◓", "◑", "◒"]`) at 50 ms/frame. Single character instead of two; standard spinner from sindresorhus/cli-spinners. No other changes.
 
 ---
 
