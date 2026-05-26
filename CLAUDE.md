@@ -11,7 +11,7 @@ After any change to `src/`, you MUST:
    The binary at `dist/octmux` is what the user actually runs. Never report a change as complete without rebuilding.
 
 2. **Update docs and memory:**
-   - Add an implementation log entry to the relevant `docs/PhaseN.md`. Each entry must include two metadata lines immediately after the `### YYYY-MM-DD--HH-MM — Title` heading:
+   - Add an implementation log entry to the relevant `docs/VersionN.md`. Each entry must include two metadata lines immediately after the `### YYYY-MM-DD--HH-MM — Title` heading:
      ```
      **Implemented by:** <agent name (model)> — YYYY-MM-DD--HH-MM
      **Commit(s):** `hash1`, `hash2`   ← all hashes comma-separated on one line
@@ -35,6 +35,6 @@ octmux is a text-only TUI REPL for OpenCode. It runs inside tmux and communicate
 **Dev run:** `/home/florian/.bun/bin/bun run src/index.tsx`
 **Always use full bun path:** `/home/florian/.bun/bin/bun` — never bare `bun`
 
-**Default startup (as of Phase 4.1c):** `octmux` with no args attaches to port 4096. The systemd service (`scripts/opencode-server.service`) must be running. Use `--auto-spawn` only as an explicit opt-in (risk: SQLite locking + MCP/LSP bloat from multiple instances).
+**Default startup (as of Version 4.1c):** `octmux` with no args attaches to port 4096. The systemd service (`scripts/opencode-server.service`) must be running. Use `--auto-spawn` only as an explicit opt-in (risk: SQLite locking + MCP/LSP bloat from multiple instances).
 
-**Docs:** `docs/Phase7.md` is the active implementation log. `docs/Implementation-plan.md` is the phase-level design reference.
+**Docs:** `docs/Version7.md` is the active implementation log. `docs/Implementation-plan.md` is the version-level design reference.

@@ -1,16 +1,16 @@
 ---
-title: "octmux — Phase 2: Auto-spawn server + tmux guard"
+title: "octmux — Version 2: Auto-spawn server + tmux guard"
 created_at: 2026-05-19--15-37
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
 updated_at: 2026-05-22--22-01
 context: >
-  Phase 2 adds automatic server spawning with port rotation and a tmux guard
+  Version 2 adds automatic server spawning with port rotation and a tmux guard
   that prevents octmux from running outside of tmux unless explicitly overridden.
-  This document contains the complete implementation log for Phase 2.
+  This document contains the complete implementation log for Version 2.
 ---
 
-# Phase pre-implementation checklist - Read this first
+# Version pre-implementation checklist - Read this first
 
 When starting a phase:
 
@@ -30,16 +30,16 @@ When finishing a phase:
 2. Flip the phase's status in the parent plan to `✓ shipped — see log
    YYYY-MM-DD--HH-MM`.
 3. Refresh `updated_by` and `updated_at` in the frontmatter.
-4. Commit with `feat(octmux): Phase N — <short title>`.
+4. Commit with `feat(octmux): Version N — <short title>`.
 
 ---
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-19--15-37 — Phase 2: Auto-spawn server + tmux guard
+### 2026-05-19--15-37 — Version 2: Auto-spawn server + tmux guard
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
-**Commit(s):** `e8249f7d` (shared with Phase 1.5c+1.5d)
+**Commit(s):** `e8249f7d` (shared with Version 1.5c+1.5d)
 
 **What shipped:**
 - src/server-lifecycle.ts (new): findFreePort (TCP bind probe, range [4096, 4106]),
@@ -48,12 +48,12 @@ When finishing a phase:
 - src/index.ts: --help, --version, --no-tmux-guard flags; tmux guard
   (process.env.TMUX check); auto-spawn vs --attach branch for baseUrl resolution;
   SIGTERM handler; serverHandle?.dispose() wired to rl.on("close") and SIGINT
-  double-Ctrl-C exit path. Removed Phase 0 debug output (health: ok, sessions count).
-- Ctrl-C behavior: single Ctrl-C during generation aborts (unchanged from Phase 1.5).
+  double-Ctrl-C exit path. Removed Version 0 debug output (health: ok, sessions count).
+- Ctrl-C behavior: single Ctrl-C during generation aborts (unchanged from Version 1.5).
   Single Ctrl-C when idle now prints "(Press Ctrl-C again to exit)" — double Ctrl-C
   within 3s exits with dispose. Retroactively correct for attach mode (serverHandle
   is null → dispose() is a no-op).
-- Phase 1.5 streaming/modal/abort behavior unchanged.
+- Version 1.5 streaming/modal/abort behavior unchanged.
 
-**Suggested next steps for Phase 3:** raw-mode input replaces readline.
+**Suggested next steps for Version 3:** raw-mode input replaces readline.
   respondPermission/respondQuestion will need the raw-mode single-keypress path.

@@ -1,11 +1,11 @@
 ---
-title: "Phase 7 — Native opencode /rag command + discovery and forwarding"
+title: "Version 7 — Native opencode /rag command + discovery and forwarding"
 created_at: 2026-05-26--18-41
 created_by: Claude Code (Claude Haiku 4.5)
 context: >
-  Phase 6 shipped a broken client-side TypeScript `/rag` implementation that suffered
+  Version 6 shipped a broken client-side TypeScript `/rag` implementation that suffered
   from a hardcoded 0.45 score-filter strangling all hits and architectural mismatch
-  (client-side RAG state vs LLM-mediated mode tracking). Phase 7 rips it out entirely,
+  (client-side RAG state vs LLM-mediated mode tracking). Version 7 rips it out entirely,
   replaces it with a native opencode markdown command installed at ~/.config/opencode/commands/rag.md,
   adds a one-shot discovery layer via client.command.list() at startup, merges discovered
   commands into /help and slash-completion, and forwards any unrecognised /cmd to opencode
@@ -17,7 +17,7 @@ context: >
 
 ### Architecture: opencode-native commands with discovery and forwarding
 
-**Phase 7 removes all client-side `/rag` command handling.** RAG (and all future opencode markdown commands) now live as native markdown files in `~/.config/opencode/commands/`. The systemd service (`opencode-server`) scans this directory at startup and serves metadata via `GET /command`.
+**Version 7 removes all client-side `/rag` command handling.** RAG (and all future opencode markdown commands) now live as native markdown files in `~/.config/opencode/commands/`. The systemd service (`opencode-server`) scans this directory at startup and serves metadata via `GET /command`.
 
 The octmux harness:
 
@@ -26,7 +26,7 @@ The octmux harness:
 3. **Forward unrecognised /cmd:** If a `/cmd` matches an opencode command name, forward it via `session.command({ command: cmdName, arguments: args, model: activeModel })`.
 4. **No TS per-command plumbing:** New markdown commands (search helpers, audit tools, etc.) need only a file in opencode's commands dir — no octmux code changes.
 
-### RAG output routing (Phase 7)
+### RAG output routing (Version 7)
 
 | Role | OUTPUT_KEY | Gate | --single mode | --multi-window mode |
 |---|---|---|---|---|
@@ -51,7 +51,7 @@ The file `~/.config/opencode/commands/rag.md` contains instructions for four mod
 
 **Modes are enforced by the LLM's in-context interpretation of rag.md, not by harness state.** The LLM may forget to auto-search over very long contexts (same as CC's behavior). This matches CC's reliability model and is acceptable.
 
-### Systemd restart (one-time, Phase 7 only)
+### Systemd restart (one-time, Version 7 only)
 
 The opencode-server systemd service must be restarted after `~/.config/opencode/commands/rag.md` is installed, so the server's command scan picks it up. This kills any active opencode sessions — do this in a quiescent moment.
 
@@ -91,7 +91,7 @@ Only `name` and `description` fields are used for display. The live `GET /comman
 
 ## Implementation log
 
-### 2026-05-26--18-41 — Phase 7 implementation
+### 2026-05-26--18-41 — Version 7 implementation
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-26--18-41
 **Commit(s):** `eef35de`
 

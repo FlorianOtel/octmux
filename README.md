@@ -132,9 +132,9 @@ octmux establishes a contract for external consumers (e.g. opentmux):
 | Window name | `<session>--thinking`, `<session>--tools` (window mode) |
 | Pane title | `thinking`, `tools` via `select-pane -T` (pane mode) |
 
-opentmux can integrate in two modes: (A) take over spawning — octmux creates log files and announces them; opentmux creates panes/windows with its own geometry; (B) take over consumption — octmux spawns panes/windows as normal; opentmux re-skins them from outside. Mode B requires no octmux changes. See `docs/Phase3-UX.md` §"Sequencing toward opentmux integration" for full details.
+opentmux can integrate in two modes: (A) take over spawning — octmux creates log files and announces them; opentmux creates panes/windows with its own geometry; (B) take over consumption — octmux spawns panes/windows as normal; opentmux re-skins them from outside. Mode B requires no octmux changes. See `docs/Version3-UX.md` §"Sequencing toward opentmux integration" for full details.
 
-**Note:** opentmux integration is not part of Phase 3-UX and is not the immediately-following work. Phase 4 (StatusLine content) and Phase 5 (subagent windows) come first. Future work targets `TmuxWindowRenderer`; pane mode is preserved but not actively developed further.
+**Note:** opentmux integration is not part of Version 3-UX and is not the immediately-following work. Version 4 (StatusLine content) and Version 5 (subagent windows) come first. Future work targets `TmuxWindowRenderer`; pane mode is preserved but not actively developed further.
 
 ## Architecture
 
