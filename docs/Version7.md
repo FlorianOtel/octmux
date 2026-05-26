@@ -2,6 +2,8 @@
 title: "Version 7 — Native opencode /rag command + discovery and forwarding"
 created_at: 2026-05-26--18-41
 created_by: Claude Code (Claude Haiku 4.5)
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-05-26--22-30
 context: >
   Version 6 shipped a broken client-side TypeScript `/rag` implementation that suffered
   from a hardcoded 0.45 score-filter strangling all hits and architectural mismatch
@@ -124,3 +126,45 @@ Only `name` and `description` fields are used for display. The live `GET /comman
 - /tools-output gate covers RAG bash output.
 - Unknown /cmd falls through to promptAsync as plain text.
 - /rag-output on returns "unknown output key" error (rag gate no longer exists).
+
+### 2026-05-26--22-30 — Version 7.1: warn on tool_call=false for forwarded commands
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-26--22-30
+**Commit(s):** `pending`
+
+**Context:** A `/rag search` invocation against the default `sohoai/glm-5.1` model
+(declared `tool_call: false` in `~/.config/opencode/opencode.json`) caused the
+LLM to write a permanent Python script `~/.opencode/rag.py` instead of running
+the documented `curl` once. Root cause is model-side: `tool_call: false` models
+cannot emit structured tool calls and improvise via opencode's text-mode tool
+dispatcher. `rag.md` is byte-identical between `~/.claude/commands/` and
+`~/.config/opencode/commands/`; octmux is a literal passthrough for forwarded
+commands. Same flow with a `tool_call: true` model (Claude, Kimi K2.6, etc.)
+executes a single curl.
+
+**Change:** Add a one-line yellow warning to the transcript when a forwarded
+slash-command is dispatched against a model declared `tool_call: false`. Applies
+to **all** opencode commands (not /rag-specific). Does not block dispatch.
+
+**Files:**
+- `src/utils/formatters.ts` — new helper `getToolCallSupport(client, providerID, modelID)`
+  mirrors `getContextWindow` (two-pass provider/model match against
+  `client.provider.list()`, own `Map` cache, swallows errors). Returns
+  `true | false | undefined`. `undefined` is cached so we don't refetch.
+- `src/app.tsx` — in the `if (opencodeCommands.has(cmdName))` branch, before
+  `client.session.command(...)`, look up tool_call support for `activeModel`
+  and emit `⚠ <modelID> has tool_call=false — /<cmd> output may be unreliable …`
+  via `renderer.commitSystemMessage` if explicitly false. Default-send path
+  (line 423+) is intentionally not gated; plain prompts are the user's
+  explicit choice.
+
+**Caveat:** Warning trusts the `tool_call` field as declared in
+`opencode.json` / provider metadata. If the field is misconfigured, the
+warning won't fire and the underlying model misbehavior recurs silently.
+
+**Verification:**
+- Binary rebuild succeeded.
+- Pre-existing tsc errors in `app.tsx`, `commands.ts`, `events.ts` unrelated
+  to this change (SDK type drift).
+- Manual test: invoke `/rag search test` against a `tool_call:false` model →
+  yellow warning prints, dispatch proceeds. Switch to a `tool_call:true`
+  model → no warning. Plain prompts → no warning regardless.

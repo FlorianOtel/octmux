@@ -17,7 +17,7 @@ import { SubprocessStatus } from "./components/SubprocessStatus.tsx";
 import { ModelPickerModal, type ModelPickerItem } from "./components/ModelPickerModal.tsx";
 import { SlashCompletionOverlay } from "./components/SlashCompletionOverlay.tsx";
 import { expandCommands } from "./command-registry.ts";
-import { fetchGitBranch, getContextWindow, prettyModelName, contextLabel } from "./utils/formatters.ts";
+import { fetchGitBranch, getContextWindow, getToolCallSupport, prettyModelName, contextLabel } from "./utils/formatters.ts";
 
 type QuestionType = {
   question: string;
@@ -404,6 +404,18 @@ export function App(props: AppProps) {
         const args = parts.slice(1).join(" ");
         renderer.commitUserInput(text);
         setLastSubmitted(text);
+        if (activeModel) {
+          const supportsTools = await getToolCallSupport(
+            props.client,
+            activeModel.providerID,
+            activeModel.modelID,
+          );
+          if (supportsTools === false) {
+            renderer.commitSystemMessage(
+              `⚠ ${activeModel.modelID} has tool_call=false — /${cmdName} output may be unreliable (model cannot invoke tools structurally; expect text-mode improvisation).`,
+            );
+          }
+        }
         try {
           await props.client.session.command({
             path: { id: props.sessionID },

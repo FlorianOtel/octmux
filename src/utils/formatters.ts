@@ -118,6 +118,66 @@ export async function getContextWindow(
 }
 
 /**
+ * Cache for tool_call lookups: ${providerID}/${modelID} → boolean | undefined.
+ * `undefined` cached entries mean "looked up, not discoverable" — we don't refetch.
+ */
+const toolCallCache = new Map<string, boolean | undefined>();
+
+/**
+ * Discover whether a model supports the Anthropic-style tool-use protocol.
+ * Mirrors `getContextWindow`: two-pass provider/model match against
+ * `client.provider.list()`, swallows errors, never throws.
+ * Returns `undefined` when the field is missing or the lookup fails — callers
+ * should treat undefined as "don't warn" (uncertain, not negative).
+ */
+export async function getToolCallSupport(
+  client: Client,
+  providerID: string,
+  modelID: string,
+): Promise<boolean | undefined> {
+  const cacheKey = `${providerID}/${modelID}`;
+  if (toolCallCache.has(cacheKey)) {
+    return toolCallCache.get(cacheKey);
+  }
+
+  try {
+    const resp = await client.provider.list();
+    const provData = resp.data;
+    if (provData) {
+      for (const p of provData.all) {
+        if (p.id === providerID) {
+          for (const [mId, mInfo] of Object.entries(p.models)) {
+            if (mId === modelID || mInfo.id === modelID) {
+              const tc = (mInfo as { tool_call?: boolean }).tool_call;
+              if (typeof tc === "boolean") {
+                toolCallCache.set(cacheKey, tc);
+                return tc;
+              }
+            }
+          }
+        }
+      }
+      for (const p of provData.all) {
+        for (const [mId, mInfo] of Object.entries(p.models)) {
+          if (mId === modelID || mInfo.id === modelID) {
+            const tc = (mInfo as { tool_call?: boolean }).tool_call;
+            if (typeof tc === "boolean") {
+              toolCallCache.set(cacheKey, tc);
+              return tc;
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // Silently swallow errors
+  }
+
+  toolCallCache.set(cacheKey, undefined);
+  return undefined;
+}
+
+/**
  * Pretty-print a model ID.
  * "claude-sonnet-4-6" → "Sonnet 4.6"
  * Unknown IDs returned as-is.
