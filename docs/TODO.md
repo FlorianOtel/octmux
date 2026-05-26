@@ -113,5 +113,5 @@ elements within the scroll region, not the prompt rows.
 Implement Approach 1 first — it is the safest change (pure React/Ink, no ANSI
 cursor management) and will eliminate the scroll-jump for virtually all real
 responses. Approach 2 or 3 can follow if smoother native scrolling is desired.
-The `StreamItem` typed union (planned for Phase 4/5) should be designed to
+The `StreamItem` typed union (planned for Version 4/5) should be designed to
 work with the line-buffered Static model from the start.

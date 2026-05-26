@@ -22,7 +22,7 @@ After any change to `src/`, you MUST:
 3. **Commit** — stage `src/` and updated docs (`dist/` is gitignored — the binary is not committed):
    ```
    git add src/ docs/ CLAUDE.md
-   git commit -m "feat(octmux): Phase N.x — <title>"
+   git commit -m "feat(octmux): Version N.x — <title>"
    ```
 
 ---
