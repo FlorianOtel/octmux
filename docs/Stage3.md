@@ -1,19 +1,19 @@
 ---
-title: "octmux — Version 3: Custom raw-mode input + Ink rendering + typed block renderer + tmux multiplex"
+title: "octmux — Stage 3: Custom raw-mode input + Ink rendering + typed block renderer + tmux multiplex"
 created_at: 2026-05-20--00-34
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
 updated_at: 2026-05-25--00-00
 context: >
-  Version 3 is the foundational UX phase split across three major sub-initiatives:
-  Version 3 (original raw-mode input), Version 3 Extended (Ink-based rendering layer),
-  and Version 3 UX (typed block model + tmux multiplex). The original Version 3 was
-  superseded by Version 3 Extended, which then was extended by Version 3 UX. This
+  Stage 3 is the foundational UX phase split across three major sub-initiatives:
+  Stage 3 (original raw-mode input), Stage 3 Extended (Ink-based rendering layer),
+  and Stage 3 UX (typed block model + tmux multiplex). The original Stage 3 was
+  superseded by Stage 3 Extended, which then was extended by Stage 3 UX. This
   document contains the complete implementation logs and planning documents for
   all three initiatives in chronological order, with full details of each sub-phase.
 ---
 
-# Version pre-implementation checklist - Read this first
+# Stage pre-implementation checklist - Read this first
 
 When starting a phase:
 
@@ -33,13 +33,13 @@ When finishing a phase:
 2. Flip the phase's status in the parent plan to `✓ shipped — see log
    YYYY-MM-DD--HH-MM`.
 3. Refresh `updated_by` and `updated_at` in the frontmatter.
-4. Commit with `feat(octmux): Version N — <short title>`.
+4. Commit with `feat(octmux): Stage N — <short title>`.
 
 ---
 
 ## ⚠ Deprecation notice — `--multi-pane` removed (2026-05-23)
 
-`--multi-pane` and its implementation class `TmuxPaneRenderer` were removed in Version 4
+`--multi-pane` and its implementation class `TmuxPaneRenderer` were removed in Stage 4
 (commit `6b9493c`). The pane approach is fundamentally incompatible with real-time
 streaming: tmux serialises rendering within a window, so thinking/tool output in side
 panes lags behind the main pane whenever text is streaming. See
@@ -56,12 +56,12 @@ as-is for historical accuracy.
 ---
 
 
-## Version 3 Extended: Ink-based rendering layer
+## Stage 3 Extended: Ink-based rendering layer
 
-_This section contains the full planning and implementation log for Version 3 Extended,
+_This section contains the full planning and implementation log for Stage 3 Extended,
 dated 2026-05-20. This phase replaced the custom raw-mode input renderer with an
 Ink-based (React for CLI) component tree, reducing LineEditor to a pure state
-container. All Version 3 behavior was preserved under the new Ink rendering model._
+container. All Stage 3 behavior was preserved under the new Ink rendering model._
 
 ### Implementation log (reverse chronological — newest at top)
 
@@ -119,7 +119,7 @@ push instead of string concat.
 
 ---
 
-#### 2026-05-20--17-40 — Version 3E.6: Cleanup + doc updates
+#### 2026-05-20--17-40 — Stage 3E.6: Cleanup + doc updates
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
 **Commit(s):** `7059f5c4` (shared with 3E.4+3E.5 session)
@@ -127,18 +127,18 @@ push instead of string concat.
 **What shipped:**
 - `src/index.ts.phase2.bak` deleted (leftover safety copy from 3E.1).
 - `README.md` rewritten: Architecture section explains the Ink Static/dynamic layout model and why bottom-anchor is automatic; Key bindings table documents all Emacs and navigation bindings; tmux configuration subsection covers `mouse on`, `extended-keys on`, `terminal-features extkeys`, and clarifies that text selection still works (alternate scroll mode does not intercept clicks).
-- `docs/Implementation-plan.md` updated: locked decision #3 rewritten to Ink language; Version 3 Extended inserted as a new Version plan entry between Version 3 and Version 4; Version 3 status changed to "superseded"; consolidated log entry prepended; frontmatter refreshed.
+- `docs/Implementation-plan.md` updated: locked decision #3 rewritten to Ink language; Stage 3 Extended inserted as a new Stage plan entry between Stage 3 and Stage 4; Stage 3 status changed to "superseded"; consolidated log entry prepended; frontmatter refreshed.
 - This doc: 3E.6 status → ✓ shipped; log entry prepended; frontmatter refreshed.
 
 **Bug fixes included in this session (not 3E.6-spec but landed here):**
 - `stdin.ref is not a function` crash on startup: the `Transform`-stream-as-stdin approach was dropped entirely. Mouse tracking now uses `DECSET 1007` (alternate scroll mode) instead of `?1000h` (button-event mode). Wheel events arrive as arrow keys to Ink's normal input path; no Transform stream or TTY-proxy needed. Text selection restored.
 - Two blank lines between turns not rendering: `measureText("")` returns `{width:0, height:0}` so `<Text>{""}</Text>` was a zero-height Yoga node. Fixed to `<Text>{" "}</Text>`.
 
-**What changed in this doc:** 3E.6 status → ✓ shipped; all sub-phases now ✓; Version 3 Extended is complete.
+**What changed in this doc:** 3E.6 status → ✓ shipped; all sub-phases now ✓; Stage 3 Extended is complete.
 
 ---
 
-#### 2026-05-20--17-47 — Version 3E.4 + 3E.5: Modals, mouse scroll, Ctrl-C recall, UX anchoring
+#### 2026-05-20--17-47 — Stage 3E.4 + 3E.5: Modals, mouse scroll, Ctrl-C recall, UX anchoring
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
 **Commit(s):** `7059f5c4` (shared with 3E.6 session)
@@ -146,7 +146,7 @@ push instead of string concat.
 **What shipped:**
 
 - **Terminal clear + bottom anchor** (`src/index.tsx`): On startup, clears the screen and positions the cursor so the input area anchors at the bottom. Uses `\x1b[2J\x1b[H` + `rows - 7` newlines to pre-fill space above the dynamic area.
-- **4-line status area** (`src/app.tsx`): `marginBottom={3}` on the bottom Box makes StatusLine(1) + 3 blank lines = 4 lines reserved for status. Version 4 will fill the 3 blank lines with model/tokens/cost/orchestra badge.
+- **4-line status area** (`src/app.tsx`): `marginBottom={3}` on the bottom Box makes StatusLine(1) + 3 blank lines = 4 lines reserved for status. Stage 4 will fill the 3 blank lines with model/tokens/cost/orchestra badge.
 - **Turn spacing** (`src/app.tsx`): Each scrollback entry is followed by 2 blank lines, separating operator input from LLM output visually.
 - **PermissionModal** (`src/components/PermissionModal.tsx`): Inline y/a/n prompt replaces the auto-approve placeholder in app.tsx. `y`=once, `a`=always, `n`=reject.
 - **QuestionModal** (`src/components/QuestionModal.tsx`): Numbered-options prompt for `question.asked` events. Accepts digit keys, advances through multi-question flows, POSTs answers to `/question/{reqID}/reply`.
@@ -184,7 +184,7 @@ push instead of string concat.
 
 ---
 
-#### 2026-05-20--16-21 — Version 3E.3: <App> shell + Static scrollback
+#### 2026-05-20--16-21 — Stage 3E.3: <App> shell + Static scrollback
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
 **Commit(s):** `ddc065f0` (shared with history-draft session)
@@ -208,7 +208,7 @@ push instead of string concat.
 
 ---
 
-#### 2026-05-20--10-45 — Version 3E.2 fixes: Keybinding fixes, keybindings.ts, LLM wiring, UX polish
+#### 2026-05-20--10-45 — Stage 3E.2 fixes: Keybinding fixes, keybindings.ts, LLM wiring, UX polish
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
 **Commit(s):** `d39ed8ed`
@@ -225,7 +225,7 @@ push instead of string concat.
 
 **Keybinding bug fixes — three Ink 5 quirks discovered and resolved:**
 
-The Version 3E.2 dispatch table had three bugs rooted in non-obvious Ink 5 behaviour. All three
+The Stage 3E.2 dispatch table had three bugs rooted in non-obvious Ink 5 behaviour. All three
 were diagnosed by reading `node_modules/ink/build/parse-keypress.js` and
 `use-input.js` directly. See memory documentation for the Ink 5 keybinding quirks.
 
@@ -252,14 +252,14 @@ is now a thin wrapper that calls `handleKey` in its `useInput` handler.
 
 ---
 
-#### 2026-05-20--00-34 — Version 3E.2: LineEditor state machine + PromptInput component
+#### 2026-05-20--00-34 — Stage 3E.2: LineEditor state machine + PromptInput component
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
 **Commit(s):** `a7560509`, `b23965e4`
 
 **What shipped:**
 - `src/editor.ts` (new): pure LineEditor EventEmitter state machine ported from
-  Version 3. I/O stripped: no start()/stop(), no escape-sequence parser, no modal helpers.
+  Stage 3. I/O stripped: no start()/stop(), no escape-sequence parser, no modal helpers.
   All buffer ops made public. New methods: moveUpRow(), moveDownRow(), loadText(),
   getText(), isAtTopRow(), isAtBottomRow(), enterOnLastRow(). Events kept: "changed", "submit".
 - `src/components/PromptInput.tsx` (new): Ink component rendering multi-line buffer
@@ -271,7 +271,7 @@ is now a thin wrapper that calls `handleKey` in its `useInput` handler.
 
 ---
 
-#### 2026-05-20--00-10 — Version 3E.1: Bootstrap Ink + React under Bun
+#### 2026-05-20--00-10 — Stage 3E.1: Bootstrap Ink + React under Bun
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
 **Commit(s):** `6c52cdd3`, `02f09ce3`, `9d43e9c1`
@@ -279,24 +279,24 @@ is now a thin wrapper that calls `handleKey` in its `useInput` handler.
 **What shipped:**
 - `package.json`: added `ink@^5.0.0`, `react@^18.3.1` as deps; `@types/react@^18.3.0` as devDep; also added `react-devtools-core@^7.0.1` as optional dep (required for Ink 5.x compile support).
 - `tsconfig.json`: added `"jsx": "react-jsx"`, `"jsxImportSource": "react"` to compilerOptions.
-- `src/index.ts.phase2.bak`: copy of the Version 2 readline REPL (safety net for in-progress session).
-- `src/index.tsx`: replaced Version 2 REPL with 20-line Ink hello-world demo — bordered single-line box "octmux — Ink hello", auto-exits after 2 s. Both `bun run dev` and `dist/octmux` binary verified working (exit code 0).
+- `src/index.ts.phase2.bak`: copy of the Stage 2 readline REPL (safety net for in-progress session).
+- `src/index.tsx`: replaced Stage 2 REPL with 20-line Ink hello-world demo — bordered single-line box "octmux — Ink hello", auto-exits after 2 s. Both `bun run dev` and `dist/octmux` binary verified working (exit code 0).
 - Build scripts updated: `dev`, `build`, `compile` now reference `src/index.tsx` instead of `src/index.ts`.
 
 ---
 
-## Version 3 UX: Typed block renderer + tmux multiplex
+## Stage 3 UX: Typed block renderer + tmux multiplex
 
-_This section contains the full planning and implementation log for Version 3 UX,
+_This section contains the full planning and implementation log for Stage 3 UX,
 dated 2026-05-21. This phase introduced a typed Block model, eliminated streaming
 flicker through Static scrollback, added per-role visibility toggles, and implemented
 two tmux multiplex backends (`--multi-pane` via `TmuxPaneRenderer` and `--multi-window`
-via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Version 4
+via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Stage 4
 (see deprecation notice above)._
 
 ### Implementation log (reverse chronological — newest at top)
 
-#### 2026-05-21 — Version 3U.7 (cleanup)
+#### 2026-05-21 — Stage 3U.7 (cleanup)
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
 **Commit(s):** `cc634edd`
@@ -309,7 +309,7 @@ via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Version
 
 ---
 
-#### 2026-05-22 — Version 3U.6 (TmuxWindowRenderer) + post-implementation fixes
+#### 2026-05-22 — Stage 3U.6 (TmuxWindowRenderer) + post-implementation fixes
 
 **Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6); post-implementation fixes by Claude Code (Claude Sonnet 4.6) — 2026-05-22--23-00
 **Commit(s):** `c3d6fcc5`, `437d37bf`, `fcb2ef94`, `1a2f58b`
@@ -333,7 +333,7 @@ via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Version
 
 ---
 
-#### 2026-05-21 — Version 3U.5 (+ post-implementation fixes)
+#### 2026-05-21 — Stage 3U.5 (+ post-implementation fixes)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5 + Claude Sonnet 4.6)
 **Commit(s):** `60083c01`, `5e76fbc6`, `9441308`, `dbe280b0`, `e7240e2d`, `583ea025`, `541d70f8`, `461c572e`, `11402435`
@@ -346,7 +346,7 @@ via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Version
 
 ---
 
-#### 2026-05-21 — Version 3U.4
+#### 2026-05-21 — Stage 3U.4
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
 **Commit(s):** `0f09e793`, `9f468fd6`
@@ -359,7 +359,7 @@ via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Version
 
 ---
 
-#### 2026-05-21 — Version 3U.3
+#### 2026-05-21 — Stage 3U.3
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
 **Commit(s):** `cd537372`
@@ -372,7 +372,7 @@ via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Version
 
 ---
 
-#### 2026-05-21 — Version 3U.2
+#### 2026-05-21 — Stage 3U.2
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
 **Commit(s):** `d78690bb`, `9fe87af7`
@@ -384,7 +384,7 @@ via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Version
 
 ---
 
-#### 2026-05-21 — Version 3U.1
+#### 2026-05-21 — Stage 3U.1
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
 **Commit(s):** `cdee8f5e`, `5fbcec1f`
@@ -397,15 +397,15 @@ via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Version
 
 ---
 
-## Summary of Version 3 (Combined)
+## Summary of Stage 3 (Combined)
 
-Version 3 represents three major architectural iterations of the octmux UX layer:
+Stage 3 represents three major architectural iterations of the octmux UX layer:
 
-1. **Version 3 (original)** — planned custom raw-mode input with Emacs bindings, bracketed paste, and history.
+1. **Stage 3 (original)** — planned custom raw-mode input with Emacs bindings, bracketed paste, and history.
 
-2. **Version 3 Extended** — replaced the raw-mode renderer with Ink (React for CLI), preserving all Version 3 behavior under a cleaner component architecture. LineEditor became a pure state machine; Ink's `useInput` hook drives it. All features preserved: Emacs bindings, multi-line via Alt-Enter, history, bracketed paste, double-Esc clear. This enabled a bottom-anchored layout and proper modal flows.
+2. **Stage 3 Extended** — replaced the raw-mode renderer with Ink (React for CLI), preserving all Stage 3 behavior under a cleaner component architecture. LineEditor became a pure state machine; Ink's `useInput` hook drives it. All features preserved: Emacs bindings, multi-line via Alt-Enter, history, bracketed paste, double-Esc clear. This enabled a bottom-anchored layout and proper modal flows.
 
-3. **Version 3 UX** — eliminated streaming flicker by moving content to `<Static>` at line granularity, introduced a typed Block model with role-based rendering, added per-role visibility toggles, and implemented two tmux multiplex backends via the `Renderer` interface: `TmuxPaneRenderer` (`--multi-pane`, since deprecated) and `TmuxWindowRenderer` (`--multi-window`, the current recommended mode).
+3. **Stage 3 UX** — eliminated streaming flicker by moving content to `<Static>` at line granularity, introduced a typed Block model with role-based rendering, added per-role visibility toggles, and implemented two tmux multiplex backends via the `Renderer` interface: `TmuxPaneRenderer` (`--multi-pane`, since deprecated) and `TmuxWindowRenderer` (`--multi-window`, the current recommended mode).
 
 The result: a fully functional REPL with streaming responses, interactive modals, proper layout anchoring, and a clean `Renderer` interface that today backs `--single` (stdout) and `--multi-window` (tmux windows).
 

@@ -21,7 +21,7 @@
 
   Read 1 file (ctrl+o to expand)                                    
 
-● Now I can give a definitive answer. The current code has eager pane creation in setup() (the original pre-Version 4.3 code) — panes are created before any events flow, SIGWINCH is handled, and tail -f is already running. The FIFO write path is identical in both renderers. 
+● Now I can give a definitive answer. The current code has eager pane creation in setup() (the original pre-Stage 4.3 code) — panes are created before any events flow, SIGWINCH is handled, and tail -f is already running. The FIFO write path is identical in both renderers. 
 
    The pane timing lag is not caused by my events.ts fix. 
 

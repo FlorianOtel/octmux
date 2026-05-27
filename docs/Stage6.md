@@ -1,11 +1,11 @@
 ---
-title: "octmux — Version 6 implementation log"
+title: "octmux — Stage 6 implementation log"
 created_at: 2026-05-26--14-12
 created_by: Claude Code (Claude Haiku 4.5)
 updated_by: Claude Code (Claude Haiku 4.5)
 updated_at: 2026-05-26--18-41
 context: >
-  Implementation log for Version 6 of octmux: /rag slash command with four modes
+  Implementation log for Stage 6 of octmux: /rag slash command with four modes
   (search, on, off, only), RAG context retrieval from SoHoAI knowledge base,
   auto-search interception on prompts when rag mode is active, single-fetch
   refactor for efficiency, streamed rag block rendering, and StatusLine chip
@@ -14,7 +14,7 @@ context: >
   of being captured by the popup when a past entry begins with "/".
 ---
 
-# Version 6: /rag slash command with search/on/off/only modes and auto-search interception
+# Stage 6: /rag slash command with search/on/off/only modes and auto-search interception
 
 ## Read first when expanding on this work
 
@@ -103,23 +103,23 @@ The `Role: "rag"` pattern can be replicated for new block types:
    `setOutputEnabled` in either renderer (pure-gate contract is sacrosanct).
 4. **Block lifecycle:** Emit blocks using `renderer.beginBlock`, append with
    `appendToBlock`, finalize with `endBlock`. The gate automatically controls
-   visibility. See Version 4.4.3 docs in `docs/Version4.md` for the full pattern.
+   visibility. See Stage 4.4.3 docs in `docs/Version4.md` for the full pattern.
 
 ---
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-26--18-41 — Superseded by Version 7
+### 2026-05-26--18-41 — Superseded by Stage 7
 
 **Status:** SUPERSEDED
 
-The TypeScript `/rag` implementation shipped in Version 6 (roles `"rag"`, `src/rag.ts`, `ragMode`, `emitRagBlock`, StatusLine chip) has been completely removed and replaced with Version 7's native opencode markdown command + discovery and forwarding architecture.
+The TypeScript `/rag` implementation shipped in Stage 6 (roles `"rag"`, `src/rag.ts`, `ragMode`, `emitRagBlock`, StatusLine chip) has been completely removed and replaced with Stage 7's native opencode markdown command + discovery and forwarding architecture.
 
 **Why the rip-out:**
-1. **Bug:** Version 6's hardcoded 0.45 score-filter strangled all search hits.
+1. **Bug:** Stage 6's hardcoded 0.45 score-filter strangled all search hits.
 2. **Structural mismatch:** Client-side RAG state (`ragMode`) conflicted with LLM-mediated mode tracking (the LLM interprets `/rag on` as "auto-search", not the harness).
 
-**Version 7 fixes both:**
+**Stage 7 fixes both:**
 - Removes all TypeScript RAG plumbing — RAG is now a native markdown command at `~/.config/opencode/commands/rag.md`.
 - LLM sees rag.md instructions and controls mode behavior (no harness state).
 - RAG output routes to the existing `tools` gate (no new window).
@@ -136,7 +136,7 @@ See `docs/Version7.md` for the new architecture.
 
 **What changed:**
 
-Regression reported after Version 6 shipped: pressing ↑ to scroll through input
+Regression reported after Stage 6 shipped: pressing ↑ to scroll through input
 history would trap the user as soon as the recalled entry began with a `/`. The
 slash-completion overlay opened on the recalled `/command` text, captured
 subsequent ↑/↓ keys (cycling its `selectedIdx`), and the user could not keep
@@ -176,7 +176,7 @@ typing `/r`.
 
 ---
 
-### 2026-05-26--14-12 — /rag slash command (Version 6)
+### 2026-05-26--14-12 — /rag slash command (Stage 6)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-26--14-12
 **Commit(s):** `3bd84cd`
@@ -215,7 +215,7 @@ lines (matching `tool-call`/`tool-result` pattern).
 **`src/renderer/output-keys.ts` changes:** Added `rag: "rag"` to `OUTPUT_KEY`
 map (one line). This auto-wires `/rag-output [on|off]` toggle, `/show` gate
 listing, completion overlay with `/rag-output on/off`, and side-window routing
-in `--multi-window` mode. Pure-gate contract (Version 4.5.1) preserved — no
+in `--multi-window` mode. Pure-gate contract (Stage 4.5.1) preserved — no
 renderer internals modified.
 
 **`src/command-registry.ts` changes:** Added `/rag` command entry with usage

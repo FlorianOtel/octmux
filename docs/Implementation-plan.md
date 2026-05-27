@@ -35,7 +35,7 @@ itself.
 1. **Stack:** TypeScript on Bun. Use `@opencode-ai/sdk` (installed at
    `~/.config/opencode/node_modules/@opencode-ai/sdk`, v1.15.4). Ship via
    `bun build --compile` as a single executable.
-2. **Server lifecycle:** three modes (inverted in Version 4.1c — default is now attach, not spawn).
+2. **Server lifecycle:** three modes (inverted in Stage 4.1c — default is now attach, not spawn).
    - Default — attach to port 4096 (the systemd service `scripts/opencode-server.service`).
      Rich error on connection failure guides user to start the service.
    - `--attach <port>` — connect to an existing server on the given port.
@@ -60,8 +60,8 @@ itself.
    `TmuxWindowRenderer` (`--multi-window`, recommended default for SSH/TTY) is the
    tmux multiplex backend, routing `tool-call` and `tool-result` to a shared `"tools"`
    sink in a side window. **opentmux is the future cross-window coherence layer** —
-   built on the role → log-file → tmux-window contract that Version 3-UX establishes.
-   _(Note: `TmuxPaneRenderer` / `--multi-pane` were removed in Version 4 — see
+   built on the role → log-file → tmux-window contract that Stage 3-UX establishes.
+   _(Note: `TmuxPaneRenderer` / `--multi-pane` were removed in Stage 4 — see
    `docs/multi-window--vs--multi-pane.md` for rationale.)_
 5. **Slash commands:** full set with interactive UX.
    - Local with custom UX: `/exit`, `/clear`, `/help`, `/model`, `/agents`, `/show`.
@@ -100,7 +100,7 @@ One source file per concern. Grow organically; do not pre-explode.
 
 ## Document conventions
 
-- The **Version plan** below is the design reference and execution order. When
+- The **Stage plan** below is the design reference and execution order. When
   a version ships, mark its status `✓ shipped — see log <date>` in the plan but
   do not delete or rewrite the version spec; it's the historical contract.
 - **Implementation logs** have been separated into individual version documents
@@ -111,20 +111,20 @@ One source file per concern. Grow organically; do not pre-explode.
 ## Implementation logs (by version)
 
 Detailed implementation logs for each version have been moved to dedicated documents.
-**If a Version doc conflicts with this file, the Version doc is authoritative.**
+**If a Stage doc conflicts with this file, the Stage doc is authoritative.**
 
-- **Version 0:** embedded in this file (inline log, no separate doc)
-- **Version 1, Version 1.5:** `docs/Version1.md` ← authoritative
-- **Version 2:** `docs/Version2.md` ← authoritative
-- **Version 3 (original, superseded):** plan spec only; no implementation log (never shipped as-is)
-- **Version 3 Extended (3E.1–3E.6) + Version 3 UX (3U.1–3U.8):** `docs/Version3.md` ← authoritative (combined log)
-- **Version 4:** `docs/Version4.md` ← authoritative
+- **Stage 0:** embedded in this file (inline log, no separate doc)
+- **Stage 1, Stage 1.5:** `docs/Version1.md` ← authoritative
+- **Stage 2:** `docs/Version2.md` ← authoritative
+- **Stage 3 (original, superseded):** plan spec only; no implementation log (never shipped as-is)
+- **Stage 3 Extended (3E.1–3E.6) + Stage 3 UX (3U.1–3U.8):** `docs/Version3.md` ← authoritative (combined log)
+- **Stage 4:** `docs/Version4.md` ← authoritative
 
 ---
 
-## Version plan (forward execution order)
+## Stage plan (forward execution order)
 
-### Version 0 — Skeleton + SDK smoke test (½ day)
+### Stage 0 — Skeleton + SDK smoke test (½ day)
 
 **Status:** ✓ shipped — see log 2026-05-18--22-16
 
@@ -153,12 +153,12 @@ Detailed implementation logs for each version have been moved to dedicated docum
    bun run src/index.ts --attach 4096`.
 3. Expect `health: ok` and the session count on stdout.
 
-**Handoff to Version 1:** server URL resolution and SDK client construction
-proven; no UI, no streaming yet. Version 1 can assume the SDK works.
+**Handoff to Stage 1:** server URL resolution and SDK client construction
+proven; no UI, no streaming yet. Stage 1 can assume the SDK works.
 
 ---
 
-### Version 1 — Hello-world REPL with streaming (1 day)
+### Stage 1 — Hello-world REPL with streaming (1 day)
 
 **Status:** ✓ shipped — see `docs/Version1.md`, log 2026-05-18--22-31
 
@@ -176,8 +176,8 @@ status line.
      stream.stream)`.
   4. `readline` loop reading from stdin; on each line, call
      `client.session.prompt({ path: { id }, body: { parts: [{ type: "text",
-     text: input }] } })` (synchronous prompt for Version 1; switch to
-     `promptAsync` in Version 4).
+     text: input }] } })` (synchronous prompt for Stage 1; switch to
+     `promptAsync` in Stage 4).
   5. On `EventMessageUpdated` with `info.role === "assistant"` and
      `info.finish` set, print newline + redraw `> ` prompt.
 - `src/events.ts` — small dispatcher: takes a raw `Event` and the active
@@ -202,12 +202,12 @@ status line.
 **Out of scope:** tool-call rendering (print `[tool: read]` stub), reasoning
 blocks, multi-line input, history, status line, server spawn, slash commands.
 
-**Handoff to Version 1.5:** REPL loop and SSE dispatcher are working;
-Version 1.5 adds streaming polish (indicator, abort, permission/question modals) on top of the Version 1 readline skeleton.
+**Handoff to Stage 1.5:** REPL loop and SSE dispatcher are working;
+Stage 1.5 adds streaming polish (indicator, abort, permission/question modals) on top of the Stage 1 readline skeleton.
 
 ---
 
-### Version 1.5 — Streaming UX + interactive modals (½ day)
+### Stage 1.5 — Streaming UX + interactive modals (½ day)
 
 **Status:** ✓ shipped — see `docs/Version1.md`, log 2026-05-19--15-03 (1.5c+1.5d), 2026-05-19--13-08 (1.5b), 2026-05-19--10-38 (1.5a)
 
@@ -230,12 +230,12 @@ Version 1.5 adds streaming polish (indicator, abort, permission/question modals)
 all sessions regardless of SDK version. Same cast-via-unknown pattern applies to
 `permission.asked` and `question.asked`. The v1 `Event` union omits all three.
 
-**ReplEvent kinds after Version 1.5:** `text-delta`, `session-idle`, `error`,
+**ReplEvent kinds after Stage 1.5:** `text-delta`, `session-idle`, `error`,
 `generating`, `session-status`, `part-removed`, `permission-asked`, `question-asked` (8 total).
 
 ---
 
-### Version 2 — Auto-spawn server + tmux guard (1 day)
+### Stage 2 — Auto-spawn server + tmux guard (1 day)
 
 **Status:** ✓ shipped — see `docs/Version2.md`, log 2026-05-19--15-37
 
@@ -244,7 +244,7 @@ outside tmux unless overridden.
 
 **Deliverable:** `octmux` (no args) inside tmux picks a free port in
 `[4096, 4106]`, spawns `opencode serve --port <port>`, waits for
-`/health`, then enters Version-1 REPL. Outside tmux: warning + exit 1.
+`/health`, then enters Stage-1 REPL. Outside tmux: warning + exit 1.
 
 **Files to create / modify:**
 - `src/server-lifecycle.ts` (new):
@@ -273,14 +273,14 @@ and matches opentmux's port-rotation model.
 3. Ctrl-C: `lsof -i :4097` empty within 3s (no orphans).
 4. Two octmux instances in two tmux windows land on different ports.
 
-**Handoff to Version 3:** server lifecycle is solved end-to-end. Version 3 is
+**Handoff to Stage 3:** server lifecycle is solved end-to-end. Stage 3 is
 pure UX work on the input layer — no server changes.
 
 ---
 
-### Version 3 — Custom raw-mode input layer (2–3 days) — **core UX phase**
+### Stage 3 — Custom raw-mode input layer (2–3 days) — **core UX phase**
 
-**Status:** ✓ superseded — replaced by Version 3 Extended (Ink migration). See log 2026-05-20--17-40 in `docs/Version3.md`.
+**Status:** ✓ superseded — replaced by Stage 3 Extended (Ink migration). See log 2026-05-20--17-40 in `docs/Version3.md`.
 
 **Goal:** replace `readline` with our own input handler so typing feels like
 Claude Code.
@@ -311,7 +311,7 @@ bracketed-paste support, history with Ctrl-P/N, double-Esc clears buffer.
     `process.stdout.columns` + `SIGWINCH`.
   - Enable bracketed paste at startup (`\x1b[?2004h`), disable on exit.
 - `src/index.ts` — swap readline for `LineEditor`. `interrupt` is wired in
-  Version 4.
+  Stage 4.
 
 **Manual verification:**
 1. Ctrl-A/E, Alt-B/F, Ctrl-W behave as in bash.
@@ -325,12 +325,12 @@ bracketed-paste support, history with Ctrl-P/N, double-Esc clears buffer.
 `set -ga terminal-features ",*:extkeys"`. Document in README; degrade
 gracefully if open-paste sequence never arrives.
 
-**Handoff to Version 4:** input layer is feature-complete; Version 4 layers the
+**Handoff to Stage 4:** input layer is feature-complete; Stage 4 layers the
 status line, switches to async streaming, and wires Esc-to-abort.
 
 ---
 
-### Version 3 Extended — Ink rendering layer (3E.1–3E.6)
+### Stage 3 Extended — Ink rendering layer (3E.1–3E.6)
 
 **Status:** ✓ shipped — see log 2026-05-20--17-40 in `docs/Version3.md`.
 
@@ -338,15 +338,15 @@ All six sub-phases shipped. octmux is a working REPL: type a prompt, Enter submi
 
 ---
 
-### Version 3 UX — Typed block renderer + tmux multiplex (3U.1–3U.8)
+### Stage 3 UX — Typed block renderer + tmux multiplex (3U.1–3U.8)
 
 **Status:** ✓ shipped — see log 2026-05-21 in `docs/Version3.md`.
 
-All eight sub-phases shipped. Highlights: flicker-free Static scrollback; typed Block model with ANSI role prefixes; per-role visibility toggles (`/show thinking off`); `Renderer` interface with `StdoutRenderer` and `TmuxWindowRenderer` backends; `--multi-window` (recommended, lazy side windows) multiplex flag; `tool-call` + `tool-result` consolidated to a shared `"tools"` sink; origin window renamed to opencode session label; side windows use `<label>--<key>` naming convention (double-dash); `SubprocessStatus` component shows animated spinner + elapsed timer for active subprocesses; timers clear on role-specific `block-end` events. _(Version 4 subsequently removed `TmuxPaneRenderer` / `--multi-pane` — see `docs/multi-window--vs--multi-pane.md`.)_ See `docs/Version3.md` for full spec, design rationale, and implementation log.
+All eight sub-phases shipped. Highlights: flicker-free Static scrollback; typed Block model with ANSI role prefixes; per-role visibility toggles (`/show thinking off`); `Renderer` interface with `StdoutRenderer` and `TmuxWindowRenderer` backends; `--multi-window` (recommended, lazy side windows) multiplex flag; `tool-call` + `tool-result` consolidated to a shared `"tools"` sink; origin window renamed to opencode session label; side windows use `<label>--<key>` naming convention (double-dash); `SubprocessStatus` component shows animated spinner + elapsed timer for active subprocesses; timers clear on role-specific `block-end` events. _(Stage 4 subsequently removed `TmuxPaneRenderer` / `--multi-pane` — see `docs/multi-window--vs--multi-pane.md`.)_ See `docs/Version3.md` for full spec, design rationale, and implementation log.
 
 ---
 
-### Version 4 — Status line + async streaming + Esc-interrupt + rich parts (2 days)
+### Stage 4 — Status line + async streaming + Esc-interrupt + rich parts (2 days)
 
 **Status:** in progress — see `docs/Version4.md`. Shipped: 4.1b (systemd service, 2026-05-22), 4.1c (default attach 4096 + `--auto-spawn` opt-in, 2026-05-22), 4.2 (`/model`, `/rename`, `/exit`, `/show` consolidation, 2026-05-22), 4.2 fix (`/model` interactive picker + context-window display, 2026-05-22). Core StatusLine content, Esc-interrupt, and `state.ts` planned.
 
@@ -379,14 +379,14 @@ is by `sessionID` only — single-user, single-flight. Acceptable.
 2. Token counter increments live; cost updates on message completion.
 3. Tools render as compact `● tool(args)` lines.
 
-**Handoff to Version 5:** UX foundation is complete. Version 5 layers slash
+**Handoff to Stage 5:** UX foundation is complete. Stage 5 layers slash
 commands on top — `/` input branches before reaching `promptAsync`.
 
 ---
 
-### Version 5 — Slash commands: local + forwarded (2 days)
+### Stage 5 — Slash commands: local + forwarded (2 days)
 
-**Status:** /help and live slash-command completion shipped via re-scoped Version 5 (see `docs/Version5.md`). Previously shipped: `/exit`, `/model` (with interactive picker), `/rename`, and `/show` consolidation (Version 4.2). Remaining (deferred): `/clear`, `/agents`, server fall-through for unknown `/foo`.
+**Status:** /help and live slash-command completion shipped via re-scoped Stage 5 (see `docs/Version5.md`). Previously shipped: `/exit`, `/model` (with interactive picker), `/rename`, and `/show` consolidation (Stage 4.2). Remaining (deferred): `/clear`, `/agents`, server fall-through for unknown `/foo`.
 
 **Goal:** built-ins with custom UX; forward everything else.
 
@@ -420,12 +420,12 @@ unknown `/foo` forward to the server.
    400/404 renders politely.
 5. `/exit` shuts down cleanly; `/clear` resets to a fresh session.
 
-**Handoff to Version 6:** all command routing is in place; Version 6 adds the
+**Handoff to Stage 6:** all command routing is in place; Stage 6 adds the
 orchestra status badge and the inline permission-prompt UX.
 
 ---
 
-### Version 6 — Orchestra badge + permission prompts (1–2 days)
+### Stage 6 — Orchestra badge + permission prompts (1–2 days)
 
 **Status:** planned.
 
@@ -460,12 +460,12 @@ orchestra status badge and the inline permission-prompt UX.
 2. Write-tool prompt shows inline `? Run X? (y/N/a)`; `a` is remembered for
    the session.
 
-**Handoff to Version 7:** functionally complete; Version 7 is polish + single
+**Handoff to Stage 7:** functionally complete; Stage 7 is polish + single
 binary + README.
 
 ---
 
-### Version 7 — Polish + single-binary build + README (1 day)
+### Stage 7 — Polish + single-binary build + README (1 day)
 
 **Status:** planned.
 
@@ -507,8 +507,8 @@ multi-session views, themes) is post-MVP.
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/stdout.ts` — `StdoutRenderer` (default)
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/tmux-window.ts` — `TmuxWindowRenderer` (`--multi-window`)
 - `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/renderer/visibility.ts` — per-role visibility, `/show` parser
-- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/commands.ts` — local slash-command parsers (Version 4.2+)
-- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/components/ModelPickerModal.tsx` — interactive model picker (Version 4.2+)
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/commands.ts` — local slash-command parsers (Stage 4.2+)
+- `/mnt/nfs/Florian/Gin-AI/projects/octmux/src/components/ModelPickerModal.tsx` — interactive model picker (Stage 4.2+)
 
 ## Reused patterns (do not re-derive)
 
@@ -520,11 +520,11 @@ multi-session views, themes) is post-MVP.
   `~/Gin-AI/projects/opencode-orchestra/docs/design.md`,
   `~/Gin-AI/projects/opencode-orchestra/commands/brain.md`.
 
-## Risks / unknowns to resolve before Version 1
+## Risks / unknowns to resolve before Stage 1
 
 1. **SDK package resolution.** SDK is at
    `~/.config/opencode/node_modules/@opencode-ai/sdk`, not on public npm.
-   Version 0 must confirm `bun install` resolves
+   Stage 0 must confirm `bun install` resolves
    `"@opencode-ai/sdk": "file:..."` against that path. Compiled binary will
    inline it.
 2. **`/command` shape.** `SessionCommandData.body = { command: string,
@@ -539,7 +539,7 @@ multi-session views, themes) is post-MVP.
    our `sessionID`. Optional later: surface "sub-agent spawned" notification
    on `EventSessionCreated` where `parentID === ourSessionID`.
 
-## End-to-end verification (after Version 7)
+## End-to-end verification (after Stage 7)
 
 1. `tmux new-session -s demo`.
 2. In the main pane: `./dist/octmux`.
@@ -553,7 +553,7 @@ multi-session views, themes) is post-MVP.
 7. Permission prompt arrives inline; `y` proceeds.
 8. `/exit` → server torn down, no orphan processes, terminal modes restored.
 
-## Version implementation checklist (for whoever picks this up)
+## Stage implementation checklist (for whoever picks this up)
 
 When starting a phase:
 
@@ -570,10 +570,10 @@ When finishing a phase:
    today's `YYYY-MM-DD--HH-MM` timestamp. Each entry must include:
    - **Implemented by:** `<agent name (model)> — YYYY-MM-DD--HH-MM`
    - **Commit(s):** `hash1`, `hash2` — all hashes comma-separated on one line
-2. Flip the phase's status in "Version plan" to `✓ shipped — see <doc>, log
+2. Flip the phase's status in "Stage plan" to `✓ shipped — see <doc>, log
    YYYY-MM-DD--HH-MM`.
 3. Refresh `updated_by` and `updated_at` in the frontmatter of all docs touched.
-4. Commit with `feat(octmux): Version N — <short title>`.
+4. Commit with `feat(octmux): Stage N — <short title>`.
 
 ## Open questions (to revisit after further operator testing)
 
@@ -583,7 +583,7 @@ already specified and held in reserve in case operator testing reveals the
 chosen approach is insufficient. Each entry is one line plus a pointer to
 the full design rationale in the relevant per-phase log.
 
-1. **Toggle-on liveness-cache refresh (Version 4.5.2):** active implementation
+1. **Toggle-on liveness-cache refresh (Stage 4.5.2):** active implementation
    is **Option A** — a non-blocking `_refreshLiveIdsAsync()` kick inside
    `TmuxWindowRenderer.setOutputEnabled` on `on=true`. Recovers block 1
    after toggle-on in the typical operator-timing case (~50 ms refresh vs.
@@ -592,8 +592,8 @@ the full design rationale in the relevant per-phase log.
    **Option B** — a `_forcedProbeKeys: Set<string>` flag plus a one-time
    synchronous `tmux list-windows` probe at the next `_ensureWindow` for
    that key — provides 100% reliable block 1 recovery at the cost of a
-   single Version 4.4.3-style burst-pattern moment for that one block.
+   single Stage 4.4.3-style burst-pattern moment for that one block.
    Option B is fully specified (field declaration, both call-site snippets,
    compatibility argument) and additive on top of Option A. Promote A→A+B
    if operator testing shows real block 1 loss in normal workflows. See
-   `docs/Version4.md` §Version 4.5.2 for the complete design.
+   `docs/Version4.md` §Stage 4.5.2 for the complete design.

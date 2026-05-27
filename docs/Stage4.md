@@ -1,26 +1,26 @@
 ---
-title: "octmux — Version 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
+title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Sonnet 4.6)
 updated_at: 2026-05-26--12-46
 context: >
-  Version 4 is the next major phase focusing on the status line, async streaming,
+  Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
-  the complete planning and implementation logs for Version 4. Version 5 work
+  the complete planning and implementation logs for Stage 4. Stage 5 work
   (/help command, live slash-completion overlay, input highlighting) continues
   in docs/Version5.md as of 2026-05-25--17-10.
 ---
 
 # Read first when adding a streaming output toggle (e.g. /subagent-output)
 
-This section is the contract for adding a new per-block-class streaming output toggle on top of the renderer machinery built in Version 4.4.3 + 4.4.4 + 4.5 + 4.5.1. Read it before adding a new gate key (current keys: `thinking`, `tools`; planned: `subagent`).
+This section is the contract for adding a new per-block-class streaming output toggle on top of the renderer machinery built in Stage 4.4.3 + 4.4.4 + 4.5 + 4.5.1. Read it before adding a new gate key (current keys: `thinking`, `tools`; planned: `subagent`).
 
 ## The pure-gate invariant
 
 `TmuxWindowRenderer.setOutputEnabled(key, on)` and `StdoutRenderer.setOutputEnabled(key, on)` are **pure setters** on a `Map<string, boolean>`. They mutate the gate entry and do nothing else. No window creation. No FIFO open/close. No tmux subprocess. No events emitted.
 
-Window / FIFO / streaming lifecycle is owned exclusively by `TmuxWindowRenderer._ensureWindow(key)`, invoked exclusively from `beginBlock` (the Version 4.4.3 load-bearing path). Re-entry safety (detect manually-killed windows and recreate) and the Version 4.4.4 async liveness cache (`_liveIds`) live there.
+Window / FIFO / streaming lifecycle is owned exclusively by `TmuxWindowRenderer._ensureWindow(key)`, invoked exclusively from `beginBlock` (the Stage 4.4.3 load-bearing path). Re-entry safety (detect manually-killed windows and recreate) and the Stage 4.4.4 async liveness cache (`_liveIds`) live there.
 
 When the gate is off:
 - `beginBlock` registers partID in `_openBlocks` THEN early-exits before `_ensureWindow`. This is intentional — it lets a mid-block toggle-on flip seamlessly with no lost block bookkeeping.
@@ -46,19 +46,19 @@ No code changes in `commands.ts`, `app.tsx`, `tmux-window.ts`, `stdout.ts`, or `
 
 ## Why the eager-creation experiment was rejected
 
-Version 4.5 (commit `25c644a`) tried adding an eager `_ensureWindow` call inside `setOutputEnabled` so the side window would appear immediately on `/<key>-output on`. The operator reported that the window appeared re-created but no content streamed to it, and `dispose` printed `can't find window: @17` to stderr at session end.
+Stage 4.5 (commit `25c644a`) tried adding an eager `_ensureWindow` call inside `setOutputEnabled` so the side window would appear immediately on `/<key>-output on`. The operator reported that the window appeared re-created but no content streamed to it, and `dispose` printed `can't find window: @17` to stderr at session end.
 
-The eager call broke the Version 4.4.3 invariant in two ways:
+The eager call broke the Stage 4.4.3 invariant in two ways:
 1. **Stale-cache hit** — `_liveIds` reports the cached ID alive when it's actually dead; the eager call returns early without recreating; the map still points at the dead ID, and no block-start has fired to trigger lazy recreation; later `dispose` tries to kill the dead window.
 2. **Cache-miss recreation** — runs the cleanup-then-fresh-create sequence outside any active streaming context; subsequent block-start may not race favorably with the file-handle / tail-pipe lifecycle the eager call set up.
 
-Version 4.5.1 reverted the eager call. The lazy-on-block-start UX (window appears on the next matching block, not on toggle) is the accepted trade-off. Future toggle implementers MUST NOT re-introduce eager window creation in `setOutputEnabled` — doing so re-introduces the same regression class for every gate key.
+Stage 4.5.1 reverted the eager call. The lazy-on-block-start UX (window appears on the next matching block, not on toggle) is the accepted trade-off. Future toggle implementers MUST NOT re-introduce eager window creation in `setOutputEnabled` — doing so re-introduces the same regression class for every gate key.
 
-**Version 4.5.2 follow-up — the one permitted side effect.** Version 4.5.1's strict invariant exposed a second-order issue: during a long gate-off period, no `beginBlock` fires `_ensureWindow`, so the Version 4.4.4 `_liveIds` cache never gets refreshed. If the operator killed the side window during gate-off, the next block-start after toggle-on would silently write to a dead FIFO (block 1 lost). Version 4.5.2 (commit `bde7d9a`) added a single permitted side effect to `setOutputEnabled`: on `on=true`, kick a non-blocking `_refreshLiveIdsAsync()` so the cache is fresh by the next block-start. Cache mutation only — no window/FIFO/block touched, no blocking I/O. The full pure-gate prohibitions on `_ensureWindow`, window spawning, FIFO open/close, and synchronous tmux subprocesses remain in force. See the Version 4.5.2 implementation log entry for the design rationale and a fully-specified Option B (force-sync-probe via flag) held in reserve for the rare sub-50ms toggle-then-submit race.
+**Stage 4.5.2 follow-up — the one permitted side effect.** Stage 4.5.1's strict invariant exposed a second-order issue: during a long gate-off period, no `beginBlock` fires `_ensureWindow`, so the Stage 4.4.4 `_liveIds` cache never gets refreshed. If the operator killed the side window during gate-off, the next block-start after toggle-on would silently write to a dead FIFO (block 1 lost). Stage 4.5.2 (commit `bde7d9a`) added a single permitted side effect to `setOutputEnabled`: on `on=true`, kick a non-blocking `_refreshLiveIdsAsync()` so the cache is fresh by the next block-start. Cache mutation only — no window/FIFO/block touched, no blocking I/O. The full pure-gate prohibitions on `_ensureWindow`, window spawning, FIFO open/close, and synchronous tmux subprocesses remain in force. See the Stage 4.5.2 implementation log entry for the design rationale and a fully-specified Option B (force-sync-probe via flag) held in reserve for the rare sub-50ms toggle-then-submit race.
 
 ---
 
-# Version pre-implementation checklist - Read this first
+# Stage pre-implementation checklist - Read this first
 
 When starting a phase:
 
@@ -78,46 +78,46 @@ When finishing a phase:
 2. Flip the phase's status in the parent plan to `✓ shipped — see log
    YYYY-MM-DD--HH-MM`.
 3. Refresh `updated_by` and `updated_at` in the frontmatter.
-4. Commit with `feat(octmux): Version N — <short title>`.
+4. Commit with `feat(octmux): Stage N — <short title>`.
 
 ---
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-25--20-59 — Version 4.5.2: Hotfix for Version 4.5.1 — non-blocking liveness-cache refresh on toggle-on (Option A); Option B held in reserve
+### 2026-05-25--20-59 — Stage 4.5.2: Hotfix for Stage 4.5.1 — non-blocking liveness-cache refresh on toggle-on (Option A); Option B held in reserve
 
 **Implemented by:** Claude Code (Claude Opus 4.7 1M) — 2026-05-25--20-59
 **Commit(s):** `bde7d9a`
 
 **Why this hotfix on top of 4.5.1:**
 
-After Version 4.5.1 made `setOutputEnabled` a pure Map setter, the operator hit a specific scenario in `--multi-window` mode that the strict invariant did not handle gracefully:
+After Stage 4.5.1 made `setOutputEnabled` a pure Map setter, the operator hit a specific scenario in `--multi-window` mode that the strict invariant did not handle gracefully:
 
-1. Trigger something that requires thinking → side window `<label>--thinking` is created (lazy, via `beginBlock` → `_ensureWindow` — the Version 4.4.3 path).
+1. Trigger something that requires thinking → side window `<label>--thinking` is created (lazy, via `beginBlock` → `_ensureWindow` — the Stage 4.4.3 path).
 2. `/thinking-output off` and then **manually kill** the side window in tmux. More thinking turns happen (gated; correctly produces no streaming, no window management).
 3. `/thinking-output on`. The next thinking block (block 1 after toggle-on) is **silently lost** — no streaming. Streaming only resumes from block 2 onward.
 
-This is structurally the Version 4.4.4 "at most one block of deltas may write to a dead FIFO" trade-off, but **magnified** by the quiescent gate-off period. During gate-off, `beginBlock` short-circuits before `_ensureWindow`, so the in-memory `_liveIds` cache (Version 4.4.4) receives no refresh kicks for the entire duration. By the time `/thinking-output on` is followed by a thinking-producing prompt, the cache is guaranteed stale — it still reports the long-since-killed window as alive. The first `_ensureWindow` call returns early from the cache check, `appendToBlock` writes to a stale FIFO, and only the async refresh kicked by that same `_ensureWindow` lands in time for block 2 to see a fresh cache and recreate.
+This is structurally the Stage 4.4.4 "at most one block of deltas may write to a dead FIFO" trade-off, but **magnified** by the quiescent gate-off period. During gate-off, `beginBlock` short-circuits before `_ensureWindow`, so the in-memory `_liveIds` cache (Stage 4.4.4) receives no refresh kicks for the entire duration. By the time `/thinking-output on` is followed by a thinking-producing prompt, the cache is guaranteed stale — it still reports the long-since-killed window as alive. The first `_ensureWindow` call returns early from the cache check, `appendToBlock` writes to a stale FIFO, and only the async refresh kicked by that same `_ensureWindow` lands in time for block 2 to see a fresh cache and recreate.
 
-In Version 4.4.4's original verification the kill happened mid-stream of an in-flight block, so refresh kicks had already been firing — the staleness was racy and usually resolved before the next block-start. In this 4.5.1 scenario the staleness is deterministic.
+In Stage 4.4.4's original verification the kill happened mid-stream of an in-flight block, so refresh kicks had already been firing — the staleness was racy and usually resolved before the next block-start. In this 4.5.1 scenario the staleness is deterministic.
 
 **What changed (Option A — adopted):**
 
 Single line added to `TmuxWindowRenderer.setOutputEnabled`: on `on=true`, kick `_refreshLiveIdsAsync()`. This is a non-blocking, single-flighted, fire-and-forget tmux subprocess that updates the in-memory `_liveIds: Set<string>` cache. By the time the operator finishes typing the follow-up prompt (typically multi-second), the cache is fresh, and the next `_ensureWindow` correctly identifies the dead window and runs the recreation path during block 1's setup. Block 1 streams to the freshly recreated window with no loss.
 
-**Why this is compatible with the Version 4.5.1 pure-gate invariant:**
+**Why this is compatible with the Stage 4.5.1 pure-gate invariant:**
 
-The Version 4.5.1 CONTRACT comment in `src/renderer/output-keys.ts` was widened from "MUST NOT … have any other side effect" to "MUST NOT call `_ensureWindow`, spawn windows, open or close FIFOs, kill windows, run any SYNCHRONOUS tmux subprocess, or emit events" — with a single explicit Version 4.5.2 exception for the non-blocking cache refresh. The structural concerns that motivated 4.5.1 (window/FIFO/block lifecycle leaking into `setOutputEnabled`, blocking I/O on toggle, eager creation racing with the next block-start) all remain prohibited. What is permitted is a single cache-only mutation in a background subprocess that touches no window, no FIFO, no block, and never blocks the caller.
+The Stage 4.5.1 CONTRACT comment in `src/renderer/output-keys.ts` was widened from "MUST NOT … have any other side effect" to "MUST NOT call `_ensureWindow`, spawn windows, open or close FIFOs, kill windows, run any SYNCHRONOUS tmux subprocess, or emit events" — with a single explicit Stage 4.5.2 exception for the non-blocking cache refresh. The structural concerns that motivated 4.5.1 (window/FIFO/block lifecycle leaking into `setOutputEnabled`, blocking I/O on toggle, eager creation racing with the next block-start) all remain prohibited. What is permitted is a single cache-only mutation in a background subprocess that touches no window, no FIFO, no block, and never blocks the caller.
 
 **Failure mode still possible (rare):**
 
-If the operator types and submits the follow-up prompt fast enough (and the network + model are fast enough) that the next block-start arrives in less than ~50 ms after `/<key>-output on`, the refresh may not have landed yet, and block 1 will still be lost (same as the pre-4.5.2 behavior, same as Version 4.4.4's documented trade-off). Empirically rare for human operators; common for scripted tests that toggle and submit programmatically. If this becomes a real concern, see **Option B** below.
+If the operator types and submits the follow-up prompt fast enough (and the network + model are fast enough) that the next block-start arrives in less than ~50 ms after `/<key>-output on`, the refresh may not have landed yet, and block 1 will still be lost (same as the pre-4.5.2 behavior, same as Stage 4.4.4's documented trade-off). Empirically rare for human operators; common for scripted tests that toggle and submit programmatically. If this becomes a real concern, see **Option B** below.
 
 ---
 
 #### Option B — alternative for future exploration (NOT implemented; held in reserve)
 
-**Premise:** make block 1 recovery 100% reliable, at the cost of re-introducing a single Version 4.4.3-style burst-pattern moment for that one block.
+**Premise:** make block 1 recovery 100% reliable, at the cost of re-introducing a single Stage 4.4.3-style burst-pattern moment for that one block.
 
 **Design:**
 
@@ -146,40 +146,40 @@ If the operator types and submits the follow-up prompt fast enough (and the netw
    ```
 4. The flag is per-key and consumed exactly once (next `_ensureWindow` for that key). Subsequent block-starts hit the normal async-cached fast path.
 
-**Cost:** one synchronous `tmux list-windows` (~10–50 ms on the operator's machine) blocking the event loop for exactly the first `_ensureWindow` call after each toggle-on. This is the same burst-pattern cost Version 4.4.3 had on every block before Version 4.4.4 optimized it away — Option B accepts that cost only on the first block after a toggle event, not per block.
+**Cost:** one synchronous `tmux list-windows` (~10–50 ms on the operator's machine) blocking the event loop for exactly the first `_ensureWindow` call after each toggle-on. This is the same burst-pattern cost Stage 4.4.3 had on every block before Stage 4.4.4 optimized it away — Option B accepts that cost only on the first block after a toggle event, not per block.
 
 **Effectiveness:** 100% reliable block 1 recovery. No race window.
 
-**Pure-gate compatibility:** the flag mutation in `setOutputEnabled` is the same kind of cheap Map/Set mutation as the gate write itself; the sync probe runs in `_ensureWindow`, which is the structurally correct place for tmux subprocess work. No widening of the contract is required beyond what Version 4.5.2 already permits.
+**Pure-gate compatibility:** the flag mutation in `setOutputEnabled` is the same kind of cheap Map/Set mutation as the gate write itself; the sync probe runs in `_ensureWindow`, which is the structurally correct place for tmux subprocess work. No widening of the contract is required beyond what Stage 4.5.2 already permits.
 
-**When to revisit:** if operator testing shows the Version 4.5.2 async approach loses block 1 in real workflows (not just synthetic fast-toggle tests), promote Option B from "held in reserve" to the active implementation. Both options are additive — Option B can be layered on top of Option A without removing the async kick (the async kick is still useful as a fast-path warmup for the cases where the operator IS slow enough).
+**When to revisit:** if operator testing shows the Stage 4.5.2 async approach loses block 1 in real workflows (not just synthetic fast-toggle tests), promote Option B from "held in reserve" to the active implementation. Both options are additive — Option B can be layered on top of Option A without removing the async kick (the async kick is still useful as a fast-path warmup for the cases where the operator IS slow enough).
 
 **Decision rationale for choosing A first:** smallest blast radius (one line vs. ~10 lines + new field + new control flow in `_ensureWindow`), zero burst-pattern regression, handles the operator's reported scenario in the typical human-timing case. Hard guarantees can come later if needed.
 
 **Files modified:**
-- `src/renderer/tmux-window.ts` (one-line addition to `setOutputEnabled`; comment block explaining the Version 4.5.2 rationale)
+- `src/renderer/tmux-window.ts` (one-line addition to `setOutputEnabled`; comment block explaining the Stage 4.5.2 rationale)
 - `src/renderer/output-keys.ts` (CONTRACT comment widened: rules 2 and 3 clarified; new rule 4 explains the cache-refresh exception)
-- `docs/Version4.md` (this entry; Version 4.5.1 entry annotated below)
+- `docs/Version4.md` (this entry; Stage 4.5.1 entry annotated below)
 - `docs/Implementation-plan.md` (new "Open questions" section at bottom summarising Option B → pointer here)
 
 **Verified:** pending operator smoke test (re-run sequence: trigger thinking → `/thinking-output off` → manually kill window → more turns → `/thinking-output on` → next thinking block — expect streaming to a freshly recreated window from block 1).
 
 ---
 
-### 2026-05-25--19-43 — Version 4.5.1: Hotfix — revert eager window creation in setOutputEnabled + codify pure-gate contract for all current/future toggles
+### 2026-05-25--19-43 — Stage 4.5.1: Hotfix — revert eager window creation in setOutputEnabled + codify pure-gate contract for all current/future toggles
 
 **Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent dispatched by Claude Opus 4.7) — 2026-05-25--19-43
 **Commit(s):** `0a2aa07`
 
 **What changed:**
 
-Removed the eager `_ensureWindow(key)` call from `TmuxWindowRenderer.setOutputEnabled` (introduced in Version 4.5, commit `25c644a`). `setOutputEnabled` is now a pure setter on the `_outputEnabled` Map for all gate keys in `OUTPUT_KEYS` — current (`thinking`, `tools`) and future (e.g. `subagent`). Window lifecycle reverts entirely to the Version 4.4.3 + 4.4.4 lazy-on-block-start mechanism via `beginBlock` → `_ensureWindow`.
+Removed the eager `_ensureWindow(key)` call from `TmuxWindowRenderer.setOutputEnabled` (introduced in Stage 4.5, commit `25c644a`). `setOutputEnabled` is now a pure setter on the `_outputEnabled` Map for all gate keys in `OUTPUT_KEYS` — current (`thinking`, `tools`) and future (e.g. `subagent`). Window lifecycle reverts entirely to the Stage 4.4.3 + 4.4.4 lazy-on-block-start mechanism via `beginBlock` → `_ensureWindow`.
 
 Added top-of-file CONTRACT comment block to `src/renderer/output-keys.ts` codifying the pure-gate invariant at the file every future toggle implementer will edit. Added new top-of-doc "Read first when adding a streaming output toggle (e.g. /subagent-output)" section to `docs/Version4.md` with the full contract in prose form, including the worked example of adding a hypothetical `/subagent-output` toggle and a post-mortem of why the eager-creation experiment was rejected.
 
 **Why the fix:**
 
-Operator-reported regression in `--multi-window` mode: after `/thinking-output off` then `/thinking-output on`, the side window appeared re-created but no content streamed to it, and `dispose` printed `can't find window: @17` to stderr at session end. Root cause: the eager `_ensureWindow` call interacted with the Version 4.4.4 async liveness cache in two ways the Version 4.4.3 invariant never anticipated — stale-cache hit (leaves dead window ID in map; later `dispose` errors) and cache-miss recreation (runs cleanup-then-fresh-create outside any active streaming context, leaving the renderer in a state the rest of the code wasn't designed for).
+Operator-reported regression in `--multi-window` mode: after `/thinking-output off` then `/thinking-output on`, the side window appeared re-created but no content streamed to it, and `dispose` printed `can't find window: @17` to stderr at session end. Root cause: the eager `_ensureWindow` call interacted with the Stage 4.4.4 async liveness cache in two ways the Stage 4.4.3 invariant never anticipated — stale-cache hit (leaves dead window ID in map; later `dispose` errors) and cache-miss recreation (runs cleanup-then-fresh-create outside any active streaming context, leaving the renderer in a state the rest of the code wasn't designed for).
 
 Fix scope is uniform across all toggles: `setOutputEnabled` becomes a pure Map setter for every gate key, present and future. The contract is codified in two surfaces (code comment in `output-keys.ts` + prose section in `Version4.md`) so future toggle implementers cannot miss it.
 
@@ -187,20 +187,20 @@ Fix scope is uniform across all toggles: `setOutputEnabled` becomes a pure Map s
 
 - `/<key>-output on` with no prior content: no window appears immediately. The window materializes on the next matching block-start.
 - `/<key>-output on` with side window still alive: gate flips, next `appendToBlock` writes to the existing window.
-- `/<key>-output on` after operator manually killed the window: identical to Version 4.4.3 / 4.4.4 behavior — next block-start runs `_ensureWindow`, async cache refresh from a prior block invalidates the stale ID, recreation happens, stream resumes. Version 4.4.4 trade-off ("at most one block of deltas may write to a dead FIFO") preserved. **(Updated in Version 4.5.2 — see entry above. The async-refresh kick on toggle-on now warms the cache during the typical operator window between toggling and submitting the next prompt, so block 1 streams to a freshly recreated window in the normal case. The race window survives only for sub-50ms toggle-then-submit timing.)**
+- `/<key>-output on` after operator manually killed the window: identical to Stage 4.4.3 / 4.4.4 behavior — next block-start runs `_ensureWindow`, async cache refresh from a prior block invalidates the stale ID, recreation happens, stream resumes. Stage 4.4.4 trade-off ("at most one block of deltas may write to a dead FIFO") preserved. **(Updated in Stage 4.5.2 — see entry above. The async-refresh kick on toggle-on now warms the cache during the typical operator window between toggling and submitting the next prompt, so block 1 streams to a freshly recreated window in the normal case. The race window survives only for sub-50ms toggle-then-submit timing.)**
 - `/<key>-output off`: no window management, no streaming.
 - `/show` reports live gate state, unaffected.
 
 **Files modified:**
 - `src/renderer/tmux-window.ts` (revert eager block in setOutputEnabled)
 - `src/renderer/output-keys.ts` (add CONTRACT comment)
-- `docs/Version4.md` (new "Read first" top-of-doc section + Version 4.5.1 entry + Version 4.5 forward-pointer)
+- `docs/Version4.md` (new "Read first" top-of-doc section + Stage 4.5.1 entry + Stage 4.5 forward-pointer)
 
 **Verified:** pending operator smoke test.
 
 ---
 
-### 2026-05-25--14-11 — Version 4.5: /show + /<key>-output slash commands on 4.4.3+4.4.4 foundation
+### 2026-05-25--14-11 — Stage 4.5: /show + /<key>-output slash commands on 4.4.3+4.4.4 foundation
 
 **Implemented by:** Claude Code (Claude Opus 4.7) — 2026-05-25--14-11
 **Commit(s):** `25c644a`
@@ -209,9 +209,9 @@ Fix scope is uniform across all toggles: `setOutputEnabled` becomes a pure Map s
 
 New shared module `src/renderer/output-keys.ts` exports `OUTPUT_KEY` (Role → output-key mapping) and `OUTPUT_KEYS` (deduped key list). This is the single source of truth for both renderers + commands.ts.
 
-`TmuxWindowRenderer` migrated to import `OUTPUT_KEY`/`OUTPUT_KEYS` from the shared module (removed local `WINDOW_KEY`). Behaviour-preserving — the constructor and gate machinery still operate as in Version 4.4.3+4.4.4. Gate checks in `beginBlock`/`appendToBlock`/`endBlock` remain uniform. `setOutputEnabled(key, true)` now eagerly calls `_ensureWindow(key)` so the side window appears the moment the gate is flipped on — fixes the lazy-creation asymmetry where toggling on after toggling off (or before any content has streamed) would leave the operator with no visible window until the next block-start.
+`TmuxWindowRenderer` migrated to import `OUTPUT_KEY`/`OUTPUT_KEYS` from the shared module (removed local `WINDOW_KEY`). Behaviour-preserving — the constructor and gate machinery still operate as in Stage 4.4.3+4.4.4. Gate checks in `beginBlock`/`appendToBlock`/`endBlock` remain uniform. `setOutputEnabled(key, true)` now eagerly calls `_ensureWindow(key)` so the side window appears the moment the gate is flipped on — fixes the lazy-creation asymmetry where toggling on after toggling off (or before any content has streamed) would leave the operator with no visible window until the next block-start.
 
-`StdoutRenderer` upgraded from no-op gate (Version 4.4.3 placeholder) to real gate: `_outputEnabled: Map<string, boolean>` field, real `isOutputEnabled`/`setOutputEnabled` methods, gate checks in `beginBlock`/`appendToBlock`/`endBlock`. In `--single` mode, `/<key>-output off` now suppresses inline scrollback rendering for that block class.
+`StdoutRenderer` upgraded from no-op gate (Stage 4.4.3 placeholder) to real gate: `_outputEnabled: Map<string, boolean>` field, real `isOutputEnabled`/`setOutputEnabled` methods, gate checks in `beginBlock`/`appendToBlock`/`endBlock`. In `--single` mode, `/<key>-output off` now suppresses inline scrollback rendering for that block class.
 
 `commands.ts`: `parseShowCommand` replaced — old visibility-toggle behaviour (with `/show <role> on|off` syntax) is gone. New `/show` (no args) reads renderer state and emits a coloured one-line status (ANSI green for on, red for off, pipe-separated). New `parseBlockOutputCommand` handles `/<key>-output [on|off]` — generic regex captures any key, validates against `OUTPUT_KEYS`, returns discoverable error for unknown keys, reports current state when no arg given (`"<key>-output is <on|off>"`), and on toggle replies with the transition (`"<key>-output prev->new"`, e.g. `on->off`, `off->on`, or no-op forms `on->on` / `off->off`) so the operator always sees the resulting state. ANSI constants `GREEN`/`RED`/`RESET` defined inline. `Visibility` and `Role` imports removed (no longer needed). Other parsers (`parseExitCommand`, `parseRenameCommand`, `parseModelCommand`) unchanged.
 
@@ -230,24 +230,24 @@ Gate is uniform across both `--single` and `--multi-window` mode semantics. Per-
 
 **Verified (operator, 2026-05-25):** `/show`, `/thinking-output [on|off]`, `/tools-output [on|off]` all behave as designed in both `--single` and `--multi-window` modes. Toggle reply transition format (`prev->new`, including no-op `on->on` / `off->off`) confirmed. Unknown `/<key>-output` returns the discoverable error.
 
-> **Note (Version 4.5.1, see entry above):** the eager window creation on toggle-on introduced in this entry caused a streaming regression in `--multi-window` mode (window re-created but no content streamed; `dispose` printed `can't find window: @17`) and was reverted in Version 4.5.1. The trade-off: side windows no longer appear immediately on `/<key>-output on`; they appear on the next matching block-start (Version 4.4.3 lazy creation). Version 4.5's other deliverables (`/show`, `/<key>-output` toggle/query/transition-reply, `StdoutRenderer` gate uniformity, shared `output-keys.ts` registry) remain in effect and are the foundation that all future `/<key>-output` toggles inherit from.
+> **Note (Stage 4.5.1, see entry above):** the eager window creation on toggle-on introduced in this entry caused a streaming regression in `--multi-window` mode (window re-created but no content streamed; `dispose` printed `can't find window: @17`) and was reverted in Stage 4.5.1. The trade-off: side windows no longer appear immediately on `/<key>-output on`; they appear on the next matching block-start (Stage 4.4.3 lazy creation). Stage 4.5's other deliverables (`/show`, `/<key>-output` toggle/query/transition-reply, `StdoutRenderer` gate uniformity, shared `output-keys.ts` registry) remain in effect and are the foundation that all future `/<key>-output` toggles inherit from.
 
 ---
 
-### 2026-05-23--23-15 — Version 4.4.4: async background liveness refresh (eliminate per-block tmux overhead)
+### 2026-05-23--23-15 — Stage 4.4.4: async background liveness refresh (eliminate per-block tmux overhead)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--23-15
 **Commit(s):** `ad60b1c`
 
-**What changed:** Moved the tmux liveness probe off the hot path. `_ensureWindow` now reads an in-memory `_liveIds: Set<string>` cache (zero subprocess cost on warm path); cache refreshed fire-and-forget via `execFile` (callback form) after every `_ensureWindow` call. `_liveIdsRefreshInFlight` single-flight guard prevents concurrent subprocess spawns. Eliminates the per-block ~10–50 ms event-loop block introduced in Version 4.4.3 that caused thinking deltas to flush in bursts.
+**What changed:** Moved the tmux liveness probe off the hot path. `_ensureWindow` now reads an in-memory `_liveIds: Set<string>` cache (zero subprocess cost on warm path); cache refreshed fire-and-forget via `execFile` (callback form) after every `_ensureWindow` call. `_liveIdsRefreshInFlight` single-flight guard prevents concurrent subprocess spawns. Eliminates the per-block ~10–50 ms event-loop block introduced in Stage 4.4.3 that caused thinking deltas to flush in bursts.
 
 **Trade-off:** at most one block of deltas may write to a dead FIFO (lost) if the operator kills a window mid-stream; the async refresh kicked at that block-start lands ~50 ms later and the next block-start recreates the window. Acceptable per operator priority: real-time streaming > zero-loss on manual kill.
 
-**Verified (operator, 2026-05-23):** real-time streaming to side windows confirmed; thinking content now arrives smoothly without the burst pattern observed under Version 4.4.3's synchronous probe. Window re-creation after manual `tmux kill-window` works on next block-start with no perceptible delay.
+**Verified (operator, 2026-05-23):** real-time streaming to side windows confirmed; thinking content now arrives smoothly without the burst pattern observed under Stage 4.4.3's synchronous probe. Window re-creation after manual `tmux kill-window` works on next block-start with no perceptible delay.
 
 ---
 
-### 2026-05-23--22-42 — Version 4.4.3: re-entry safety + outputEnabled gate (TmuxWindowRenderer foundation)
+### 2026-05-23--22-42 — Stage 4.4.3: re-entry safety + outputEnabled gate (TmuxWindowRenderer foundation)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--22-42
 **Commit(s):** `1a4523c`
@@ -278,11 +278,11 @@ Added re-entry safety to `TmuxWindowRenderer` via a liveness check in `_ensureWi
 - `src/renderer/stdout.ts` — no-op implementations
 - `src/renderer/tmux-window.ts` — _outputEnabled map, public methods, hardened _ensureWindow with liveness check, gate checks in beginBlock/appendToBlock/endBlock
 
-> **Forward-pointer (Version 4.5 + Version 4.5.1):** this entry's `_outputEnabled` map + `isOutputEnabled` / `setOutputEnabled` methods are the load-bearing foundation that the Version 4.5 user-facing `/<key>-output [on|off]` slash commands (commit `25c644a`) wire into. Version 4.5 also added an eager `_ensureWindow` call inside `setOutputEnabled` to make the side window appear immediately on toggle-on; that experiment regressed streaming in `--multi-window` mode and was reverted by **Version 4.5.1** (see top of log), which restored the strict invariant established here: `setOutputEnabled` is a pure Map setter and window lifecycle belongs exclusively to `_ensureWindow` invoked from `beginBlock`. The Version 4.5.1 docs include a "Read first when adding a streaming output toggle" section at the top of this file plus a CONTRACT comment block in `src/renderer/output-keys.ts` codifying the invariant for all current and future toggles (`thinking`, `tools`, future `subagent`, etc.).
+> **Forward-pointer (Stage 4.5 + Stage 4.5.1):** this entry's `_outputEnabled` map + `isOutputEnabled` / `setOutputEnabled` methods are the load-bearing foundation that the Stage 4.5 user-facing `/<key>-output [on|off]` slash commands (commit `25c644a`) wire into. Stage 4.5 also added an eager `_ensureWindow` call inside `setOutputEnabled` to make the side window appear immediately on toggle-on; that experiment regressed streaming in `--multi-window` mode and was reverted by **Stage 4.5.1** (see top of log), which restored the strict invariant established here: `setOutputEnabled` is a pure Map setter and window lifecycle belongs exclusively to `_ensureWindow` invoked from `beginBlock`. The Stage 4.5.1 docs include a "Read first when adding a streaming output toggle" section at the top of this file plus a CONTRACT comment block in `src/renderer/output-keys.ts` codifying the invariant for all current and future toggles (`thinking`, `tools`, future `subagent`, etc.).
 
 ---
 
-### 2026-05-23--18-48 — Version 4.4.1: orchestra-style status bar (model, ctx bar, project, branch)
+### 2026-05-23--18-48 — Stage 4.4.1: orchestra-style status bar (model, ctx bar, project, branch)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--17-20 (initial); Claude Code (Claude Sonnet 4.6) — 2026-05-23--18-48 (UX fixes)
 **Commit(s):** `ecf35f9`, `6834548`, `4f702a8`
@@ -313,7 +313,7 @@ Replaced the basic `[idle] hidden: ...` status line with an orchestra-style stat
 
 ---
 
-### 2026-05-23--16-40 — Version 4.3: /show status + /thinking /tools toggle commands
+### 2026-05-23--16-40 — Stage 4.3: /show status + /thinking /tools toggle commands
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-23--16-40
 **Commit(s):** `105b17a`
@@ -349,11 +349,11 @@ Refactored `/show`, `/thinking`, and `/tools` commands to unify visibility toggl
 - `src/commands.ts` — replaced `parseShowCommand()` with `handleShowCommand()` and `handleToggleCommand()`; removed import of `Visibility` (no longer needed directly).
 - `src/app.tsx` — updated import to use `handleShowCommand`, `handleToggleCommand`; replaced `/show` dispatch block with the two new function calls.
 
-> **Status (2026-05-25): DEPRECATED — superseded by Version 4.5.** This first attempt failed because tmux window (re)creation was not re-entry safe; the load-bearing preparation was subsequently delivered in **Version 4.4.3** (`1a4523c` — re-entry safety + `outputEnabled` gate) and **Version 4.4.4** (`ad60b1c` — async background liveness refresh). The user-facing commands originally scoped here shipped in **Version 4.5** (`25c644a` — see that entry for the authoritative description). This entry is retained as historical record of the failed first attempt.
+> **Status (2026-05-25): DEPRECATED — superseded by Stage 4.5.** This first attempt failed because tmux window (re)creation was not re-entry safe; the load-bearing preparation was subsequently delivered in **Stage 4.4.3** (`1a4523c` — re-entry safety + `outputEnabled` gate) and **Stage 4.4.4** (`ad60b1c` — async background liveness refresh). The user-facing commands originally scoped here shipped in **Stage 4.5** (`25c644a` — see that entry for the authoritative description). This entry is retained as historical record of the failed first attempt.
 
 ---
 
-### 2026-05-22 — Version 4.2 fix: /model interactive picker + context window display
+### 2026-05-22 — Stage 4.2 fix: /model interactive picker + context window display
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
 **Commit(s):** `357fd181`, `487074d8`
@@ -378,7 +378,7 @@ This means the picker shows more models than the user may have consciously set u
 
 ---
 
-### 2026-05-22 — Version 4.2: /model, /rename, /exit slash commands + /show consolidation
+### 2026-05-22 — Stage 4.2: /model, /rename, /exit slash commands + /show consolidation
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
 **Commit(s):** `0bdd5174`
@@ -402,7 +402,7 @@ Four slash-command implementations and command parsing consolidation. All local 
 
 ---
 
-### 2026-05-22 — Version 4.1c: Default attach to port 4096 + --auto-spawn warning
+### 2026-05-22 — Stage 4.1c: Default attach to port 4096 + --auto-spawn warning
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
 **Commit(s):** `55581900`, `8e793430`, `fe9a72db`
@@ -448,7 +448,7 @@ If persistent logs are needed later, options are:
 
 ---
 
-### 2026-05-22 — Version 4.1b: systemd service for opencode headless mode
+### 2026-05-22 — Stage 4.1b: systemd service for opencode headless mode
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6)
 **Commit(s):** `cbd48a08`, `00bb1efc`
@@ -472,7 +472,7 @@ journalctl -u opencode-server -f
 
 ---
 
-### 2026-05-21 — Version 4.1: Post-Version3 minor UX fixes
+### 2026-05-21 — Stage 4.1: Post-Version3 minor UX fixes
 
 **Implemented by:** Claude Code (Claude Haiku 4.5)
 **Commit(s):** `b92c706`, `419ac4e8`
@@ -494,7 +494,7 @@ Timer start/stop semantics: `thinking` timer starts on `block-start` for the thi
 
 ---
 
-## Version 4 Plan
+## Stage 4 Plan
 
 **Status:** planned.
 
@@ -527,5 +527,5 @@ is by `sessionID` only — single-user, single-flight. Acceptable.
 2. Token counter increments live; cost updates on message completion.
 3. Tools render as compact `● tool(args)` lines.
 
-**Handoff to Version 5:** UX foundation is complete. Version 5 layers slash
+**Handoff to Stage 5:** UX foundation is complete. Stage 5 layers slash
 commands on top — `/` input branches before reaching `promptAsync`.

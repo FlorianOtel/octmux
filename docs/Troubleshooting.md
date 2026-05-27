@@ -18,7 +18,7 @@ context: >
 
 ### Symptom
 
-After `<PromptInput>` was first wired in (Version 3E.2), three categories of
+After `<PromptInput>` was first wired in (Stage 3E.2), three categories of
 keybindings failed silently:
 
 - **Backspace did nothing.** Pressing the physical Backspace key had no effect

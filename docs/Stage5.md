@@ -1,24 +1,24 @@
 ---
-title: "octmux — Version 5 implementation log"
+title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
 updated_by: Claude Code (Claude Opus 4.7 1M)
 updated_at: 2026-05-25--19-40
 context: >
-  Implementation log for Version 5 (re-scoped) of octmux: /help slash command,
+  Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
-  Re-scoped from the original Version 5 plan (see docs/Implementation-plan.md
+  Re-scoped from the original Stage 5 plan (see docs/Implementation-plan.md
   line 387) which is partially shipped (slash command primitives delivered
-  in Version 4.2); the remaining work is this Version 5 entry.
+  in Stage 4.2); the remaining work is this Stage 5 entry.
 ---
 
-# Version 5: /help command + live slash-completion overlay + input highlighting
+# Stage 5: /help command + live slash-completion overlay + input highlighting
 
 ## Read first when expanding on this work
 
 This section is the contract for anyone adding new slash commands, new command
 families, or wiring orchestra commands (`/brain`, `/duo-plan`, etc.) into
-octmux. The Version 5 design deliberately keeps the registry minimal and
+octmux. The Stage 5 design deliberately keeps the registry minimal and
 additive so the surface stays small as commands accrete.
 
 ### The three-layer model
@@ -146,12 +146,12 @@ the existing entries.
 These are minor cleanups that future work should be aware of but does not
 need to address proactively:
 
-- **Version 5 commit hash** was initially recorded as `<pending>` in this
-  log entry per the Version 4.4.4 / 4.5 precedent. Backfilled to `3d11fad`
+- **Stage 5 commit hash** was initially recorded as `<pending>` in this
+  log entry per the Stage 4.4.4 / 4.5 precedent. Backfilled to `3d11fad`
   in this docs-only update.
 - **Memory file "Latest commits" line** was not updated as part of the
-  Version 5 commit (memory lives outside the repo and is not staged). The
-  Version 5 entry inside that file has been backfilled as part of this
+  Stage 5 commit (memory lives outside the repo and is not staged). The
+  Stage 5 entry inside that file has been backfilled as part of this
   docs-only update.
 - **`docs/Version5.md` initial draft** had three minor inaccuracies vs the
   actual code, corrected in this update: (1) `CommandSpec.expandFn` →
@@ -169,21 +169,21 @@ contracts above still hold. Update it if you change them.
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-25--19-40 — Version 5 hotfix — delay overlay until first char after `/`
+### 2026-05-25--19-40 — Stage 5 hotfix — delay overlay until first char after `/`
 
 **Implemented by:** Claude Code (Claude Opus 4.7 1M) — 2026-05-25--19-40
 **Commit(s):** `2325dec`
 
 **What changed:** Buffer-watch effect in `src/app.tsx` now also bails out when `lines[0].length < 2` (i.e. the buffer is exactly `/`). Bare `/` no longer pops the overlay with the full unfiltered command list — operator must type at least one character past the slash to start narrowing. All other overlay logic (Tab/Enter/Esc, arrow nav, exact-match close-on-space, highlight) unchanged. Inline description in §Design choices and the "Read first" section's row-0 / single-line constraint were updated accordingly.
 
-### 2026-05-25--17-10 — Version 5 — /help + slash completion overlay + input highlighting
+### 2026-05-25--17-10 — Stage 5 — /help + slash completion overlay + input highlighting
 
 **Implemented by:** Claude Code (Claude Opus 4.7 1M) via /brain pipeline (Planner: Sonnet 4.6, Actor: Haiku 4.5, Reviewer: Sonnet 4.6) — 2026-05-25--17-10
 **Commit(s):** `3d11fad`
 
 **What changed:**
 
-**New `src/command-registry.ts`:** Single source-of-truth for command metadata. Exports `CommandSpec` type (fields: `name`, `usage`, `description`, `dynamic?: () => string[]`) and `COMMANDS` array of 6 entries: `/exit`, `/rename`, `/model`, `/show`, `/<key>-output` (the only dynamic entry — its `dynamic` returns `OUTPUT_KEYS.map(k => "/" + k + "-output")`), and `/help`. Mirrors the Version 4.5 `src/renderer/output-keys.ts` precedent. Also exports `expandCommands()` helper that resolves dynamic entries to their concrete completion candidates inline at the entry's position. Future commands (e.g., orchestra `/brain`, `/agents`) plug into the same registry — no `/help` or completion rework required.
+**New `src/command-registry.ts`:** Single source-of-truth for command metadata. Exports `CommandSpec` type (fields: `name`, `usage`, `description`, `dynamic?: () => string[]`) and `COMMANDS` array of 6 entries: `/exit`, `/rename`, `/model`, `/show`, `/<key>-output` (the only dynamic entry — its `dynamic` returns `OUTPUT_KEYS.map(k => "/" + k + "-output")`), and `/help`. Mirrors the Stage 4.5 `src/renderer/output-keys.ts` precedent. Also exports `expandCommands()` helper that resolves dynamic entries to their concrete completion candidates inline at the entry's position. Future commands (e.g., orchestra `/brain`, `/agents`) plug into the same registry — no `/help` or completion rework required.
 
 **New `src/components/SlashCompletionOverlay.tsx` Ink component:** Renders a floating dropdown overlay of up to 10 slash command candidates with a `…N more` footer when there are more than 10. Keyboard navigation: Tab (completes selected candidate), Esc (dismisses overlay), Up/Down arrows (move selection). Selected row rendered bold (visual highlight). Overlay listens for input via Ink's `useInput` hook. Display logic: `displayCount = Math.min(candidates.length, 10)` rows shown; if more than 10, footer displays `…N more` (where N = `candidates.length - 10`). The initial draft had an off-by-one (`Math.min(..., 9)` and `length > 10` together silently dropped candidate #10); fixed in this same commit after Reviewer flagged it.
 
@@ -205,8 +205,8 @@ contracts above still hold. Update it if you change them.
 **Status:** pending operator verification. Reviewer reported one off-by-one fix (lines 42–44 in `SlashCompletionOverlay.tsx`): `Math.min(candidates.length, 9)` → `Math.min(candidates.length, 10)` + `moreCount = candidates.length - 9` → `candidates.length - 10`. Fixed and verified in this commit.
 
 **Out of scope and deferred:**
-- `/clear`, `/agents` — not implemented (original Version 5 scope).
-- Server fall-through for unknown `/foo` — not implemented (original Version 5 scope).
+- `/clear`, `/agents` — not implemented (original Stage 5 scope).
+- Server fall-through for unknown `/foo` — not implemented (original Stage 5 scope).
 - Argument-level completion (e.g., `/model <TAB>` showing provider/model names) — deferred.
 - Orchestra command stubs (`/brain`, `/duo-plan`, `/duo-act`) — deferred; will be added to registry as dynamic expanders when orchestra is integrated.
 

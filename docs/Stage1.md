@@ -1,18 +1,18 @@
 ---
-title: "octmux — Version 1: Hello-world REPL with streaming (+ 1.5 sub-phases)"
+title: "octmux — Stage 1: Hello-world REPL with streaming (+ 1.5 sub-phases)"
 created_at: 2026-05-18--22-31
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
 updated_at: 2026-05-22--22-01
 context: >
-  Version 1 establishes the foundational REPL with streaming support, including
+  Stage 1 establishes the foundational REPL with streaming support, including
   five sub-phases (1.5a through 1.5d) that add streaming UX polish, true
   streaming via message.part.delta, status display, and interactive modals
   for permissions and questions. This document contains the complete implementation
-  log for Version 1 and all its sub-phases in reverse-chronological order.
+  log for Stage 1 and all its sub-phases in reverse-chronological order.
 ---
 
-# Version pre-implementation checklist - Read this first
+# Stage pre-implementation checklist - Read this first
 
 When starting a phase:
 
@@ -32,16 +32,16 @@ When finishing a phase:
 2. Flip the phase's status in the parent plan to `✓ shipped — see log
    YYYY-MM-DD--HH-MM`.
 3. Refresh `updated_by` and `updated_at` in the frontmatter.
-4. Commit with `feat(octmux): Version N — <short title>`.
+4. Commit with `feat(octmux): Stage N — <short title>`.
 
 ---
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-19--15-03 — Version 1.5c+1.5d: Status display + interactive modals
+### 2026-05-19--15-03 — Stage 1.5c+1.5d: Status display + interactive modals
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
-**Commit(s):** `e8249f7d` (shared with Version 2)
+**Commit(s):** `e8249f7d` (shared with Stage 2)
 
 **What shipped:**
 - events.ts: added "permission-asked" (handles both v1 "permission.updated" and v2
@@ -57,15 +57,15 @@ When finishing a phase:
 
 **Graceful degradation:** respondQuestion() fetch failures write to stderr and resolve (don't crash the REPL).
 
-**Suggested next steps for Version 2:** raw-mode input layer replaces readline;
+**Suggested next steps for Stage 2:** raw-mode input layer replaces readline;
   respondPermission/respondQuestion will need to use the raw-mode single-keypress path.
 
 ---
 
-### 2026-05-19--13-08 — Version 1.5b: True streaming via `message.part.delta`
+### 2026-05-19--13-08 — Stage 1.5b: True streaming via `message.part.delta`
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6, interactive session)
-**Commit(s):** `eeb64a1d` (shared with Version 1.5a)
+**Commit(s):** `eeb64a1d` (shared with Stage 1.5a)
 
 **What shipped:**
 - `events.ts`: replaced `seenPartLength` Map with `seenPartIDs` Set. Added handler for
@@ -78,7 +78,7 @@ When finishing a phase:
 **Root cause of previous batching:**
 `EventMessagePartDelta` is a **separate event type** (`"message.part.delta"`) that is
 not in the v1 SDK `Event` union but IS fired by the opencode server. The `delta` field
-on `EventMessagePartUpdated.properties` is always null (that was correct). The Version 1.5
+on `EventMessagePartUpdated.properties` is always null (that was correct). The Stage 1.5
 plan confused these two events. Fix: cast via `unknown` and handle `event.type ===
 "message.part.delta"` directly.
 
@@ -100,10 +100,10 @@ unchanged — `"text-delta"` kind is the same interface.
 
 ---
 
-### 2026-05-19--10-38 — Version 1.5a: Streaming UX scaffolding (indicator + abort)
+### 2026-05-19--10-38 — Stage 1.5a: Streaming UX scaffolding (indicator + abort)
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
-**Commit(s):** `eeb64a1d` (shared with Version 1.5b)
+**Commit(s):** `eeb64a1d` (shared with Stage 1.5b)
 
 **What shipped:**
 - `events.ts`: added `"generating"`, `"session-status"`, `"part-removed"` event kinds. Detection of len=0 creation event emits `"generating"` signal. `session.status` and
@@ -111,11 +111,11 @@ unchanged — `"text-delta"` kind is the same interface.
 - `index.ts`: switched `session.prompt()` → `session.promptAsync()` (returns 204 immediately). `isGenerating` flag + `[generating…]` indicator on stdout. Ctrl-C during generation calls `session.abort()` instead of exiting; Ctrl-C when idle exits cleanly.
 
 **Note:** This phase used the accumulated-slice approach from `message.part.updated`.
-True streaming was missing; fixed in Version 1.5b above.
+True streaming was missing; fixed in Stage 1.5b above.
 
 ---
 
-### 2026-05-18--23-20 — Version 1: Post-ship debugging + streaming investigation
+### 2026-05-18--23-20 — Stage 1: Post-ship debugging + streaming investigation
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6 1M, interactive session)
 **Commit(s):** `8bb2fd18`
@@ -173,9 +173,9 @@ _Layer 3 — octmux:_
 - **octmux verdict: working as designed.** The "all at once" appearance is an
   opencode architectural decision, not a bug in octmux.
 
-**Consequence for Version 4 (status line):**
+**Consequence for Stage 4 (status line):**
 - Token-by-token streaming in the octmux viewport is **not achievable** with
-  opencode's current event API. Do not design Version 4 assuming incremental text.
+  opencode's current event API. Do not design Stage 4 assuming incremental text.
 - The correct UX pattern: show a `[generating…]` / spinner in the status line
   from the moment the text part is created (len=0 event) until `session.idle`
   fires. This gives the user feedback during the generation wait without requiring
@@ -184,16 +184,16 @@ _Layer 3 — octmux:_
   two-event pattern: created at len=0, complete at len=N. It can be used to drive
   a `[thinking…]` status badge distinct from `[generating…]`.
 
-**What changed in this doc:** new log entry prepended; Version 1 entry below
+**What changed in this doc:** new log entry prepended; Stage 1 entry below
 unchanged (it recorded what Actor shipped, not the debugging). Frontmatter
 `updated_by` and `updated_at` refreshed.
 
 ---
 
-### 2026-05-18--22-31 — Version 1: Hello-world REPL with streaming
+### 2026-05-18--22-31 — Stage 1: Hello-world REPL with streaming
 
 **Implemented by:** Claude Code (Actor, Claude Haiku 4.5)
-**Commit(s):** `09cd76fa` (git msg: "Version 0 Step1" — initial Version 1 REPL)
+**Commit(s):** `09cd76fa` (git msg: "Stage 0 Step1" — initial Stage 1 REPL)
 
 **What shipped:**
 - `src/events.ts` — `filterEvent()` narrows SDK `GlobalEvent` payloads to
@@ -205,9 +205,9 @@ unchanged (it recorded what Actor shipped, not the debugging). Frontmatter
 - Corrected plan: event subscription is `client.global.event({})` (not
   `client.event({})`); events arrive as `GlobalEvent.payload`.
 
-**What changed in this doc:** Version 1 status → ✓ shipped; frontmatter updated.
+**What changed in this doc:** Stage 1 status → ✓ shipped; frontmatter updated.
 
-**Suggested next steps for Version 2:**
+**Suggested next steps for Stage 2:**
 - `server-lifecycle.ts`: port scan, spawn `opencode serve`, health probe,
   dispose — so `octmux` works without a separate `opencode serve` terminal.
 - tmux guard: check `process.env.TMUX`; exit 1 with friendly message if absent.
