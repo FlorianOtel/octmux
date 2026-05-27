@@ -25,6 +25,7 @@ Options:
   --no-tmux-guard   skip tmux pane-context checks (for --multi-window in CI)
   --resume <id>     resume a past session by ID
   --resume-last     resume the most recently updated session
+  --fork <id>       fork a past session by ID (creates a child, attaches to it)
   --help, -h        show this help
   --version         show version
 
@@ -52,6 +53,14 @@ const autoSpawn    = args.includes("--auto-spawn");
 const resumeIdx    = args.indexOf("--resume");
 const resumeArg    = resumeIdx !== -1 && args[resumeIdx + 1] && !args[resumeIdx + 1].startsWith("--") ? args[resumeIdx + 1] : undefined;
 const resumeLast   = args.includes("--resume-last");
+const forkIdx      = args.indexOf("--fork");
+const forkArg      = forkIdx !== -1 && args[forkIdx + 1] && !args[forkIdx + 1].startsWith("--") ? args[forkIdx + 1] : undefined;
+
+// --resume, --resume-last, --fork are mutually exclusive (each picks a different initial session).
+if ([resumeArg, resumeLast, forkArg].filter(Boolean).length > 1) {
+  console.error("octmux: --resume, --resume-last, and --fork are mutually exclusive");
+  process.exit(2);
+}
 
 // Validate and normalise the --endpoint URL (strip trailing slash).
 const DEFAULT_ENDPOINT = "http://127.0.0.1:4096";
@@ -209,6 +218,24 @@ if (resumeArg) {
     sessionID = sessions[0].id;
   } catch (err) {
     console.error(`octmux: failed to list sessions: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+} else if (forkArg) {
+  // --fork <id>: validate parent exists, then fork it and attach to the child.
+  try {
+    const parent = await client.session.get({ path: { id: forkArg } });
+    if (!parent.data?.id) {
+      console.error(`octmux: parent session not found: ${forkArg}`);
+      process.exit(1);
+    }
+    const child = await client.session.fork({ path: { id: forkArg } });
+    if (!child.data?.id) {
+      console.error(`octmux: fork returned no child session for parent ${forkArg}`);
+      process.exit(1);
+    }
+    sessionID = child.data.id;
+  } catch (err) {
+    console.error(`octmux: failed to fork session ${forkArg}: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 } else {

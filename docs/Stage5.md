@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-27--23-38
+updated_by: Claude Code (Claude Opus 4.7 1M)
+updated_at: 2026-05-27--21-33
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -172,7 +172,7 @@ contracts above still hold. Update it if you change them.
 ### 2026-05-27--21-15 — Stage 5.1 — context-management commands + session-switch plumbing
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-27--21-15
-**Commit(s):** `2b47ebc`, `b0c71e4`
+**Commit(s):** `2b47ebc`, `b0c71e4`, `<pending>`
 
 **What changed:**
 
@@ -186,7 +186,7 @@ contracts above still hold. Update it if you change them.
 
 **Session picker:** New `SessionPickerModal.tsx` component lets operators navigate and select from a list of past sessions, sorted by recency. Supports ↑↓ navigation, Enter to select, Esc to cancel, and digit shortcuts (1–9). Displays session ID (first 8 chars), title, fork parentage, and a current-session marker.
 
-**Startup resume flags:** Added `--resume <id>` and `--resume-last` flags to `index.tsx`. `--resume <id>` validates that the session exists and attaches to it; `--resume-last` picks the most recently updated session from `session.list()`. No resume flag defaults to creating a new session (existing behavior). Both flags error and exit if validation fails.
+**Startup resume/fork flags:** Added `--resume <id>`, `--resume-last`, and `--fork <id>` flags to `index.tsx`. `--resume <id>` validates that the session exists and attaches to it; `--resume-last` picks the most recently updated session from `session.list()`; `--fork <id>` validates the parent exists, then calls `client.session.fork({ path: { id } })` and attaches to the returned child. The three flags are mutually exclusive (each picks a different initial session, so at most one can be active). No flag defaults to creating a new session (existing behavior). All flags error and exit if validation fails.
 
 **StatusLine enhancement:** Added optional `isCompacting?: boolean` prop; when true, appends yellow ` · compacting…` indicator to the status bar.
 
@@ -197,6 +197,8 @@ contracts above still hold. Update it if you change them.
 **Key risk addressed (Step 9-O):** SSE streaming subscription is a single long-lived async iterable from `index.tsx`. Closing and re-subscribing would drop in-flight events. Instead, the subscription stays open; the effect re-runs on `sessionID` state change (closure refresh) and `filterEvent()` internally filters by the current sessionID in the closure, so each session only sees its own events. This is safe because `filterEvent()` is stateless relative to sessionID.
 
 **Follow-up fix (FIX iteration 1):** Reviewer audit found three critical issues in the initial commit: (1) stale `props.sessionID` closure in SSE event loop line 181; (2) temporal dead zone (TDZ) on `refreshTokenUsage` callback — declared after the SSE `useEffect` dependency array that referenced it; (3) SSE effect re-running on every session switch, corrupting the single-consumer async iterable. All three fixed by: introducing `sessionIDRef` to track current session ID across the long-lived effect, moving `refreshTokenUsage` callback before the SSE effect, and removing `sessionID` from the effect's dependency array. SSE subscription now stable; all sessionID reads inside the loop use the ref.
+
+**Backfill (2026-05-27--21-33):** Added `--fork <id>` startup flag to `src/index.tsx` for symmetry with the runtime `/fork` slash command. Validates the parent session via `client.session.get`, then calls `client.session.fork({ path: { id } })` and attaches to the returned child. Mutual-exclusivity guard rejects `--resume`/`--resume-last`/`--fork` if more than one is set. Belongs logically in Stage 5.1 — the CLI flag is the startup analogue of the in-session `/fork` command.
 
 **Files modified:**
 - `src/renderer/types.ts` (added `clearAll()` interface method)
