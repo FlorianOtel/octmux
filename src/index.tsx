@@ -20,7 +20,7 @@ Display mode (required — select one):
   --multi-window    side windows for thinking + tool output (requires active tmux pane)
 
 Options:
-  --attach <port>   attach to a running opencode server on <port> (default: 4096)
+  --endpoint <url>  endpoint of running opencode server (default: http://127.0.0.1:4096)
   --auto-spawn      spawn a new opencode server automatically (⚠ see below)
   --no-tmux-guard   skip tmux pane-context checks (for --multi-window in CI)
   --help, -h        show this help
@@ -41,12 +41,26 @@ if (args.includes("--version")) {
   process.exit(0);
 }
 
-const noTmuxGuard = args.includes("--no-tmux-guard");
-const attachIdx   = args.indexOf("--attach");
-const attachPort  = attachIdx !== -1 ? parseInt(args[attachIdx + 1], 10) : NaN;
-const single      = args.includes("--single");
-const multiWindow = args.includes("--multi-window");
-const autoSpawn   = args.includes("--auto-spawn");
+const noTmuxGuard  = args.includes("--no-tmux-guard");
+const endpointIdx  = args.indexOf("--endpoint");
+const endpointArg  = endpointIdx !== -1 ? args[endpointIdx + 1] : undefined;
+const single       = args.includes("--single");
+const multiWindow  = args.includes("--multi-window");
+const autoSpawn    = args.includes("--auto-spawn");
+
+// Validate and normalise the --endpoint URL (strip trailing slash).
+const DEFAULT_ENDPOINT = "http://127.0.0.1:4096";
+let endpointUrl: string;
+if (endpointArg !== undefined) {
+  try {
+    endpointUrl = new URL(endpointArg).toString().replace(/\/$/, "");
+  } catch {
+    console.error(`octmux: invalid --endpoint URL: ${endpointArg}`);
+    process.exit(2);
+  }
+} else {
+  endpointUrl = DEFAULT_ENDPOINT;
+}
 
 // No display mode selected — operator must choose explicitly.
 if (!single && !multiWindow) {
@@ -118,23 +132,27 @@ if (autoSpawn) {
     process.exit(1);
   }
   baseUrl = serverHandle.url;
+  // Brief startup notice — cleared when the screen is wiped before rendering.
+  process.stdout.write(`\n  endpoint: ${baseUrl}\n\n`);
+  await new Promise(res => setTimeout(res, 3_000));
 } else {
-  // Default (no flags) or explicit --attach: connect to a running server.
-  // Default port is 4096 — the systemd service (scripts/opencode-server.service).
-  const port = !isNaN(attachPort) ? attachPort : 4096;
-  baseUrl = `http://127.0.0.1:${port}`;
+  // Default (no flags) or explicit --endpoint: connect to a running server.
+  // Default endpoint is http://127.0.0.1:4096 — the systemd user service.
+  baseUrl = endpointUrl;
+  const isDefault = endpointArg === undefined;
+  // Show which endpoint we are about to connect to before the health probe.
+  process.stdout.write(`\n  endpoint: ${baseUrl}${isDefault ? "  (default)" : ""}\n\n`);
   if (!(await isOpencodeHealthy(baseUrl))) {
-    const isDefault = isNaN(attachPort);
     if (isDefault) {
       console.error(
-        `✗  no opencode server on port 4096 (default).\n` +
+        `✗  no opencode server at ${baseUrl} (default).\n` +
         `\n` +
         `Start the server first, then retry:\n` +
         `  systemctl --user start opencode-server  # systemd user service\n` +
         `  opencode serve --port 4096             # or manually\n` +
         `\n` +
-        `To attach to a different port:\n` +
-        `  octmux --attach <port>\n` +
+        `To connect to a different endpoint:\n` +
+        `  octmux --endpoint <url>\n` +
         `\n` +
         `--auto-spawn is available but use with caution:\n` +
         `  Multiple opencode instances risk SQLite locking errors and memory\n` +
@@ -142,10 +160,13 @@ if (autoSpawn) {
         `  See scripts/opencode-server.service.`
       );
     } else {
-      console.error(`health: failed — no opencode server on port ${port}`);
+      console.error(`health: failed — no opencode server at ${baseUrl}`);
     }
     process.exit(1);
   }
+  // Health check passed — hold the endpoint notice on screen for 3 seconds
+  // before the screen is cleared and the UI renders.
+  await new Promise(res => setTimeout(res, 3_000));
 }
 
 process.on("SIGTERM", async () => { await serverHandle?.dispose(); await renderer.dispose(); process.exit(0); });
