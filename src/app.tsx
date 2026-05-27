@@ -124,22 +124,6 @@ export function App(props: AppProps) {
       );
   }, [props.client, activeModel]);
 
-  // One-shot: fetch initial model from server and set activeModel.
-  // tokenUsage.contextWindow is then set by the activeModel-change effect above.
-  useEffect(() => {
-    (async () => {
-      try {
-        const resp = await props.client.session.get({ path: { id: sessionID } });
-        const sess = resp.data;
-        if (sess?.model) {
-          setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
-        }
-      } catch {
-        // No model set on session yet; /model command will set activeModel
-      }
-    })();
-  }, [props.client, sessionID]);
-
   // Slash-completion: subscribe to editor changes and recompute overlay state
   useEffect(() => {
     const recompute = () => {
@@ -214,6 +198,29 @@ export function App(props: AppProps) {
       // Silently swallow errors; bar stays at last value
     }
   }, [props.client]);
+
+  // One-shot: fetch initial model from server and seed token-usage from the
+  // latest assistant message. Fires on mount and on session switch (sessionID
+  // state change). Critical for --resume / --resume-last / --fork startup:
+  // without the refreshTokenUsage call, the status bar would stay at 0%
+  // until the next session-idle event, hiding the resumed session's real
+  // token usage. refreshTokenUsage is a no-op for fresh sessions (no
+  // assistant messages yet). MUST be declared AFTER refreshTokenUsage to
+  // avoid TDZ on the deps array.
+  useEffect(() => {
+    (async () => {
+      try {
+        const resp = await props.client.session.get({ path: { id: sessionID } });
+        const sess = resp.data;
+        if (sess?.model) {
+          setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
+        }
+      } catch {
+        // No model set on session yet; /model command will set activeModel
+      }
+      refreshTokenUsage(sessionID);
+    })();
+  }, [props.client, sessionID, refreshTokenUsage]);
 
   // SSE loop: thin translation layer — all rendering delegated to renderer.
   // SSE subscription is a single-consumer async iterable; we keep this effect stable

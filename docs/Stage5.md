@@ -3,7 +3,7 @@ title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
 updated_by: Claude Code (Claude Opus 4.7 1M)
-updated_at: 2026-05-27--21-39
+updated_at: 2026-05-27--22-26
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -387,6 +387,8 @@ in the planner output.
 **Follow-up fix (FIX iteration 1):** Reviewer audit found three critical issues in the initial commit: (1) stale `props.sessionID` closure in SSE event loop line 181; (2) temporal dead zone (TDZ) on `refreshTokenUsage` callback — declared after the SSE `useEffect` dependency array that referenced it; (3) SSE effect re-running on every session switch, corrupting the single-consumer async iterable. All three fixed by: introducing `sessionIDRef` to track current session ID across the long-lived effect, moving `refreshTokenUsage` callback before the SSE effect, and removing `sessionID` from the effect's dependency array. SSE subscription now stable; all sessionID reads inside the loop use the ref.
 
 **Backfill (2026-05-27--21-33):** Added `--fork <id>` startup flag to `src/index.tsx` for symmetry with the runtime `/fork` slash command. Validates the parent session via `client.session.get`, then calls `client.session.fork({ path: { id } })` and attaches to the returned child. Mutual-exclusivity guard rejects `--resume`/`--resume-last`/`--fork` if more than one is set. Belongs logically in Stage 5.1 — the CLI flag is the startup analogue of the in-session `/fork` command.
+
+**Hotfix (2026-05-27--22-50) — startup banner + initial token-usage seed:** Operator reported that `octmux --single --resume <id>` "spawned an entirely new session". Server-side investigation showed the resume was working (no new session created; `session.get` returned the correct ID + model), but two UX gaps made it look broken: (1) the status-line token bar showed `0% 0/200K` even though the resumed session had ~28.5K used in its latest turn, because `refreshTokenUsage()` was only called on `session-idle` events and inside `switchSession()` — neither fires on startup; (2) there was no visible banner confirming "resumed session …" — that banner only existed for runtime switches via `/sessions` / `/new` / `/fork`. Together with the by-design empty scrollback (no history replay on resume), the UI looked identical to a fresh new session. **Fix:** (a) `src/app.tsx` — the one-shot `session.get` effect now also calls `refreshTokenUsage(sessionID)` after setting `activeModel`. The effect was relocated to AFTER the `refreshTokenUsage` `useCallback` declaration to avoid the same TDZ trap that bit FIX iteration 1 (deps array referencing a `const` declared later in the function). (b) `src/index.tsx` — each of the three startup branches (`--resume`, `--resume-last`, `--fork`) now sets a `startupBanner` string captured from `session.get` / `session.list` data (uses the session's `title` when present). After renderer construction, `renderer.commitSystemMessage(startupBanner)` is called so the banner appears in the first Ink frame. Verified by re-running against the same session ID: banner shows, token bar reads 14% 28.5K/200K, server session count unchanged.
 
 **Files modified:**
 - `src/renderer/types.ts` (added `clearAll()` interface method)

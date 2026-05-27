@@ -189,8 +189,12 @@ process.on("SIGTERM", async () => { await serverHandle?.dispose(); await rendere
 
 const client    = createOpencodeClient({ baseUrl });
 
-// Determine which session to use: resume by ID, resume last, or create new
+// Determine which session to use: resume by ID, resume last, fork, or create new.
+// Capture a banner string for resume/fork modes so the user gets a visible
+// confirmation that startup attached to the intended session — without it,
+// the empty scrollback (no history replay by design) looks like a fresh session.
 let sessionID: string;
+let startupBanner: string | null = null;
 if (resumeArg) {
   // --resume <id>: validate that the session exists
   try {
@@ -200,6 +204,8 @@ if (resumeArg) {
       process.exit(1);
     }
     sessionID = resumeArg;
+    const title = resp.data.title ?? "";
+    startupBanner = `resumed session ${sessionID.slice(0, 8)}${title ? ` — "${title}"` : ""}`;
   } catch (err) {
     console.error(`octmux: failed to resume session ${resumeArg}: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -216,6 +222,8 @@ if (resumeArg) {
     // Sort by time.updated descending
     sessions.sort((a, b) => b.time.updated - a.time.updated);
     sessionID = sessions[0].id;
+    const title = sessions[0].title ?? "";
+    startupBanner = `resumed session ${sessionID.slice(0, 8)}${title ? ` — "${title}"` : ""} (most recent)`;
   } catch (err) {
     console.error(`octmux: failed to list sessions: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -234,6 +242,7 @@ if (resumeArg) {
       process.exit(1);
     }
     sessionID = child.data.id;
+    startupBanner = `forked from ${forkArg.slice(0, 8)} → ${sessionID.slice(0, 8)}`;
   } catch (err) {
     console.error(`octmux: failed to fork session ${forkArg}: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -264,6 +273,12 @@ if (multiWindow) {
   renderer = tmuxRenderer;
 } else {
   renderer = new StdoutRenderer(visibility);
+}
+
+// Emit the startup banner so it appears in the first Ink frame (via the
+// renderer's committed lines). Only set for --resume / --resume-last / --fork.
+if (startupBanner) {
+  renderer.commitSystemMessage(startupBanner);
 }
 
 // ─── Terminal clear + cursor anchor ──────────────────────────────────────────────────
