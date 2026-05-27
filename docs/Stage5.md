@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Claude Code (Claude Opus 4.7 1M)
-updated_at: 2026-05-27--22-26
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-05-28--00-00
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -295,9 +295,10 @@ component.
 
 #### Why we do not replay message history on resume
 
-A natural reflex is: "if I resume a session, show me the old messages
-above the input." We deliberately chose banner-only ("`resumed session
-a1b2c3d4 — "title"`") for Stage 5.1:
+**[SUPERSEDED BY STAGE 5.2 — see §5.2 for the current implementation.]**
+
+The original Stage 5.1 design chose banner-only ("`resumed session
+a1b2c3d4 — "title"`") for practical reasons:
 
 - **The renderer is bound to the live SSE event stream.** Reconstructing
   history would require an ingest path that synthesises `block-start` /
@@ -311,6 +312,15 @@ a1b2c3d4 — "title"`") for Stage 5.1:
 - **Banner-only is future-proof.** Replay can be added later (a
   `--replay-on-resume` flag, an interactive `r` keybind in the picker,
   or simply unconditional replay) without breaking the current behavior.
+
+**Stage 5.2 implementation:** All three reasons were addressed in Stage 5.2:
+(1) the replay synthesiser (`src/replay.ts`) implements the second code path
+cleanly, mapping message parts to renderer calls; (2) the operator still gets
+full history in the LLM on next turn; (3) the feature is now unconditional
+(no flags required), keeping the feature set minimal. The full prior
+conversation now appears in scrollback on resume, the session title shows in
+the chrome Rule label (not the hex ID), and past user prompts populate the
+line editor history for up-arrow recall.
 
 #### Why `sessionID` is App state, not a prop
 
@@ -356,6 +366,38 @@ in the planner output.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-28--00-00 — Stage 5.2 — history replay synthesiser: visible scrollback + title label + up-arrow recall
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-28--00-00
+**Commit(s):** `<pending>`
+
+**What changed:**
+
+**New `src/replay.ts` module:** Exports `replaySession(client, renderer, sessionID, editor)` async function that synthesises prior session history into the current view. On attach (--resume, --resume-last, --fork, /sessions picker selection, runtime /fork), the function fetches the full message history via `client.session.messages()`, iterates chronologically, and emits renderer calls to populate scrollback: `commitUserInput()` for user prompts, `beginBlock`/`appendToBlock`/`endBlock` for assistant text/thinking/tool-call/tool-result blocks, `commitSystemMessage()` with `[compacted summary]` prefix for compacted messages (summary:true), and finally `editor.seedHistory(userTexts)` to populate the line editor's history buffer so up-arrow recalls past user prompts. Fresh sessions (zero messages) are a no-op. Tool parts with `status === "completed"` emit both a tool-call block and an optional tool-result block (if `output` is non-empty); tool parts with `status === "error"` emit the tool-call block only with error status. Other part types (step-*, snapshot, patch, agent, retry, compaction, subtask, file) are skipped. Errors during replay are silently swallowed — replay is best-effort, not critical to startup.
+
+**`LineEditor.seedHistory(items)`:** New public method in `src/editor.ts` that replaces the editor's history buffer and resets navigation state. Used by the replay synthesiser to load prior user prompts. Sets `this.history = [...items]`, `this.histIdx = -1`, `this._draft = null`. History is then navigable via ↑/↓ keys as usual.
+
+**Title-aware session label (`src/index.tsx`):** Each of the four startup branches (`--resume`, `--resume-last`, `--fork`, default new) now computes a `sessionLabel` variable set to the session's title if present, otherwise the 8-character session ID prefix. The label is passed to `<App sessionLabel={…}>` and becomes the chrome Rule title — so resumed/forked sessions show their human-readable name in the banner instead of the hex ID. Default new sessions and fork children (which have no title yet) show the 8-char ID as before.
+
+**Consolidate `setSessionLabel` into `switchSession`:** The `switchSession` callback in `src/app.tsx` now internally calls `setSessionLabel(sess?.title || newID.slice(0, 8))` after fetching the session metadata from `client.session.get()`. This centralises label-setting logic and eliminates three redundant `setSessionLabel` call sites that existed in the `/new`, `/fork`, and `/sessions` handlers. Those handlers now only call `switchSession(newID, banner)` without worrying about the label.
+
+**Wire `runReplay` into startup and session switch:** Added stable `runReplay` useCallback in `src/app.tsx` declared AFTER `refreshTokenUsage` (critical for TDZ safety). The one-shot `session.get` effect now calls `await runReplay(sessionID)` after `refreshTokenUsage(sessionID)`, so history is replayed on mount. The `switchSession` callback also calls `await runReplay(newID)` after `refreshTokenUsage(newID)`, so history is replayed when switching sessions at runtime. Both paths now run replay unconditionally — the "no history replay" design decision from Stage 5.1 is superseded.
+
+**Stage 5.1 doc update:** The §5.1 "Why we do not replay message history on resume" paragraph has been updated to acknowledge that Stage 5.2 supersedes that decision and now unconditionally replays. A forward-reference to Stage 5.2 is included for readers encountering the old rationale.
+
+**Build:** Binary rebuild succeeds with zero TypeScript errors. Verified imports of SDK types match existing patterns (`@opencode-ai/sdk` for Part/Message types from events.ts).
+
+**Files modified:**
+- `src/replay.ts` (new)
+- `src/editor.ts` (added `seedHistory()` method)
+- `src/app.tsx` (import replaySession, add runReplay callback, wire to one-shot effect and switchSession, consolidate setSessionLabel into switchSession, remove three redundant calls)
+- `src/index.tsx` (compute sessionLabel in each startup branch, pass to <App> component)
+- `docs/Stage5.md` (added §5.2 entry, updated §5.1 paragraph on replay decision)
+
+**Out of scope:** History progress indicator, scroll-event backfill, on-disk command history file, rendering of part types (step-*, snapshot, patch, agent, retry, compaction, subtask, file), spinner state restoration, isGenerating/lastSubmitted live state restoration, tree visualization of forks, TmuxWindowRenderer-specific changes (replay goes through Renderer interface only).
+
+---
 
 ### 2026-05-27--21-15 — Stage 5.1 — context-management commands + session-switch plumbing
 

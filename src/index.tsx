@@ -190,10 +190,9 @@ process.on("SIGTERM", async () => { await serverHandle?.dispose(); await rendere
 const client    = createOpencodeClient({ baseUrl });
 
 // Determine which session to use: resume by ID, resume last, fork, or create new.
-// Capture a banner string for resume/fork modes so the user gets a visible
-// confirmation that startup attached to the intended session — without it,
-// the empty scrollback (no history replay by design) looks like a fresh session.
+// Capture both banner and sessionLabel: banner for startup confirmation, sessionLabel for chrome.
 let sessionID: string;
+let sessionLabel: string;
 let startupBanner: string | null = null;
 if (resumeArg) {
   // --resume <id>: validate that the session exists
@@ -205,6 +204,7 @@ if (resumeArg) {
     }
     sessionID = resumeArg;
     const title = resp.data.title ?? "";
+    sessionLabel = title || sessionID.slice(0, 8);
     startupBanner = `resumed session ${sessionID.slice(0, 8)}${title ? ` — "${title}"` : ""}`;
   } catch (err) {
     console.error(`octmux: failed to resume session ${resumeArg}: ${err instanceof Error ? err.message : String(err)}`);
@@ -223,6 +223,7 @@ if (resumeArg) {
     sessions.sort((a, b) => b.time.updated - a.time.updated);
     sessionID = sessions[0].id;
     const title = sessions[0].title ?? "";
+    sessionLabel = title || sessionID.slice(0, 8);
     startupBanner = `resumed session ${sessionID.slice(0, 8)}${title ? ` — "${title}"` : ""} (most recent)`;
   } catch (err) {
     console.error(`octmux: failed to list sessions: ${err instanceof Error ? err.message : String(err)}`);
@@ -242,6 +243,7 @@ if (resumeArg) {
       process.exit(1);
     }
     sessionID = child.data.id;
+    sessionLabel = sessionID.slice(0, 8);
     startupBanner = `forked from ${forkArg.slice(0, 8)} → ${sessionID.slice(0, 8)}`;
   } catch (err) {
     console.error(`octmux: failed to fork session ${forkArg}: ${err instanceof Error ? err.message : String(err)}`);
@@ -251,6 +253,7 @@ if (resumeArg) {
   // Default: create a new session
   const session = await client.session.create({});
   sessionID = session.data!.id;
+  sessionLabel = sessionID.slice(0, 8);
 }
 
 const eventStream = await client.global.event({});
@@ -305,7 +308,7 @@ render(
   <App
     client={client}
     sessionID={sessionID}
-    sessionLabel={sessionID.slice(0, 8)}
+    sessionLabel={sessionLabel}
     eventStream={eventStream.stream}
     onExit={async () => { await serverHandle?.dispose(); await renderer.dispose(); }}
     baseUrl={baseUrl}

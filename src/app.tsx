@@ -4,6 +4,7 @@ import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 import type { Command as OcCommand } from "@opencode-ai/sdk/client";
 import * as path from "path";
 import { LineEditor } from "./editor.ts";
+import { replaySession } from "./replay.ts";
 import { filterEvent, resetEventState, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand } from "./commands.ts";
@@ -199,14 +200,20 @@ export function App(props: AppProps) {
     }
   }, [props.client]);
 
+  // Stable replay callback: emit prior session history to renderer and seed editor.
+  // Declared BEFORE the one-shot session.get effect (critical for TDZ).
+  const runReplay = useCallback(async (sid: string) => {
+    await replaySession(props.client, renderer, sid, editor);
+  }, [props.client, renderer, editor]);
+
   // One-shot: fetch initial model from server and seed token-usage from the
   // latest assistant message. Fires on mount and on session switch (sessionID
   // state change). Critical for --resume / --resume-last / --fork startup:
   // without the refreshTokenUsage call, the status bar would stay at 0%
   // until the next session-idle event, hiding the resumed session's real
   // token usage. refreshTokenUsage is a no-op for fresh sessions (no
-  // assistant messages yet). MUST be declared AFTER refreshTokenUsage to
-  // avoid TDZ on the deps array.
+  // assistant messages yet). MUST be declared AFTER refreshTokenUsage and
+  // runReplay to avoid TDZ on the deps array.
   useEffect(() => {
     (async () => {
       try {
@@ -218,9 +225,10 @@ export function App(props: AppProps) {
       } catch {
         // No model set on session yet; /model command will set activeModel
       }
-      refreshTokenUsage(sessionID);
+      await refreshTokenUsage(sessionID);
+      await runReplay(sessionID);
     })();
-  }, [props.client, sessionID, refreshTokenUsage]);
+  }, [props.client, sessionID, refreshTokenUsage, runReplay]);
 
   // SSE loop: thin translation layer — all rendering delegated to renderer.
   // SSE subscription is a single-consumer async iterable; we keep this effect stable
@@ -322,10 +330,12 @@ export function App(props: AppProps) {
       const resp = await props.client.session.get({ path: { id: newID } });
       const sess = resp.data;
       if (sess?.model) setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
+      setSessionLabel(sess?.title || newID.slice(0, 8));
     } catch { /* leave activeModel as-is */ }
     renderer.commitSystemMessage(banner);
-    refreshTokenUsage(newID);
-  }, [isGenerating, sessionID, props.client, renderer, refreshTokenUsage]);
+    await refreshTokenUsage(newID);
+    await runReplay(newID);
+  }, [isGenerating, sessionID, props.client, renderer, refreshTokenUsage, runReplay]);
 
   const handleSubmit = useCallback(async (text: string) => {
     // /exit — clean shutdown
@@ -345,7 +355,6 @@ export function App(props: AppProps) {
         const resp = await props.client.session.create({});
         const newID = resp.data!.id;
         await switchSession(newID, `new session started (${newID.slice(0, 8)})`);
-        setSessionLabel(newID.slice(0, 8));
       } catch (err) {
         renderer.commitSystemMessage(`/new failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -398,7 +407,6 @@ export function App(props: AppProps) {
         const resp = await props.client.session.fork({ path: { id: sessionID } });
         const childID = resp.data!.id;
         await switchSession(childID, `forked session (child: ${childID.slice(0, 8)}, parent: ${sessionID.slice(0, 8)})`);
-        setSessionLabel(childID.slice(0, 8));
       } catch (err) {
         renderer.commitSystemMessage(`/fork failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -603,7 +611,6 @@ export function App(props: AppProps) {
       return;
     }
     await switchSession(item.id, `resumed session ${item.id.slice(0, 8)}${item.title ? ` — "${item.title}"` : ""}`);
-    setSessionLabel(item.title || item.id.slice(0, 8));
   }, [sessionID, switchSession, renderer]);
 
   const handleSessionCancel = useCallback(() => { setSessionPicker(null); }, []);

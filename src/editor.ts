@@ -225,6 +225,14 @@ export class LineEditor extends EventEmitter {
   // overlay and steal the arrow keys, trapping the user mid-scroll.
   isInHistoryNav(): boolean { return this.histIdx !== -1; }
 
+  // Seed the history from an external source (e.g. replay synthesiser on resume).
+  // Replaces any existing history.
+  seedHistory(items: string[]): void {
+    this.history = [...items];
+    this.histIdx = -1;
+    this._draft = null;
+  }
+
   // -----------------------------------------------------------------------
   // Private helpers
   // -----------------------------------------------------------------------
