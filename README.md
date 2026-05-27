@@ -134,7 +134,7 @@ octmux establishes a contract for external consumers (e.g. opentmux):
 
 opentmux can integrate in two modes: (A) take over spawning — octmux creates log files and announces them; opentmux creates panes/windows with its own geometry; (B) take over consumption — octmux spawns panes/windows as normal; opentmux re-skins them from outside. Mode B requires no octmux changes. See `docs/Version3-UX.md` §"Sequencing toward opentmux integration" for full details.
 
-**Note:** opentmux integration is not part of Version 3-UX and is not the immediately-following work. Version 4 (StatusLine content) and Version 5 (subagent windows) come first. Future work targets `TmuxWindowRenderer`; pane mode is preserved but not actively developed further.
+**Note:** opentmux integration is not part of Stage 3-UX and is not the immediately-following work. Stage 4 (StatusLine content) and Stage 5 (subagent windows) come first. Future work targets `TmuxWindowRenderer`; pane mode is preserved but not actively developed further.
 
 ## Architecture
 
