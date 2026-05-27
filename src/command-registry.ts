@@ -36,6 +36,26 @@ export const COMMANDS: CommandSpec[] = [
     dynamic: () => OUTPUT_KEYS.map(k => "/" + k + "-output"),
   },
   {
+    name: "/new",
+    usage: "/new",
+    description: "create a new session and clear the view (alias: /clear)",
+  },
+  {
+    name: "/compact",
+    usage: "/compact",
+    description: "compact the current session (alias: /summarize)",
+  },
+  {
+    name: "/sessions",
+    usage: "/sessions",
+    description: "pick a past session to resume (alias: /resume)",
+  },
+  {
+    name: "/fork",
+    usage: "/fork",
+    description: "fork the current session into a child",
+  },
+  {
     name: "/help",
     usage: "/help",
     description: "list all known slash commands",

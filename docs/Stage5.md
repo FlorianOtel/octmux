@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Claude Code (Claude Opus 4.7 1M)
-updated_at: 2026-05-25--19-40
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-05-27--21-15
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -168,6 +168,50 @@ contracts above still hold. Update it if you change them.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-27--21-15 — Stage 5.1 — context-management commands + session-switch plumbing
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-27--21-15
+**Commit(s):** `<pending>`
+
+**What changed:**
+
+**New context-management commands:** Added four slash commands for session management: `/new` (aliases: `/clear`) creates a new session and clears the view; `/compact` (aliases: `/summarize`) triggers server-side session compaction; `/sessions` (aliases: `/resume`) opens an interactive picker to resume a past session; `/fork` forks the current session into a child. All four commands registered in `src/command-registry.ts` and have corresponding parsers in `src/commands.ts` (`parseNewCommand`, `parseCompactCommand`, `parseSessionsCommand`, `parseForkCommand`).
+
+**Session state refactor (`app.tsx`):** Moved `sessionID` from prop to state variable with `useState(props.sessionID)`, initialized from the prop at startup but mutable thereafter. This enables session switching without App re-rendering. All existing `useEffect` dependencies updated to read `sessionID` from state. Single-consumer SSE stream subscription from `index.tsx` is stable across session switches because the stream itself is long-lived; `sessionID` state change triggers the SSE effect to re-subscribe to filtering by the new session ID (kept intentional per risk analysis in plan Step 9-O). Extracted token-usage fetching logic into `refreshTokenUsage(sid: string)` callback, called on session-idle and post-compaction events.
+
+**Session switching callback:** New `switchSession(newID: string, banner: string)` callback handles the full session switch: aborts any pending generation, resets SSE event tracking state with `resetEventState()`, clears renderer with `renderer.clearAll()`, resets UI state (procTimes, tokenUsage, isCompacting), updates sessionID state, fetches and sets the new session's model, commits a banner message, and refreshes token usage. Handlers for `/new`, `/fork`, and `/sessions` picker all use this callback.
+
+**Compaction modal and event handling:** New `CompactingModal.tsx` component renders a blocking visual notice during session compaction. Two new `ReplEvent` kinds (`"session-compacting"` and `"session-compacted"`) filter server SSE events (`session.updated` and `session.compacted`). When `session.updated` fires with a `time.compacting` number, the modal appears and input is disabled. When `session.compacted` arrives, modal closes and token usage is refreshed.
+
+**Session picker:** New `SessionPickerModal.tsx` component lets operators navigate and select from a list of past sessions, sorted by recency. Supports ↑↓ navigation, Enter to select, Esc to cancel, and digit shortcuts (1–9). Displays session ID (first 8 chars), title, fork parentage, and a current-session marker.
+
+**Startup resume flags:** Added `--resume <id>` and `--resume-last` flags to `index.tsx`. `--resume <id>` validates that the session exists and attaches to it; `--resume-last` picks the most recently updated session from `session.list()`. No resume flag defaults to creating a new session (existing behavior). Both flags error and exit if validation fails.
+
+**StatusLine enhancement:** Added optional `isCompacting?: boolean` prop; when true, appends yellow ` · compacting…` indicator to the status bar.
+
+**`renderer.clearAll()` interface:** Added `clearAll(): void` to the `Renderer` interface. `StdoutRenderer` implementation clears `_committed` array, `_tail`, `_tailBuf`, `_activePart`, and `_openBlocks`. `TmuxWindowRenderer` clears its tracking maps (`_openBlocks`, `_lineBufs`) and delegates to the main renderer's `clearAll()`. Called on session switch to visually clear the view.
+
+**`resetEventState()` export:** New `resetEventState()` function in `events.ts` clears three module-level Sets used by SSE filtering (`userMessageIDs`, `openParts`, `seenPartIDs`). Called in `switchSession()` before the SSE subscription restarts, preventing stale event state from leaking across sessions.
+
+**Key risk addressed (Step 9-O):** SSE streaming subscription is a single long-lived async iterable from `index.tsx`. Closing and re-subscribing would drop in-flight events. Instead, the subscription stays open; the effect re-runs on `sessionID` state change (closure refresh) and `filterEvent()` internally filters by the current sessionID in the closure, so each session only sees its own events. This is safe because `filterEvent()` is stateless relative to sessionID.
+
+**Files modified:**
+- `src/renderer/types.ts` (added `clearAll()` interface method)
+- `src/renderer/stdout.ts` (implemented `clearAll()`)
+- `src/renderer/tmux-window.ts` (implemented `clearAll()`)
+- `src/events.ts` (added `resetEventState()`, two new ReplEvent kinds, two new filterEvent branches)
+- `src/commands.ts` (added four command parsers)
+- `src/command-registry.ts` (registered four new commands)
+- `src/components/CompactingModal.tsx` (new)
+- `src/components/SessionPickerModal.tsx` (new)
+- `src/app.tsx` (sessionID state, refreshTokenUsage callback, switchSession callback, four command handlers, session picker callbacks, SSE event branches, JSX updates)
+- `src/components/StatusLine.tsx` (added isCompacting prop)
+- `src/index.tsx` (added --resume and --resume-last flag parsing and session lookup)
+
+**Out of scope:** Tree visualization in `/sessions` picker, clearing tmux side-window buffers on session switch (cosmetic; banner message marks boundary), replay of message history into renderer on resume (banner-only per design), `/fork <messageID>`, `/undo`, `/export`, custom compaction prompts.
+
+---
 
 ### 2026-05-25--19-40 — Stage 5 hotfix — delay overlay until first char after `/`
 

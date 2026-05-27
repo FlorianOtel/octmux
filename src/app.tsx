@@ -4,9 +4,9 @@ import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 import type { Command as OcCommand } from "@opencode-ai/sdk/client";
 import * as path from "path";
 import { LineEditor } from "./editor.ts";
-import { filterEvent, type ReplEvent } from "./events.ts";
+import { filterEvent, resetEventState, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
-import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand } from "./commands.ts";
+import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
@@ -15,6 +15,8 @@ import { PermissionModal } from "./components/PermissionModal.tsx";
 import { QuestionModal } from "./components/QuestionModal.tsx";
 import { SubprocessStatus } from "./components/SubprocessStatus.tsx";
 import { ModelPickerModal, type ModelPickerItem } from "./components/ModelPickerModal.tsx";
+import { CompactingModal } from "./components/CompactingModal.tsx";
+import { SessionPickerModal, type SessionPickerItem } from "./components/SessionPickerModal.tsx";
 import { SlashCompletionOverlay } from "./components/SlashCompletionOverlay.tsx";
 import { expandCommands } from "./command-registry.ts";
 import { fetchGitBranch, getContextWindow, getToolCallSupport, prettyModelName, contextLabel } from "./utils/formatters.ts";
@@ -48,6 +50,7 @@ export function App(props: AppProps) {
   const [question, setQuestion] = useState<{ reqID: string; questions: QuestionType[] } | null>(null);
   const [lastSubmitted, setLastSubmitted] = useState<string>("");
   const [procTimes, setProcTimes] = useState<{ thinking: number | null; tools: number | null }>({ thinking: null, tools: null });
+  const [sessionID, setSessionID] = useState(props.sessionID);
   const [sessionLabel, setSessionLabel] = useState(props.sessionLabel);
   const [activeModel, setActiveModel] = useState<{ providerID: string; modelID: string } | null>(null);
   const [modelPicker, setModelPicker] = useState<{ items: ModelPickerItem[]; idx: number } | null>(null);
@@ -58,6 +61,8 @@ export function App(props: AppProps) {
     selectedIdx: number;
   } | null>(null);
   const [opencodeCommands, setOpencodeCommands] = useState<Map<string, OcCommand>>(new Map());
+  const [isCompacting, setIsCompacting] = useState(false);
+  const [sessionPicker, setSessionPicker] = useState<{ items: SessionPickerItem[]; idx: number } | null>(null);
 
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -118,7 +123,7 @@ export function App(props: AppProps) {
   useEffect(() => {
     (async () => {
       try {
-        const resp = await props.client.session.get({ path: { id: props.sessionID } });
+        const resp = await props.client.session.get({ path: { id: sessionID } });
         const sess = resp.data;
         if (sess?.model) {
           setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
@@ -127,7 +132,7 @@ export function App(props: AppProps) {
         // No model set on session yet; /model command will set activeModel
       }
     })();
-  }, [props.client, props.sessionID]);
+  }, [props.client, sessionID]);
 
   // Slash-completion: subscribe to editor changes and recompute overlay state
   useEffect(() => {
@@ -165,7 +170,7 @@ export function App(props: AppProps) {
     editor.on("changed", recompute);
     recompute();
     return () => editor.off("changed", recompute);
-  }, [editor, opencodeCommands]);
+  }, [editor, opencodeCommands, isCompacting, sessionPicker]);
 
   // SSE loop: thin translation layer — all rendering delegated to renderer.
   useEffect(() => {
@@ -200,44 +205,16 @@ export function App(props: AppProps) {
               setIsGenerating(false);
               setLastSubmitted("");
               setProcTimes({ thinking: null, tools: null });
-              // Async IIFE: fetch latest message tokens and update status bar
-              (async () => {
-                try {
-                  const messagesResp = await props.client.session.messages({ path: { id: props.sessionID } });
-                  const messages = messagesResp.data ?? [];
-                  // Find latest assistant message
-                  let latestAssistant: typeof messages[number] | null = null;
-                  for (let i = messages.length - 1; i >= 0; i--) {
-                    if (messages[i].info.role === "assistant") {
-                      latestAssistant = messages[i];
-                      break;
-                    }
-                  }
-                  if (latestAssistant) {
-                    const msg = latestAssistant.info;
-                    if (msg.role === "assistant") {
-                      const tokens = msg.tokens;
-                      // Guard: non-Anthropic providers may not populate tokens
-                      if (tokens) {
-                        const used = tokens.input
-                          + (tokens.cache?.read ?? 0)
-                          + (tokens.cache?.write ?? 0);
-                        // Use the model the server actually responded with, not activeModel state.
-                        // Avoids stale-closure timing dependency and handles mid-session model switches.
-                        const ctxWindow = await getContextWindow(
-                          props.client,
-                          msg.providerID,
-                          msg.modelID,
-                        );
-                        setActiveModel({ providerID: msg.providerID, modelID: msg.modelID });
-                        setTokenUsage({ used, contextWindow: ctxWindow });
-                      }
-                    }
-                  }
-                } catch {
-                  // Silently swallow errors; bar stays at last value
-                }
-              })();
+              refreshTokenUsage(sessionID);
+            }
+            else if (ev.kind === "session-compacting") {
+              if (ev.sessionID === sessionID) setIsCompacting(ev.compacting);
+            }
+            else if (ev.kind === "session-compacted") {
+              if (ev.sessionID === sessionID) {
+                setIsCompacting(false);
+                refreshTokenUsage(sessionID);
+              }
             }
             else if (ev.kind === "permission-asked") setPermission({ permID: ev.permID, title: ev.title });
             else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
@@ -248,13 +225,50 @@ export function App(props: AppProps) {
       }
     })();
     return () => { cancelled = true; };
-  }, [props.client, props.sessionID, props.eventStream, renderer]);
+  }, [props.client, sessionID, props.eventStream, renderer, refreshTokenUsage]);
+
+  // Fetch and update token usage from the latest assistant message in a session.
+  const refreshTokenUsage = useCallback(async (sid: string) => {
+    try {
+      const messagesResp = await props.client.session.messages({ path: { id: sid } });
+      const messages = messagesResp.data ?? [];
+      // Find latest assistant message
+      let latestAssistant: typeof messages[number] | null = null;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].info.role === "assistant") {
+          latestAssistant = messages[i];
+          break;
+        }
+      }
+      if (latestAssistant) {
+        const msg = latestAssistant.info;
+        if (msg.role === "assistant") {
+          const tokens = msg.tokens;
+          // Guard: non-Anthropic providers may not populate tokens
+          if (tokens) {
+            const used = tokens.input
+              + (tokens.cache?.read ?? 0)
+              + (tokens.cache?.write ?? 0);
+            const ctxWindow = await getContextWindow(
+              props.client,
+              msg.providerID,
+              msg.modelID,
+            );
+            setActiveModel({ providerID: msg.providerID, modelID: msg.modelID });
+            setTokenUsage({ used, contextWindow: ctxWindow });
+          }
+        }
+      }
+    } catch {
+      // Silently swallow errors; bar stays at last value
+    }
+  }, [props.client]);
 
   // Ctrl-C: three cases.
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       if (isGenerating) {
-        props.client.session.abort({ path: { id: props.sessionID } }).catch(() => {});
+        props.client.session.abort({ path: { id: sessionID } }).catch(() => {});
         editor.loadText(lastSubmitted);
         setIsGenerating(false);
         return;
@@ -276,6 +290,27 @@ export function App(props: AppProps) {
     }
   });
 
+  const switchSession = useCallback(async (newID: string, banner: string) => {
+    if (isGenerating) {
+      props.client.session.abort({ path: { id: sessionID } }).catch(() => {});
+      setIsGenerating(false);
+    }
+    resetEventState();
+    renderer.clearAll();
+    setProcTimes({ thinking: null, tools: null });
+    setLastSubmitted("");
+    setIsCompacting(false);
+    setTokenUsage(null);
+    setSessionID(newID);
+    try {
+      const resp = await props.client.session.get({ path: { id: newID } });
+      const sess = resp.data;
+      if (sess?.model) setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
+    } catch { /* leave activeModel as-is */ }
+    renderer.commitSystemMessage(banner);
+    refreshTokenUsage(newID);
+  }, [isGenerating, sessionID, props.client, renderer, refreshTokenUsage]);
+
   const handleSubmit = useCallback(async (text: string) => {
     // /exit — clean shutdown
     const exitResult = parseExitCommand(text);
@@ -286,6 +321,73 @@ export function App(props: AppProps) {
       process.exit(0);
       return;
     }
+    // /new / /clear — create a new session
+    const newResult = parseNewCommand(text);
+    if (newResult.handled) {
+      renderer.commitUserInput(text);
+      try {
+        const resp = await props.client.session.create({});
+        const newID = resp.data!.id;
+        await switchSession(newID, `new session started (${newID.slice(0, 8)})`);
+        setSessionLabel(newID.slice(0, 8));
+      } catch (err) {
+        renderer.commitSystemMessage(`/new failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+    // /compact / /summarize — compact the current session
+    const compactResult = parseCompactCommand(text);
+    if (compactResult.handled) {
+      renderer.commitUserInput(text);
+      if (!activeModel) {
+        renderer.commitSystemMessage("/compact requires an active model — use /model first");
+        return;
+      }
+      setIsCompacting(true);
+      try {
+        await props.client.session.summarize({
+          path: { id: sessionID },
+          body: { providerID: activeModel.providerID, modelID: activeModel.modelID },
+        });
+      } catch (err) {
+        setIsCompacting(false);
+        renderer.commitSystemMessage(`/compact failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+    // /sessions / /resume — pick a past session to resume
+    const sessionsResult = parseSessionsCommand(text);
+    if (sessionsResult.handled) {
+      renderer.commitUserInput(text);
+      try {
+        const resp = await props.client.session.list();
+        const all = (resp.data ?? []).sort((a, b) => b.time.updated - a.time.updated);
+        if (all.length === 0) { renderer.commitSystemMessage("no sessions found"); return; }
+        const items: SessionPickerItem[] = all.map(s => ({
+          id: s.id, title: s.title ?? "", parentID: s.parentID,
+          updatedAt: s.time.updated, isCurrent: s.id === sessionID,
+        }));
+        const initialIdx = Math.max(0, items.findIndex(it => it.isCurrent));
+        setSessionPicker({ items, idx: initialIdx });
+      } catch (err) {
+        renderer.commitSystemMessage(`/sessions error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+    // /fork — fork the current session into a child
+    const forkResult = parseForkCommand(text);
+    if (forkResult.handled) {
+      renderer.commitUserInput(text);
+      try {
+        const resp = await props.client.session.fork({ path: { id: sessionID } });
+        const childID = resp.data!.id;
+        await switchSession(childID, `forked session (child: ${childID.slice(0, 8)}, parent: ${sessionID.slice(0, 8)})`);
+        setSessionLabel(childID.slice(0, 8));
+      } catch (err) {
+        renderer.commitSystemMessage(`/fork failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
     // /rename <name> — rename session in DB and tmux windows
     const renameResult = parseRenameCommand(text);
     if (renameResult.handled) {
@@ -294,7 +396,7 @@ export function App(props: AppProps) {
         renderer.commitSystemMessage("usage: /rename <name>");
       } else {
         try {
-          await props.client.session.update({ path: { id: props.sessionID }, body: { title: renameResult.newLabel } });
+          await props.client.session.update({ path: { id: sessionID }, body: { title: renameResult.newLabel } });
           renderer.rename(renameResult.newLabel);
           setSessionLabel(renameResult.newLabel);
           renderer.commitSystemMessage(`session renamed to "${renameResult.newLabel}"`);
@@ -333,7 +435,7 @@ export function App(props: AppProps) {
             //   - The Provider.models values there are the same Model type with limit.context
             //     guaranteed non-null, so the defensive optional-chaining below is not needed.
             props.client.provider.list(),
-            props.client.session.get({ path: { id: props.sessionID } }),
+            props.client.session.get({ path: { id: sessionID } }),
           ]);
           const provData = provResp.data!;
           const sess = sessResp.data!;
@@ -418,7 +520,7 @@ export function App(props: AppProps) {
         }
         try {
           await props.client.session.command({
-            path: { id: props.sessionID },
+            path: { id: sessionID },
             body: {
               command: cmdName,
               arguments: args,
@@ -437,7 +539,7 @@ export function App(props: AppProps) {
     renderer.commitUserInput(text);
     try {
       await props.client.session.promptAsync({
-        path: { id: props.sessionID },
+        path: { id: sessionID },
         body: {
           parts: [{ type: "text", text }],
           ...(activeModel ? { model: activeModel } : {}),
@@ -447,16 +549,16 @@ export function App(props: AppProps) {
       setIsGenerating(false);
       renderer.commitError(`[send error] ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [props.client, props.sessionID, renderer, activeModel, opencodeCommands]);
+  }, [props.client, sessionID, renderer, activeModel, opencodeCommands, switchSession]);
 
   const handlePermission = useCallback(async (answer: "once" | "always" | "reject") => {
     if (!permission) return;
     await props.client.postSessionIdPermissionsPermissionId({
-      path: { id: props.sessionID, permissionID: permission.permID },
+      path: { id: sessionID, permissionID: permission.permID },
       body: { response: answer },
     }).catch(() => {});
     setPermission(null);
-  }, [permission, props.client, props.sessionID]);
+  }, [permission, props.client, sessionID]);
 
   const handleQuestion = useCallback(async (answers: string[][]) => {
     if (!question) return;
@@ -477,6 +579,18 @@ export function App(props: AppProps) {
   const handleModelCancel = useCallback(() => {
     setModelPicker(null);
   }, []);
+
+  const handleSessionSelect = useCallback(async (item: SessionPickerItem) => {
+    setSessionPicker(null);
+    if (item.id === sessionID) {
+      renderer.commitSystemMessage(`already on session ${item.id.slice(0, 8)}`);
+      return;
+    }
+    await switchSession(item.id, `resumed session ${item.id.slice(0, 8)}${item.title ? ` — "${item.title}"` : ""}`);
+    setSessionLabel(item.title || item.id.slice(0, 8));
+  }, [sessionID, switchSession, renderer]);
+
+  const handleSessionCancel = useCallback(() => { setSessionPicker(null); }, []);
 
   const handleSlashSelect = useCallback((candidate: string) => {
     editor.loadText(candidate + " ");
@@ -517,6 +631,7 @@ export function App(props: AppProps) {
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}
       {permission && <PermissionModal title={permission.title} onAnswer={handlePermission} />}
       {question && <QuestionModal questions={question.questions} onAnswer={handleQuestion} />}
+      {isCompacting && <CompactingModal />}
       {modelPicker && (
         <ModelPickerModal
           items={modelPicker.items}
@@ -525,7 +640,15 @@ export function App(props: AppProps) {
           onCancel={handleModelCancel}
         />
       )}
-      {slashCompletion && !permission && !question && !modelPicker && (
+      {sessionPicker && !isCompacting && (
+        <SessionPickerModal
+          items={sessionPicker.items}
+          initialIdx={sessionPicker.idx}
+          onSelect={handleSessionSelect}
+          onCancel={handleSessionCancel}
+        />
+      )}
+      {slashCompletion && !permission && !question && !modelPicker && !isCompacting && !sessionPicker && (
         <SlashCompletionOverlay
           candidates={slashCompletion.candidates}
           selectedIdx={slashCompletion.selectedIdx}
@@ -538,7 +661,7 @@ export function App(props: AppProps) {
       <Box flexDirection="column" marginBottom={2}>
         <SubprocessStatus thinking={procTimes.thinking} tools={procTimes.tools} />
         <Rule title={sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question || !!modelPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} />
+        <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} />
         <Rule width={w} />
         <StatusLine
           modelLabel={
@@ -549,6 +672,7 @@ export function App(props: AppProps) {
           tokenUsage={tokenUsage}
           projectName={projectName}
           gitBranch={gitBranch}
+          isCompacting={isCompacting}
         />
       </Box>
     </>

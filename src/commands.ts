@@ -93,3 +93,19 @@ export function parseModelCommand(
   };
 }
 
+export function parseNewCommand(input: string): { handled: boolean } {
+  return { handled: /^\/(?:new|clear)\s*$/.test(input.trim()) };
+}
+
+export function parseCompactCommand(input: string): { handled: boolean } {
+  return { handled: /^\/(?:compact|summarize)\s*$/.test(input.trim()) };
+}
+
+export function parseSessionsCommand(input: string): { handled: boolean } {
+  return { handled: /^\/(?:sessions|resume)\s*$/.test(input.trim()) };
+}
+
+export function parseForkCommand(input: string): { handled: boolean } {
+  return { handled: /^\/fork\s*$/.test(input.trim()) };
+}
+

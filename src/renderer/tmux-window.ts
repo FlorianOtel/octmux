@@ -209,6 +209,13 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   commitSystemMessage(t: string): void { this._main.commitSystemMessage(t); }
   commitError(m: string):         void { this._main.commitError(m); }
 
+  clearAll(): void {
+    this._openBlocks.clear();
+    this._lineBufs.clear();
+    this._main.clearAll();
+    this.emit("changed");
+  }
+
   rename(newLabel: string): void {
     execFileSync("tmux", ["rename-window", "-t", this._originWindowId, newLabel]);
     for (const [windowKey, windowId] of this._windowIds) {

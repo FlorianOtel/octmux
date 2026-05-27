@@ -6,6 +6,7 @@ export type StatusLineProps = {
   tokenUsage: { used: number; contextWindow: number } | null;
   projectName: string;
   gitBranch: string;            // "" if not in git repo
+  isCompacting?: boolean;
 };
 
 /**
@@ -17,6 +18,7 @@ export function StatusLine({
   tokenUsage,
   projectName,
   gitBranch,
+  isCompacting,
 }: StatusLineProps) {
   // Compute bar fill
   let filledCount = 0;
@@ -60,6 +62,7 @@ export function StatusLine({
       {`✦ ${modelLabel} | ctx `}
       <Text color={barColor}>{bar}</Text>
       {` ${percentage}% ${usedStr}/${ctxStr} | ~$0.00 | ◆ ${projectName}${gitSuffix}`}
+      {isCompacting && <Text color="yellow"> · compacting…</Text>}
     </Text>
   );
 }

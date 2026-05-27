@@ -10,6 +10,8 @@ export interface Renderer {
   commitError(message: string): void;
   // Called by app.tsx on session-idle: flush open tail + push 2-blank turn separator.
   commitTurnEnd(): void;
+  // Clear all committed lines and the active tail. Used on session switch.
+  clearAll(): void;
   dispose(): Promise<void>;
   rename(newLabel: string): void;
   isOutputEnabled(key: string): boolean;

@@ -143,6 +143,15 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
 
   setOutputEnabled(key: string, on: boolean): void { this._outputEnabled.set(key, on); }
 
+  clearAll(): void {
+    this._committed = [];
+    this._tail = null;
+    this._tailBuf = "";
+    this._activePart = null;
+    this._openBlocks.clear();
+    this.emit("changed");
+  }
+
   getCommitted(): CommittedLine[] { return this._committed; }
   getTail(): { role: Role; text: string } | null { return this._tail; }
 }

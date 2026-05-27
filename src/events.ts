@@ -7,6 +7,8 @@ import type {
   EventSessionStatus,
   EventMessagePartRemoved,
   EventPermissionUpdated,
+  EventSessionUpdated,
+  EventSessionCompacted,
 } from "@opencode-ai/sdk";
 import type { Role } from "./blocks.ts";
 
@@ -24,7 +26,9 @@ export type ReplEvent =
   | { kind: "question-asked"; reqID: string; sessionID: string; questions: Array<{
       question: string; header: string; options: Array<{ label: string; description: string }>;
       multiple?: boolean; custom?: boolean;
-    }> };
+    }> }
+  | { kind: "session-compacting"; sessionID: string; compacting: boolean }
+  | { kind: "session-compacted"; sessionID: string };
 
 // Track user message IDs so we don't echo the user's own input back to them.
 // opencode fires message.part.updated for user messages too — we skip them.
@@ -34,6 +38,13 @@ const userMessageIDs = new Set<string>();
 const openParts = new Map<string, Role>();
 // Used only for "emit generating exactly once" logic.
 const seenPartIDs = new Set<string>();
+
+// Reset event tracking state on session switch.
+export function resetEventState(): void {
+  userMessageIDs.clear();
+  openParts.clear();
+  seenPartIDs.clear();
+}
 
 // SDK part-type → Role mapping (assumptions based on SDK type inspection; confirm via live run):
 // | part.type    | message.part.delta field (assumed) | Role emitted    |
@@ -159,6 +170,19 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     }
 
     return null;
+  }
+
+  if (event.type === "session.updated") {
+    const e = event as EventSessionUpdated;
+    if (e.properties.info.id !== sessionID) return null;
+    const compacting = typeof e.properties.info.time.compacting === "number";
+    return { kind: "session-compacting", sessionID, compacting };
+  }
+
+  if (event.type === "session.compacted") {
+    const e = event as EventSessionCompacted;
+    if (e.properties.sessionID !== sessionID) return null;
+    return { kind: "session-compacted", sessionID };
   }
 
   if (event.type === "session.idle") {

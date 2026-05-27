@@ -23,6 +23,8 @@ Options:
   --endpoint <url>  endpoint of running opencode server (default: http://127.0.0.1:4096)
   --auto-spawn      spawn a new opencode server automatically (⚠ see below)
   --no-tmux-guard   skip tmux pane-context checks (for --multi-window in CI)
+  --resume <id>     resume a past session by ID
+  --resume-last     resume the most recently updated session
   --help, -h        show this help
   --version         show version
 
@@ -47,6 +49,9 @@ const endpointArg  = endpointIdx !== -1 ? args[endpointIdx + 1] : undefined;
 const single       = args.includes("--single");
 const multiWindow  = args.includes("--multi-window");
 const autoSpawn    = args.includes("--auto-spawn");
+const resumeIdx    = args.indexOf("--resume");
+const resumeArg    = resumeIdx !== -1 && args[resumeIdx + 1] && !args[resumeIdx + 1].startsWith("--") ? args[resumeIdx + 1] : undefined;
+const resumeLast   = args.includes("--resume-last");
 
 // Validate and normalise the --endpoint URL (strip trailing slash).
 const DEFAULT_ENDPOINT = "http://127.0.0.1:4096";
@@ -174,8 +179,44 @@ process.on("SIGTERM", async () => { await serverHandle?.dispose(); await rendere
 // ─── SDK: client / session / event stream ────────────────────────────────────
 
 const client    = createOpencodeClient({ baseUrl });
-const session   = await client.session.create({});
-const sessionID = session.data!.id;
+
+// Determine which session to use: resume by ID, resume last, or create new
+let sessionID: string;
+if (resumeArg) {
+  // --resume <id>: validate that the session exists
+  try {
+    const resp = await client.session.get({ path: { id: resumeArg } });
+    if (!resp.data?.id) {
+      console.error(`octmux: session not found: ${resumeArg}`);
+      process.exit(1);
+    }
+    sessionID = resumeArg;
+  } catch (err) {
+    console.error(`octmux: failed to resume session ${resumeArg}: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+} else if (resumeLast) {
+  // --resume-last: find the most recently updated session
+  try {
+    const resp = await client.session.list();
+    const sessions = resp.data ?? [];
+    if (sessions.length === 0) {
+      console.error("octmux: no sessions found to resume");
+      process.exit(1);
+    }
+    // Sort by time.updated descending
+    sessions.sort((a, b) => b.time.updated - a.time.updated);
+    sessionID = sessions[0].id;
+  } catch (err) {
+    console.error(`octmux: failed to list sessions: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+} else {
+  // Default: create a new session
+  const session = await client.session.create({});
+  sessionID = session.data!.id;
+}
+
 const eventStream = await client.global.event({});
 
 // ─── Terminal setup (alternate scroll mode only — clear happens after renderer setup) ──
