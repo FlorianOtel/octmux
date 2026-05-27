@@ -159,7 +159,7 @@ When finishing a phase:
 ### 2026-05-27--18-28 — Stage 4.6: Inline markdown rendering (bold / italic / inline code)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent dispatched by Claude Opus 4.7) — 2026-05-27--18-28
-**Commit(s):** `<pending commit>`
+**Commit(s):** `3656459`
 
 **What changed:**
 
