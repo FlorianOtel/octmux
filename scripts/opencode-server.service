@@ -1,7 +1,7 @@
 [Unit]
 Description=OpenCode Headless HTTP Server
 Documentation=https://opencode.ai
-# opencode binds to 127.0.0.1 only — no network-level dependency needed.
+# opencode binds to all interfaces — accessible from the LAN.
 # After=network.target is a system target and ignored in user units anyway.
 
 [Service]
@@ -20,6 +20,7 @@ EnvironmentFile=-%h/.config/opencode/opencode-server.env
 # Full path required — opencode is installed per-user under ~/.opencode/bin.
 ExecStart=%h/.opencode/bin/opencode serve \
     --port ${OPENCODE_PORT} \
+    --hostname 0.0.0.0 \
     --print-logs \
     --log-level INFO
 
