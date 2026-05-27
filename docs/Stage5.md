@@ -3,7 +3,7 @@ title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
 updated_by: Claude Code (Claude Opus 4.7 1M)
-updated_at: 2026-05-27--21-33
+updated_at: 2026-05-27--21-39
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -164,6 +164,194 @@ need to address proactively:
 
 When adding the next phase, check this section first to confirm the
 contracts above still hold. Update it if you change them.
+
+---
+
+## 5.1 — Session and context window management
+
+### Read first when working with sessions, context windows, or compaction
+
+This section is the contract for anyone touching session lifecycle, the
+context-window status bar, compaction signalling, or the resume/fork flows
+added in Stage 5.1. It explains *where state lives*, *how commands map to
+SDK calls*, and *why some commands block input while others do not*.
+
+#### The OpenCode server owns session state — octmux is a thin attaching client
+
+octmux does not persist session data. The OpenCode HTTP server (typically
+the systemd user service at `http://127.0.0.1:4096`) is the single source
+of truth: sessions, messages, parts, model assignments, compaction state,
+parent-child relationships all live in the server's SQLite store. octmux
+holds only the *active sessionID* and a renderer view derived from the
+live SSE stream.
+
+This means:
+
+- **Resume across restarts is free.** Quit octmux, restart it with
+  `--resume <id>` or `--resume-last`, and the conversation picks up where
+  it left off — because the server still has it.
+- **Fork is one server call**, not a local copy. `session.fork(...)`
+  produces a server-side child whose `parentID` points at the original;
+  both then evolve independently.
+- **Compaction is fully server-driven.** octmux *requests* it (`/compact`)
+  or *observes* it (auto-fire), but does not run the summarising LLM or
+  manage the SUMMARY_TEMPLATE itself.
+
+#### Command + CLI matrix
+
+| Command   | Aliases     | Startup flag        | Server call                                                | Blocks input? | Notes |
+|-----------|-------------|---------------------|------------------------------------------------------------|---------------|-------|
+| `/new`    | `/clear`    | *(default: no flag)*| `session.create({})`                                       | No            | Old session remains resumable; banner shows new 8-char ID. |
+| `/compact`| `/summarize`| —                   | `session.summarize({ path:{id}, body:{providerID, modelID}})` | **Yes**       | `CompactingModal` overlay + yellow status-line suffix until matching `session.compacted` SSE arrives. |
+| `/sessions`| `/resume`  | `--resume <id>`, `--resume-last` | `session.list()` → picker; CLI form also calls `session.get` (validate) or sorts list (`--resume-last`) | No            | Banner-only; we do not replay message history into the renderer (history is preserved server-side; the LLM still has it). |
+| `/fork`   | —           | `--fork <id>`       | `session.fork({ path:{id}})`                               | No            | No `messageID` arg yet — forks at end of session. CLI form additionally validates parent via `session.get` first. |
+| *(auto)*  | *(server-initiated)* | —          | (server detects overflow → fires `session.compacted` SSE)  | **Yes**       | Same `isCompacting` state → same `CompactingModal` as user-invoked `/compact`. |
+
+The startup flags `--resume <id>`, `--resume-last`, and `--fork <id>` are
+**mutually exclusive** — each picks a different initial session, so the
+combination is rejected at arg-parse time with exit code 2.
+
+#### How server-side compaction works (the bit that drives octmux's UX)
+
+The OpenCode server runs an `isOverflow()` check after each LLM step
+(`packages/opencode/src/session/processor.ts` upstream). The check is:
+`current_tokens > model.limit.context - COMPACTION_BUFFER` (where
+`COMPACTION_BUFFER = 20_000`). When true:
+
+1. Server sets `Session.time.compacting = <unix-timestamp>` and emits
+   `session.updated` SSE carrying the full `Session` object.
+2. Server runs a hidden compaction agent that generates a structured
+   summary (using its `SUMMARY_TEMPLATE`: Goal / Constraints / Progress /
+   Key Decisions / Next Steps / Critical Context). The resulting
+   assistant message is marked `summary: true`.
+3. On completion: server clears `time.compacting`, emits
+   `session.compacted` SSE with `{ sessionID }`.
+4. If compaction was triggered by hard overflow (vs proactive), the
+   server replays the last user message to restart the turn; otherwise
+   it injects a synthetic "Continue if you have next steps" prompt.
+
+Manual `/compact` uses the *same* code path. The only difference is who
+flipped the switch: user vs `isOverflow()`. From octmux's perspective
+both look identical on the wire — the same two SSE events fire with the
+same shapes.
+
+A server-side env knob exists to disable auto-compaction:
+`OPENCODE_DISABLE_AUTOCOMPACT=1` on the server process. octmux does not
+set or inspect this; it's a server administration concern.
+
+#### Status-line and modal: how octmux reflects compaction
+
+Two new `ReplEvent` kinds (`session-compacting`, `session-compacted`)
+were added to `src/events.ts`. They are emitted by `filterEvent` whenever
+the server's `session.updated` carries a non-null `time.compacting`
+(start) or whenever `session.compacted` arrives (end). The App handles
+them by toggling an `isCompacting: boolean` state.
+
+`isCompacting` drives **two** UI surfaces simultaneously:
+
+- `<CompactingModal>` — a full-attention overlay that disables the
+  PromptInput and hides the slash-completion overlay.
+- `<StatusLine isCompacting={…}>` — appends a yellow `· compacting…`
+  suffix to the existing model/context/cost line so the operator sees
+  the state in their normal scanning field.
+
+When the operator triggers `/compact` manually, the handler also calls
+`setIsCompacting(true)` *before* the SDK call returns — so the modal
+appears immediately, not after the round-trip. Either path (manual or
+auto) clears via the same `session.compacted` event.
+
+#### Why `/compact` blocks input — and why auto-compaction does too
+
+The operator chose, during Phase 0 of the /brain planning session, to
+have *any* compaction (manual or auto) block input via the same modal.
+The reasoning:
+
+- **Manual `/compact`:** the operator explicitly asked the model to
+  pause for a structural action; allowing further input during the
+  ~2-20 second compaction window would make the next prompt land
+  against the wrong context (pre- or post-summary depending on
+  ordering). Blocking until `session.compacted` arrives makes the
+  ordering deterministic.
+- **Auto-compaction:** fires mid-turn. The token count is about to
+  jump dramatically (typically 80%+ usage → ~30% usage). If the
+  operator typed during this window, they'd be reasoning about the
+  bar position that's about to change — and any prompt submitted
+  during compaction would have to be queued by the server (with
+  user-visible re-ordering). Blocking eliminates the ambiguity.
+
+The cost of this choice: a brief modal interruption that's visually
+loud. The alternative (silent yellow status-line indicator only) was
+rejected — the operator preferred unambiguous "you cannot type right
+now" over subtle "something is happening, you can probably keep going".
+
+#### Why `/new`, `/sessions`, `/fork` do NOT block
+
+These commands complete in <100 ms (`session.create` / `session.list` /
+`session.fork` are pure metadata operations — no LLM in the loop). The
+banner appears immediately on completion; if the call fails it appears
+as an inline error. Blocking would add UI surface for no benefit, and
+would couple unrelated state transitions to the compaction modal
+component.
+
+#### Why we do not replay message history on resume
+
+A natural reflex is: "if I resume a session, show me the old messages
+above the input." We deliberately chose banner-only ("`resumed session
+a1b2c3d4 — "title"`") for Stage 5.1:
+
+- **The renderer is bound to the live SSE event stream.** Reconstructing
+  history would require an ingest path that synthesises `block-start` /
+  `block-delta` / `block-end` events from `session.messages()` response
+  shapes — a non-trivial second code path with its own correctness
+  surface.
+- **The LLM still has full history.** Resuming a session and saying
+  "continue from where we left off" works correctly because the server
+  feeds the full message log into the next turn. The operator-facing
+  view being empty does *not* mean the model is amnesiac.
+- **Banner-only is future-proof.** Replay can be added later (a
+  `--replay-on-resume` flag, an interactive `r` keybind in the picker,
+  or simply unconditional replay) without breaking the current behavior.
+
+#### Why `sessionID` is App state, not a prop
+
+Pre-Stage-5.1, `sessionID` was a prop set once at `<App>` mount from
+`index.tsx`. Switching sessions at runtime requires mutability, so the
+refactor moved it into `useState`. This is a small but load-bearing
+change: every effect that depends on the active session ID now keys on
+the state variable. The SSE iteration effect specifically reads from
+`sessionIDRef` (a ref synced via a separate effect) so the long-lived
+`for await` loop sees the *current* session ID without re-subscribing
+to the single-consumer async iterable. See the FIX iteration 1 note in
+the implementation log below — this was the load-bearing risk flagged
+in the planner output.
+
+#### Files that participate in session/compaction state
+
+- `src/index.tsx` — startup flag parsing; initial `sessionID` resolution
+  (one of: new, resume by id, resume last, fork). Three flags are
+  mutually exclusive (`--resume`, `--resume-last`, `--fork`).
+- `src/app.tsx` — `sessionID` state, `sessionIDRef`, `switchSession()`,
+  `refreshTokenUsage()`, four command handlers, `isCompacting` state,
+  modal/picker render.
+- `src/events.ts` — `resetEventState()`, two new `ReplEvent` kinds,
+  filter branches for `session.updated` / `session.compacted`.
+- `src/components/CompactingModal.tsx` — blocking overlay.
+- `src/components/SessionPickerModal.tsx` — interactive resume picker.
+- `src/components/StatusLine.tsx` — yellow `· compacting…` suffix.
+- `src/renderer/types.ts` + implementations — `clearAll()` on session
+  switch.
+
+#### Out of scope (deliberately deferred)
+
+- `/fork <messageID>` (no UX for message-ID discovery yet).
+- Message-history replay into the local renderer on resume.
+- Tree visualization of fork relationships in the picker.
+- Per-session local storage in octmux (server is source of truth).
+- Clearing tmux side-window buffers on session switch (cosmetic — the
+  banner message marks the boundary).
+- `/undo`, `/export` (separate features unrelated to context management).
+- Custom compaction prompts or threshold tuning (server-side concern;
+  operator can set `OPENCODE_DISABLE_AUTOCOMPACT` on the server).
 
 ---
 
