@@ -2,8 +2,8 @@
 title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-26--12-46
+updated_by: Claude Code (Claude Haiku 4.5, via Actor subagent dispatched by Claude Opus 4.7)
+updated_at: 2026-05-27--18-28
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -58,6 +58,78 @@ Stage 4.5.1 reverted the eager call. The lazy-on-block-start UX (window appears 
 
 ---
 
+# Read first — Stage 4.6: Inline Markdown rendering
+
+This section records the design decisions for Stage 4.6 (inline markdown rendering in `formatLine`). Read it before modifying `renderInlineMarkdown`, changing the role scope, or adding block-level constructs.
+
+## What was built and why
+
+Octmux previously printed markdown formatting markers literally — `**Rank 1**` appeared on screen with visible asterisks, rather than rendering as bold text. The goal of Stage 4.6 is to match Claude Code's rendering of the same model output, transforming inline markdown constructs to ANSI styling while keeping the implementation minimal and safe.
+
+The transformation is inline-only (bold `**text**`, italic `_text_` / `*text*`, and inline code `` `text` ``) and runs per-line in the `formatLine` function in `src/blocks.ts`. This approach works within the existing per-line commit model and requires no new dependencies.
+
+## The four alternatives considered
+
+### Option A — Inline regex in `formatLine` (chosen)
+
+A pure-function approach: new exported function `renderInlineMarkdown(line)` applies regex transformations on plain strings and is called from `formatLine` for exactly three roles (`text`, `thinking`, `tool-result`). Both `StdoutRenderer` and `TmuxWindowRenderer` reach `formatLine` through the same code path, so behaviour is identical in `--single` and `--multi-window` modes. No new dependency. No architecture change. Simplicity and locality win.
+
+### Option B — Library-based full markdown (`marked` + terminal renderer)
+
+This approach would add a ~1 MB dependency (`marked` for parsing + a terminal-output library). It requires a block-accumulator architecture where `<Static>` items become non-immutable, deferred until paragraph/fence boundaries. Critically, it would destroy the live-streaming feel of `--multi-window` side panes. Currently, thinking and tools panes stream character-by-character via `tail -f`; with per-block buffering they would only update on block boundaries, introducing artificial delay and jank. Rejected for v1; revisit if/when fence rendering becomes a hard requirement.
+
+### Option C — Hybrid (raw on the wire, rewrite committed lines)
+
+Post-hoc rewriting of already-committed lines. Impossible for `--multi-window` side panes because once bytes are written to the FIFO they are in tmux's scrollback and cannot be rewritten. Would force a behavioural inconsistency between modes (rich main pane vs. raw side panes) or limit the rewrite to `--single` only. Rejected.
+
+### Option D — Wider construct set (headings, bullet lists, code fences)
+
+Headings and bullet lists can be handled per-line; code fences cannot (they span multiple lines) and would break the per-line commit model. The operator explicitly excluded wider constructs to keep the change small and safe. Rejected for this version.
+
+## Why inline-only rendering was chosen
+
+The multi-window constraint is decisive. The per-line commit model and FIFO-write architecture cannot be unwound without rearchitecting the renderer. Inline constructs are self-contained on a single line and are safe under partial-delta streaming. An unbalanced `**fo` arriving mid-stream renders raw until the closing `**` arrives — slight visual flicker on a rare edge case, acceptable in exchange for simplicity.
+
+## Role scope rationale
+
+Three roles receive `renderInlineMarkdown`:
+
+- **`text`** — model-generated prose that legitimately contains markdown formatting
+- **`thinking`** — model-generated reasoning that may contain markdown
+- **`tool-result`** — tool output that may contain markdown (including RAG results)
+
+Three roles are left untouched:
+
+- **`user`** — preserved literal (users may type `**foo**` and expect it kept exactly)
+- **`tool-call`** — typically structured / JSON-like preamble where markdown rarely helps
+- **`error`** — always plain text from the system
+
+## Explicit out-of-scope list
+
+- Block-level markdown (headings, bullet lists, ordered lists, code fences, block quotes, horizontal rules, tables, links)
+- Any change to the per-line commit model in `StdoutRenderer` or the FIFO write loop in `TmuxWindowRenderer`
+- Any change to `<Static>` mutability or the Ink component tree
+- Any new npm/bun dependency
+- Markdown in `user` or `tool-call` roles
+- A runtime toggle or CLI flag for this feature
+- Re-formatting already-committed scrollback
+- Syntax highlighting
+
+## Invariants this change explicitly does not modify
+
+1. **Stage 4.5.1 pure-gate invariant** — `setOutputEnabled` remains a pure Map setter; no side effects added.
+2. **Lazy-window invariant** — `TmuxWindowRenderer._ensureWindow` is called only from `beginBlock`; this change does not touch `tmux-window.ts`.
+3. **Per-line commit model** — `StdoutRenderer.appendToBlock` still commits one line at a time; `renderInlineMarkdown` is called from `formatLine`, which runs before the line text reaches the persistent committed-line array.
+4. **`<Static>` items remain immutable** — committed lines are not rewritten after the fact.
+
+## Implementation notes for future maintainers
+
+The bold pass runs before the single-asterisk italic pass to avoid `*` ambiguity in mixed content. Code spans are extracted to placeholders before bold/italic passes and re-expanded after, so backtick content is never transformed. Italic on `_word_` requires non-letter/digit characters on both sides (enforced via regex word-boundary guards) to avoid matching `snake_case`. The `\x1b[0m` reset that `formatLine` already appends clears any open inline SGR state, so no extra reset is needed inside `renderInlineMarkdown`.
+
+ANSI codes are zero-width to Ink's measurement and do not affect line-wrapping. Italic codes may silently degrade on older terminals (renders as plain text or inverse video) — acceptable. On `thinking` and `tool-result` lines (which wrap the result in `ANSI.gray` / `ANSI.dim`), inline bold/italic nest as bold-gray / dim-cyan-on-dim — distinguishable on modern terminals.
+
+---
+
 # Stage pre-implementation checklist - Read this first
 
 When starting a phase:
@@ -83,6 +155,26 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-27--18-28 — Stage 4.6: Inline markdown rendering (bold / italic / inline code)
+
+**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent dispatched by Claude Opus 4.7) — 2026-05-27--18-28
+**Commit(s):** `<pending commit>`
+
+**What changed:**
+
+New pure function `renderInlineMarkdown(content: string): string` added to `src/blocks.ts`, called from `formatLine()` for roles `text`, `thinking`, and `tool-result`. Transforms three inline constructs using regex on plain strings (no new dependency):
+- Inline code `` `text` `` → dim-cyan ANSI (`\x1b[2;36m`…`\x1b[0m`); extracted before bold/italic passes to protect code-span contents.
+- Bold `**text**` → `\x1b[1m`…`\x1b[22m`.
+- Italic `_word_` / `*word*` → `\x1b[3m`…`\x1b[23m`; word-boundary enforcement on `_word_` prevents `snake_case` false-positives.
+
+Unit tests added in `src/blocks.test.ts` (Bun built-in test runner; no configuration required). Design rationale section added near top of this doc as a peer to the existing "Read first" contract.
+
+**Roles affected:** `text`, `thinking`, `tool-result`. Roles `user`, `tool-call`, `error` unchanged.
+**Files modified:** `src/blocks.ts`, `src/blocks.test.ts` (new), `docs/Stage4.md` (this entry + design section).
+**No files modified:** `src/renderer/tmux-window.ts`, `src/renderer/stdout.ts`, `src/renderer/output-keys.ts`, `src/app.tsx`, any other file.
+
+---
 
 ### 2026-05-25--20-59 — Stage 4.5.2: Hotfix for Stage 4.5.1 — non-blocking liveness-cache refresh on toggle-on (Option A); Option B held in reserve
 
