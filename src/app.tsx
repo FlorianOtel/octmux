@@ -66,6 +66,7 @@ export function App(props: AppProps) {
 
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionIDRef = useRef(sessionID);
 
   // Project name: basename of current working directory
   const projectName = path.basename(process.cwd());
@@ -82,6 +83,11 @@ export function App(props: AppProps) {
     (cb) => { renderer.on("changed", cb); return () => renderer.off("changed", cb); },
     () => renderer.getTail(),
   );
+
+  // Track the current session ID in a ref so the SSE effect can read it without re-running.
+  useEffect(() => {
+    sessionIDRef.current = sessionID;
+  }, [sessionID]);
 
   // One-shot: fetch git branch at startup
   useEffect(() => {
@@ -172,61 +178,6 @@ export function App(props: AppProps) {
     return () => editor.off("changed", recompute);
   }, [editor, opencodeCommands, isCompacting, sessionPicker]);
 
-  // SSE loop: thin translation layer — all rendering delegated to renderer.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      for await (const globalEvent of props.eventStream) {
-        if (cancelled) break;
-        const evRaw = filterEvent(globalEvent.payload as unknown as Event, props.sessionID);
-        if (!evRaw) continue;
-        const evList: ReplEvent[] = Array.isArray(evRaw) ? evRaw : [evRaw];
-        for (const ev of evList) {
-          try {
-            if (ev.kind === "block-start") {
-              renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName });
-              if (ev.role === "thinking")
-                setProcTimes(p => p.thinking === null ? { ...p, thinking: Date.now() } : p);
-              else if (ev.role === "tool-call" || ev.role === "tool-result")
-                setProcTimes(p => p.tools === null ? { ...p, tools: Date.now() } : p);
-            }
-            else if (ev.kind === "block-delta")  renderer.appendToBlock(ev.partID, ev.text);
-            else if (ev.kind === "block-end") {
-              renderer.endBlock(ev.partID, ev.status);
-              if (ev.role === "thinking") setProcTimes(p => ({ ...p, thinking: null }));
-              // Clear tools on tool-result end (normal path) or tool-call error (no result follows).
-              else if (ev.role === "tool-result" || (ev.role === "tool-call" && ev.status === "error"))
-                setProcTimes(p => ({ ...p, tools: null }));
-            }
-            else if (ev.kind === "error")        { renderer.commitError(ev.message); setIsGenerating(false); }
-            else if (ev.kind === "generating")   setIsGenerating(true);
-            else if (ev.kind === "session-idle") {
-              renderer.commitTurnEnd();
-              setIsGenerating(false);
-              setLastSubmitted("");
-              setProcTimes({ thinking: null, tools: null });
-              refreshTokenUsage(sessionID);
-            }
-            else if (ev.kind === "session-compacting") {
-              if (ev.sessionID === sessionID) setIsCompacting(ev.compacting);
-            }
-            else if (ev.kind === "session-compacted") {
-              if (ev.sessionID === sessionID) {
-                setIsCompacting(false);
-                refreshTokenUsage(sessionID);
-              }
-            }
-            else if (ev.kind === "permission-asked") setPermission({ permID: ev.permID, title: ev.title });
-            else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
-          } catch (err) {
-            renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [props.client, sessionID, props.eventStream, renderer, refreshTokenUsage]);
-
   // Fetch and update token usage from the latest assistant message in a session.
   const refreshTokenUsage = useCallback(async (sid: string) => {
     try {
@@ -263,6 +214,64 @@ export function App(props: AppProps) {
       // Silently swallow errors; bar stays at last value
     }
   }, [props.client]);
+
+  // SSE loop: thin translation layer — all rendering delegated to renderer.
+  // SSE subscription is a single-consumer async iterable; we keep this effect stable
+  // across session switches and read the current sessionID from sessionIDRef.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for await (const globalEvent of props.eventStream) {
+        if (cancelled) break;
+        const evRaw = filterEvent(globalEvent.payload as unknown as Event, sessionIDRef.current);
+        if (!evRaw) continue;
+        const evList: ReplEvent[] = Array.isArray(evRaw) ? evRaw : [evRaw];
+        for (const ev of evList) {
+          try {
+            if (ev.kind === "block-start") {
+              renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName });
+              if (ev.role === "thinking")
+                setProcTimes(p => p.thinking === null ? { ...p, thinking: Date.now() } : p);
+              else if (ev.role === "tool-call" || ev.role === "tool-result")
+                setProcTimes(p => p.tools === null ? { ...p, tools: Date.now() } : p);
+            }
+            else if (ev.kind === "block-delta")  renderer.appendToBlock(ev.partID, ev.text);
+            else if (ev.kind === "block-end") {
+              renderer.endBlock(ev.partID, ev.status);
+              if (ev.role === "thinking") setProcTimes(p => ({ ...p, thinking: null }));
+              // Clear tools on tool-result end (normal path) or tool-call error (no result follows).
+              else if (ev.role === "tool-result" || (ev.role === "tool-call" && ev.status === "error"))
+                setProcTimes(p => ({ ...p, tools: null }));
+            }
+            else if (ev.kind === "error")        { renderer.commitError(ev.message); setIsGenerating(false); }
+            else if (ev.kind === "generating")   setIsGenerating(true);
+            else if (ev.kind === "session-idle") {
+              renderer.commitTurnEnd();
+              setIsGenerating(false);
+              setLastSubmitted("");
+              setProcTimes({ thinking: null, tools: null });
+              refreshTokenUsage(sessionIDRef.current);
+            }
+            else if (ev.kind === "session-compacting") {
+              if (ev.sessionID === sessionIDRef.current) setIsCompacting(ev.compacting);
+            }
+            else if (ev.kind === "session-compacted") {
+              if (ev.sessionID === sessionIDRef.current) {
+                setIsCompacting(false);
+                refreshTokenUsage(sessionIDRef.current);
+              }
+            }
+            else if (ev.kind === "permission-asked") setPermission({ permID: ev.permID, title: ev.title });
+            else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
+          } catch (err) {
+            renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [props.client, props.eventStream, renderer, refreshTokenUsage]);
+
 
   // Ctrl-C: three cases.
   useInput((input, key) => {

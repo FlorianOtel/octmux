@@ -3,7 +3,7 @@ title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-27--21-15
+updated_at: 2026-05-27--23-38
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -172,7 +172,7 @@ contracts above still hold. Update it if you change them.
 ### 2026-05-27--21-15 — Stage 5.1 — context-management commands + session-switch plumbing
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-27--21-15
-**Commit(s):** `2b47ebc`
+**Commit(s):** `2b47ebc`, `<pending>`
 
 **What changed:**
 
@@ -195,6 +195,8 @@ contracts above still hold. Update it if you change them.
 **`resetEventState()` export:** New `resetEventState()` function in `events.ts` clears three module-level Sets used by SSE filtering (`userMessageIDs`, `openParts`, `seenPartIDs`). Called in `switchSession()` before the SSE subscription restarts, preventing stale event state from leaking across sessions.
 
 **Key risk addressed (Step 9-O):** SSE streaming subscription is a single long-lived async iterable from `index.tsx`. Closing and re-subscribing would drop in-flight events. Instead, the subscription stays open; the effect re-runs on `sessionID` state change (closure refresh) and `filterEvent()` internally filters by the current sessionID in the closure, so each session only sees its own events. This is safe because `filterEvent()` is stateless relative to sessionID.
+
+**Follow-up fix (FIX iteration 1):** Reviewer audit found three critical issues in the initial commit: (1) stale `props.sessionID` closure in SSE event loop line 181; (2) temporal dead zone (TDZ) on `refreshTokenUsage` callback — declared after the SSE `useEffect` dependency array that referenced it; (3) SSE effect re-running on every session switch, corrupting the single-consumer async iterable. All three fixed by: introducing `sessionIDRef` to track current session ID across the long-lived effect, moving `refreshTokenUsage` callback before the SSE effect, and removing `sessionID` from the effect's dependency array. SSE subscription now stable; all sessionID reads inside the loop use the ref.
 
 **Files modified:**
 - `src/renderer/types.ts` (added `clearAll()` interface method)
