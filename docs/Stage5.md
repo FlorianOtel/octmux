@@ -360,7 +360,7 @@ in the planner output.
 ### 2026-05-27--21-15 — Stage 5.1 — context-management commands + session-switch plumbing
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-27--21-15
-**Commit(s):** `2b47ebc`, `b0c71e4`, `c85c6f0`
+**Commit(s):** `2b47ebc`, `b0c71e4`, `c85c6f0`, `a44e2c3`
 
 **What changed:**
 
