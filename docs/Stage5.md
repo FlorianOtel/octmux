@@ -370,7 +370,7 @@ in the planner output.
 ### 2026-05-28--00-00 — Stage 5.2 — history replay synthesiser: visible scrollback + title label + up-arrow recall
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-28--00-00
-**Commit(s):** `<pending>`
+**Commit(s):** `57f4ae9`
 
 **What changed:**
 
