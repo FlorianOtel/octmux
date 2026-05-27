@@ -172,7 +172,7 @@ contracts above still hold. Update it if you change them.
 ### 2026-05-27--21-15 — Stage 5.1 — context-management commands + session-switch plumbing
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-27--21-15
-**Commit(s):** `2b47ebc`, `<pending>`
+**Commit(s):** `2b47ebc`, `b0c71e4`
 
 **What changed:**
 
