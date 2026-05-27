@@ -39,7 +39,7 @@ When finishing a phase:
 ### 2026-05-27--11-36 — Replace --attach <port> with --endpoint <url>; startup endpoint notice
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-27--11-36
-**Commit(s):** _(pending)_
+**Commit(s):** `d9dd014`
 
 **What shipped:**
 - `--attach <port>` CLI argument replaced by `--endpoint <url>`. Accepts a full
