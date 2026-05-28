@@ -370,7 +370,7 @@ in the planner output.
 ### 2026-05-28--09-41 — Stage 5.3 — runtime permission-mode toggle (Shift-TAB cycles ask/allow/deny)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-28--09-41
-**Commit(s):** `<pending>`
+**Commit(s):** `2d440b9`
 
 **What changed:**
 
