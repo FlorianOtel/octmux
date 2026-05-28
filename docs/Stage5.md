@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-28--09-41
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-05-28--09-55
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -366,6 +366,15 @@ in the planner output.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-28--09-55 — Stage 5.3 hotfix — allow color #1dde00, all perm labels bold
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-28--09-55
+**Commit(s):** `bb28a46`
+
+Fixed `allow` color from gruvbox `#98971a` to `#1dde00`; added `bold` to all three mode labels in `PermissionStatusLine`.
+
+---
 
 ### 2026-05-28--09-41 — Stage 5.3 — runtime permission-mode toggle (Shift-TAB cycles ask/allow/deny)
 
