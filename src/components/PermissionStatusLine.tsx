@@ -6,26 +6,26 @@ export type PermissionStatusLineProps = {
 
 /**
  * Status line showing the current permission mode (ask/allow/deny).
- * Color-coded: deny=red, ask=yellow, allow=green.
+ * Color-coded: deny=red, ask=yellow, allow=green. All mode labels bold.
  */
 export function PermissionStatusLine({ permMode }: PermissionStatusLineProps) {
   let modeColor: string | undefined;
   switch (permMode) {
     case "deny":
-      modeColor = "#cc241d"; // gruvbox red
+      modeColor = "#cc241d";
       break;
     case "ask":
-      modeColor = "#d79921"; // gruvbox yellow
+      modeColor = "#d79921";
       break;
     case "allow":
-      modeColor = "#98971a"; // gruvbox green
+      modeColor = "#1dde00";
       break;
   }
 
   return (
     <Text>
       {"Permissions: "}
-      <Text color={modeColor}>{permMode}</Text>
+      <Text color={modeColor} bold>{permMode}</Text>
     </Text>
   );
 }

@@ -374,7 +374,7 @@ in the planner output.
 
 **What changed:**
 
-**New `src/components/PermissionStatusLine.tsx` component:** Displays the current permission mode with color-coding (deny=red, ask=yellow, allow=green). Renders as a single-line status indicator below the main StatusLine, showing `Permissions: <mode>` with the mode text colored appropriately.
+**New `src/components/PermissionStatusLine.tsx` component:** Displays the current permission mode with color-coding (deny=#cc241d red, ask=#d79921 yellow, allow=#1dde00 green); all mode labels bold. Renders as a single-line status indicator below the main StatusLine, showing `Permissions: <mode>` with the mode text colored and bolded.
 
 **Permission mode state and cycling:** Added `permMode` state variable to `src/app.tsx` tracking the current mode (`"ask" | "allow" | "deny"`, default `"ask"`). New `cyclePermMode` useCallback implements the cycle order: `ask → allow → deny → ask`. The callback is declared early (before any useEffect that references it) to avoid temporal dead zone issues.
 
