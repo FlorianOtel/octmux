@@ -167,13 +167,13 @@ contracts above still hold. Update it if you change them.
 
 ---
 
-## 5.1 — Session and context window management
+##  Session and context window management -- first implemented in 5.1 (below)
 
 ### Read first when working with sessions, context windows, or compaction
 
 This section is the contract for anyone touching session lifecycle, the
-context-window status bar, compaction signalling, or the resume/fork flows
-added in Stage 5.1. It explains *where state lives*, *how commands map to
+context-window status bar, compaction signalling, or the resume/fork flows.
+These were added in Stage 5.1. The 5.1 section below explains *where state lives*, *how commands map to
 SDK calls*, and *why some commands block input while others do not*.
 
 #### The OpenCode server owns session state — octmux is a thin attaching client
