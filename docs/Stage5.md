@@ -3,7 +3,7 @@ title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-28--09-55
+updated_at: 2026-05-28--10-10
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -367,19 +367,24 @@ in the planner output.
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-28--09-55 — Stage 5.3 hotfix — allow color #1dde00, all perm labels bold
-
-**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-28--09-55
-**Commit(s):** `bb28a46`
-
-Fixed `allow` color from gruvbox `#98971a` to `#1dde00`; added `bold` to all three mode labels in `PermissionStatusLine`.
-
----
-
 ### 2026-05-28--09-41 — Stage 5.3 — runtime permission-mode toggle (Shift-TAB cycles ask/allow/deny)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-28--09-41
-**Commit(s):** `2d440b9`
+**Commit(s):** `2d440b9`, `bb28a46`, `cebfe3b`
+
+**Permission levels**
+
+OpenCode sends a `permission.asked` event whenever the AI agent wants to execute a tool — any operation that touches the filesystem, shell, network, or spawns subagents. The octmux permission mode controls how octmux responds to those events globally:
+
+| Mode | Color | Meaning |
+|------|-------|---------|
+| `ask` | yellow | Show the permission modal for every tool call — user approves or denies each one manually. Default. |
+| `allow` | green | Auto-approve all tool calls without prompting (replies `"always"` to OpenCode). AI runs freely. |
+| `deny` | red | Auto-reject all tool calls without prompting (replies `"reject"` to OpenCode). AI is fully blocked. |
+
+The permission system covers all OpenCode tool categories: filesystem (`read`, `edit`, `glob`, `grep`, `list`), shell (`bash`), network (`webfetch`, `websearch`), repository (`repo_clone`, `repo_overview`), agents (`task`, `skill`), and others (`external_directory`, `lsp`, `todowrite`). The mode applies globally — there is no per-tool or per-pattern override at the octmux layer.
+
+Cycle with **Shift-TAB**: `ask → allow → deny → ask`.
 
 **What changed:**
 
