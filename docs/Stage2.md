@@ -39,7 +39,7 @@ When finishing a phase:
 ### 2026-05-28--00-00 — Remove startup delay and silent endpoint notice
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-28--00-00
-**Commit(s):** TBD
+**Commit(s):** `7c1886c`
 
 **What shipped:**
 - Removed the 3-second `setTimeout` delay on both the `--auto-spawn` path and
