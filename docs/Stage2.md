@@ -3,7 +3,7 @@ title: "octmux — Stage 2: Auto-spawn server + tmux guard"
 created_at: 2026-05-19--15-37
 created_by: Claude Code (Actor, Claude Haiku 4.5)
 updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-27--11-36
+updated_at: 2026-05-28--00-00
 context: >
   Stage 2 adds automatic server spawning with port rotation and a tmux guard
   that prevents octmux from running outside of tmux unless explicitly overridden.
@@ -36,7 +36,21 @@ When finishing a phase:
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-05-27--11-36 — Replace --attach <port> with --endpoint <url>; startup endpoint notice
+### 2026-05-28--00-00 — Remove startup delay and silent endpoint notice
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-28--00-00
+**Commit(s):** TBD
+
+**What shipped:**
+- Removed the 3-second `setTimeout` delay on both the `--auto-spawn` path and
+  the default/`--endpoint` path. octmux now connects silently and immediately.
+- Removed the `process.stdout.write` endpoint notice on both paths. If the
+  connection fails, the existing verbose error messages (with remediation hints)
+  are printed; a success notice is unnecessary noise.
+
+---
+
+### 2026-05-27--11-36 — Replace --attach <port> with --endpoint <url>
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-27--11-36
 **Commit(s):** `d9dd014`
@@ -45,14 +59,6 @@ When finishing a phase:
 - `--attach <port>` CLI argument replaced by `--endpoint <url>`. Accepts a full
   URL (validated with `new URL()`). Default: `http://127.0.0.1:4096`.
 - URL validation at parse time: invalid URLs print an error and exit 2.
-- On successful connection (both `--endpoint` and `--auto-spawn` paths), a brief
-  startup notice is printed to stdout:
-  ```
-    endpoint: http://127.0.0.1:4096  (default)
-  ```
-  The process waits 3 seconds so the user can read it before the screen is cleared
-  and the TUI renders. The notice is printed before the health probe so the user
-  sees it even on fast connections.
 - Error messages updated to reference `--endpoint` instead of `--attach`.
 
 ---

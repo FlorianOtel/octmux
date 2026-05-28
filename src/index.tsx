@@ -146,16 +146,11 @@ if (autoSpawn) {
     process.exit(1);
   }
   baseUrl = serverHandle.url;
-  // Brief startup notice — cleared when the screen is wiped before rendering.
-  process.stdout.write(`\n  endpoint: ${baseUrl}\n\n`);
-  await new Promise(res => setTimeout(res, 3_000));
 } else {
   // Default (no flags) or explicit --endpoint: connect to a running server.
   // Default endpoint is http://127.0.0.1:4096 — the systemd user service.
   baseUrl = endpointUrl;
   const isDefault = endpointArg === undefined;
-  // Show which endpoint we are about to connect to before the health probe.
-  process.stdout.write(`\n  endpoint: ${baseUrl}${isDefault ? "  (default)" : ""}\n\n`);
   if (!(await isOpencodeHealthy(baseUrl))) {
     if (isDefault) {
       console.error(
@@ -178,9 +173,6 @@ if (autoSpawn) {
     }
     process.exit(1);
   }
-  // Health check passed — hold the endpoint notice on screen for 3 seconds
-  // before the screen is cleared and the UI renders.
-  await new Promise(res => setTimeout(res, 3_000));
 }
 
 process.on("SIGTERM", async () => { await serverHandle?.dispose(); await renderer.dispose(); process.exit(0); });
