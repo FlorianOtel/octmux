@@ -13,6 +13,7 @@ import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
 import { StatusLine } from "./components/StatusLine.tsx";
 import { PermissionModal } from "./components/PermissionModal.tsx";
+import { PermissionStatusLine } from "./components/PermissionStatusLine.tsx";
 import { QuestionModal } from "./components/QuestionModal.tsx";
 import { SubprocessStatus } from "./components/SubprocessStatus.tsx";
 import { ModelPickerModal, type ModelPickerItem } from "./components/ModelPickerModal.tsx";
@@ -64,10 +65,17 @@ export function App(props: AppProps) {
   const [opencodeCommands, setOpencodeCommands] = useState<Map<string, OcCommand>>(new Map());
   const [isCompacting, setIsCompacting] = useState(false);
   const [sessionPicker, setSessionPicker] = useState<{ items: SessionPickerItem[]; idx: number } | null>(null);
+  const [permMode, setPermMode] = useState<"ask" | "allow" | "deny">("ask");
 
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionIDRef = useRef(sessionID);
+
+  const cyclePermMode = useCallback(() => {
+    setPermMode(prev =>
+      prev === "ask" ? "allow" : prev === "allow" ? "deny" : "ask"
+    );
+  }, []);
 
   // Project name: basename of current working directory
   const projectName = path.basename(process.cwd());
@@ -84,6 +92,12 @@ export function App(props: AppProps) {
     (cb) => { renderer.on("changed", cb); return () => renderer.off("changed", cb); },
     () => renderer.getTail(),
   );
+
+  // Track the current permission mode in a ref so the SSE effect can read it without re-running.
+  const permModeRef = useRef<"ask" | "allow" | "deny">("ask");
+  useEffect(() => {
+    permModeRef.current = permMode;
+  }, [permMode]);
 
   // Track the current session ID in a ref so the SSE effect can read it without re-running.
   useEffect(() => {
@@ -276,7 +290,29 @@ export function App(props: AppProps) {
                 refreshTokenUsage(sessionIDRef.current);
               }
             }
-            else if (ev.kind === "permission-asked") setPermission({ permID: ev.permID, title: ev.title });
+            else if (ev.kind === "permission-asked") {
+              if (permModeRef.current === "ask") {
+                setPermission({ permID: ev.permID, title: ev.title });
+              } else if (permModeRef.current === "allow") {
+                try {
+                  await props.client.postSessionIdPermissionsPermissionId({
+                    path: { id: sessionIDRef.current, permissionID: ev.permID },
+                    body: { response: "always" },
+                  });
+                } catch {
+                  // Silently swallow errors; permission will be retried or escalated by the server
+                }
+              } else if (permModeRef.current === "deny") {
+                try {
+                  await props.client.postSessionIdPermissionsPermissionId({
+                    path: { id: sessionIDRef.current, permissionID: ev.permID },
+                    body: { response: "reject" },
+                  });
+                } catch {
+                  // Silently swallow errors
+                }
+              }
+            }
             else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
           } catch (err) {
             renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);
@@ -684,7 +720,7 @@ export function App(props: AppProps) {
       <Box flexDirection="column" marginBottom={2}>
         <SubprocessStatus thinking={procTimes.thinking} tools={procTimes.tools} />
         <Rule title={sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} />
+        <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} />
         <Rule width={w} />
         <StatusLine
           modelLabel={
@@ -697,6 +733,7 @@ export function App(props: AppProps) {
           gitBranch={gitBranch}
           isCompacting={isCompacting}
         />
+        <PermissionStatusLine permMode={permMode} />
       </Box>
     </>
   );

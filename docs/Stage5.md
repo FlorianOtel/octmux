@@ -3,7 +3,7 @@ title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-28--00-00
+updated_at: 2026-05-28--09-41
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -366,6 +366,38 @@ in the planner output.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-05-28--09-41 — Stage 5.3 — runtime permission-mode toggle (Shift-TAB cycles ask/allow/deny)
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-28--09-41
+**Commit(s):** `<pending>`
+
+**What changed:**
+
+**New `src/components/PermissionStatusLine.tsx` component:** Displays the current permission mode with color-coding (deny=red, ask=yellow, allow=green). Renders as a single-line status indicator below the main StatusLine, showing `Permissions: <mode>` with the mode text colored appropriately.
+
+**Permission mode state and cycling:** Added `permMode` state variable to `src/app.tsx` tracking the current mode (`"ask" | "allow" | "deny"`, default `"ask"`). New `cyclePermMode` useCallback implements the cycle order: `ask → allow → deny → ask`. The callback is declared early (before any useEffect that references it) to avoid temporal dead zone issues.
+
+**Permission mode ref for SSE handler:** Added `permModeRef` and a syncing useEffect to track the current permission mode without re-subscribing the SSE handler. The SSE effect's `permission-asked` event handler now branches on `permModeRef.current`: mode `"ask"` shows the modal (existing path); mode `"allow"` calls `client.postSessionIdPermissionsPermissionId()` with `response: "always"` (auto-reply); mode `"deny"` calls the same API with `response: "reject"` (auto-deny). Auto-replies silently swallow errors.
+
+**Shift-TAB keybinding:** Added `key.tab && key.shift` detection to `src/keybindings.ts`'s `handleKey` function (inserted before the printable-char catch-all, after Ctrl/Alt key handlers). The binding calls the new `onCyclePermMode` callback parameter. The `PromptInput` component now accepts `onCyclePermMode?: () => void` as a prop and threads it as the 7th parameter to `handleKey`.
+
+**Wire permission-mode cycling to PromptInput:** Updated `src/app.tsx` to pass `onCyclePermMode={cyclePermMode}` when rendering `<PromptInput>`.
+
+**Render PermissionStatusLine in chrome:** Imported the new component and added `<PermissionStatusLine permMode={permMode} />` immediately after `<StatusLine>` in the main Box chrome, so the permission mode always displays below the model/context/project status line.
+
+**Build:** Binary rebuild succeeds with zero TypeScript errors.
+
+**Files modified:**
+- `src/components/PermissionStatusLine.tsx` (new)
+- `src/app.tsx` (import PermissionStatusLine, add permMode state + cyclePermMode callback, add permModeRef + sync effect, update SSE handler for permission-asked with auto-reply logic, pass onCyclePermMode to PromptInput, render PermissionStatusLine)
+- `src/keybindings.ts` (add onCyclePermMode parameter, add Shift-TAB handler)
+- `src/components/PromptInput.tsx` (add onCyclePermMode prop, pass to handleKey)
+- `docs/Stage5.md` (added §5.3 entry, updated frontmatter)
+
+**Out of scope:** Persistent permission-mode state across restarts, per-tool/per-model permission rules, permission-mode indicators in tmux window titles, auditing/logging of auto-replies, UI preferences for permission-mode toggle key.
+
+---
 
 ### 2026-05-28--00-00 — Stage 5.2 — history replay synthesiser: visible scrollback + title label + up-arrow recall
 

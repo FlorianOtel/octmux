@@ -96,6 +96,7 @@ export function handleKey(
   lastEscTime: number,
   rawSeq: string = '',
   overlayOpen: boolean = false,
+  onCyclePermMode?: () => void,
 ): number {
 
   // ── Enter / newline ─────────────────────────────────────────────────────────
@@ -212,6 +213,12 @@ export function handleKey(
     editor.killWordBackward(); // Ctrl-W : kill word backward into kill ring
   } else if (key.ctrl && input === "y") {
     editor.yank();             // Ctrl-Y : yank (paste) from kill ring
+
+  // ── Permission mode toggle ──────────────────────────────────────────────────
+
+  } else if (key.tab && key.shift) {
+    // Shift-TAB: cycle permission mode (ask → allow → deny → ask)
+    if (onCyclePermMode) onCyclePermMode();
 
   // ── Printable character insertion ────────────────────────────────────────────
 
