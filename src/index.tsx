@@ -8,6 +8,7 @@ import { Visibility } from "./renderer/visibility.ts";
 import { StdoutRenderer } from "./renderer/stdout.ts";
 import { TmuxWindowRenderer } from "./renderer/tmux-window.ts";
 import type { Renderer } from "./renderer/types.ts";
+import { loadExternalCommands } from "./command-registry.ts";
 
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
 
@@ -295,6 +296,11 @@ const _pad = Math.max(0, _rows - 6);
 if (_pad > 0) process.stdout.write('\n'.repeat(_pad));
 
 // ─── Render ───────────────────────────────────────────────────────────────────
+
+// Populate the command registry with external commands from
+// ~/.config/opencode/commands/ so PromptInput highlighting and the slash
+// completion overlay cover them from the very first frame.
+loadExternalCommands();
 
 render(
   <App
