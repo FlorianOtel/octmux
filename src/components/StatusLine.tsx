@@ -8,7 +8,7 @@ export type StatusLineProps = {
   gitBranch: string;            // "" if not in git repo
   isCompacting?: boolean;
   runningCost: number;
-  orchestraBadge?: { mode: "brain" | "duo"; title: string } | null;
+  orchestraBadge?: { mode: "brain" | "duo"; title: string; stage?: string | null } | null;
 };
 
 /**
@@ -68,6 +68,9 @@ export function StatusLine({
       {` ${percentage}% ${usedStr}/${ctxStr} | Σ$${runningCost.toFixed(2)} | ◆ ${projectName}${gitSuffix}`}
       {orchestraBadge && (
         <Text color="#d3869b">{` | ♪ ${orchestraBadge.mode === "duo" ? "plan" : "brain"} ${orchestraBadge.title}`}</Text>
+      )}
+      {orchestraBadge?.stage && (
+        <Text color="#d79921">{`  ▶ ${orchestraBadge.stage}`}</Text>
       )}
       {isCompacting && <Text color="yellow"> · compacting…</Text>}
     </Text>

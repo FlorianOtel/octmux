@@ -41,6 +41,29 @@ octmux reads cost directly from the OpenCode HTTP API: `GET /session/{id}/messag
 
 Badge transitions within ~5 seconds of `/brain` or `/duo` start/stop in the same project.
 
+### Stage indicator (`▶ stage`)
+
+When a badge is showing and an oconona subagent is actively running, the status bar appends `▶ <stage>` (in yellow, color `#d79921`) immediately after the badge title. Stage labels are: `plan`, `implement`, `review`, `research`.
+
+**Data source:** `~/.config/opencode/orchestra/invocations.log` (global file, not per-session). Newline-delimited JSON with entries like:
+```json
+{"event":"start","stage":"implement","subagent":"actor","ts":"20260529T123456Z",...}
+{"event":"end",  "stage":"implement","subagent":"actor","ts":"20260529T123457Z",...}
+```
+
+**Detection algorithm:** `OrchestraWatcher.readActiveStage()` is called on each scan (via fs.watch or 5-second poll):
+1. Read `~/.config/opencode/orchestra/invocations.log` synchronously (return null on any error).
+2. Split by newlines, reverse-scan to find the last `event === "start"` and last `event === "end"` entries.
+3. Parse each as JSON; skip malformed lines.
+4. Compare `lastStart.ts > lastEnd.ts` lexicographically (ISO 8601 strings sort correctly).
+5. If true (or no end exists), return `lastStart.stage`; otherwise return null.
+
+**Rendering:** In `StatusLine.tsx`, the stage is rendered as `  ▶ <stage>` (two spaces + right-pointing triangle) immediately after the badge, only if `orchestraBadge?.stage` is truthy.
+
+**Inherits project filter:** Stage indicator only shows when the badge is showing — it uses the same project-filtered badge logic. If badge is null (no active session for this project), stage is not read or shown.
+
+**No new oconona work required:** The `invocations.log` file is written by oconona's `orchestra-hook.sh` (PreToolUse(Agent) + SubagentStop hooks) and is explicitly preserved through oconona v7.2 (`Keep: subagent start/end logging` per oconona Stage7.md Step 9).
+
 ### Oconona contract (testing prerequisites)
 
 **No new oconona code or deploy steps are required.** Both cost and badge read from stable, existing contracts:
@@ -70,9 +93,35 @@ The `OrchestraWatcher` useEffect is declared BEFORE the SSE effect and BEFORE th
 
 ## Implementation log
 
+### 2026-05-29--11-01 — Stage 8.1: active subagent stage indicator
+**Implemented by:** Actor (Claude Haiku 4.5) — 2026-05-29--11-01
+**Commit(s):** `<HASH>`
+
+**Summary of changes:**
+
+1. **`src/orchestra-watch.ts`:**
+   - Extended `OrchestraBadge` type: added optional `stage?: string | null` field.
+   - Added private method `readActiveStage(): string | null`:
+     - Path: `~/.config/opencode/orchestra/invocations.log` (via `os.homedir()`)
+     - Read file synchronously; return null on any error
+     - Split by newlines, reverse-scan for last `event === "start"` and last `event === "end"` entries
+     - Parse each as JSON (wrap in try/catch; skip malformed)
+     - Compare timestamps lexicographically (`lastStart.ts > lastEnd.ts`)
+     - Return `lastStart.stage` if active, else null
+   - Updated `scan()`: after computing badge (when non-null), call `readActiveStage()` and attach result as `badge.stage`
+
+2. **`src/components/StatusLine.tsx`:**
+   - Updated `StatusLineProps` type: `orchestraBadge` field now includes optional `stage?: string | null`
+   - Added stage indicator rendering: `{orchestraBadge?.stage && <Text color="#d79921">{`  ▶ ${orchestraBadge.stage}`}</Text>}` immediately after badge render
+
+3. **`docs/Stage8.md`:**
+   - Added new "Stage indicator (`▶ stage`)" section documenting data source, detection algorithm, rendering, and project filtering
+
+**Binary rebuild:** Bun build succeeded with zero TypeScript errors.
+
 ### 2026-05-29--08-27 — Stage 8: live cost (OC SDK) + orchestra inflight badge
 **Implemented by:** Actor (Claude Haiku 4.5) — 2026-05-29--08-27
-**Commit(s):** `<hash>`   ← backfilled after commit
+**Commit(s):** `bd561fc`
 
 **Summary of changes:**
 

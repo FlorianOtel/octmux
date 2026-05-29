@@ -1,8 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
+import * as os from "os";
 import { EventEmitter } from "events";
 
-export type OrchestraBadge = { mode: "brain" | "duo"; title: string } | null;
+export type OrchestraBadge = {
+  mode: "brain" | "duo";
+  title: string;
+  stage?: string | null;
+} | null;
 
 /**
  * Watches ~/.config/opencode/orchestra/sessions/ for active /brain or /duo sessions
@@ -47,6 +52,53 @@ export class OrchestraWatcher extends EventEmitter {
     this.pollInterval = setInterval(() => {
       this.scan();
     }, 5000);
+  }
+
+  /**
+   * Read ~/.config/opencode/orchestra/invocations.log and detect active stage.
+   * Returns stage name if last start event > last end event, null otherwise.
+   */
+  private readActiveStage(): string | null {
+    try {
+      const invocPath = path.join(
+        os.homedir(),
+        ".config/opencode/orchestra/invocations.log"
+      );
+      if (!fs.existsSync(invocPath)) {
+        return null;
+      }
+
+      const content = fs.readFileSync(invocPath, "utf-8");
+      const lines = content.split("\n").filter((l) => l.trim());
+
+      let lastStart: { ts: string; stage: string } | null = null;
+      let lastEnd: { ts: string } | null = null;
+
+      // Reverse scan to find most recent start and end events
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const entry = JSON.parse(lines[i]);
+          if (entry.event === "start" && !lastStart) {
+            lastStart = { ts: entry.ts, stage: entry.stage };
+          }
+          if (entry.event === "end" && !lastEnd) {
+            lastEnd = { ts: entry.ts };
+          }
+          if (lastStart && lastEnd) break;
+        } catch {
+          // Skip malformed lines
+        }
+      }
+
+      // Compare timestamps lexicographically (ISO 8601 sorts correctly)
+      if (lastStart && (!lastEnd || lastStart.ts > lastEnd.ts)) {
+        return lastStart.stage || null;
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -144,6 +196,11 @@ export class OrchestraWatcher extends EventEmitter {
       }
     } catch {
       // Silently ignore scan errors
+    }
+
+    // Attach active stage if badge is non-null
+    if (bestBadge) {
+      bestBadge.stage = this.readActiveStage();
     }
 
     this._updateBadge(bestBadge);
