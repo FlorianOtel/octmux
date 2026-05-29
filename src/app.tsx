@@ -459,7 +459,7 @@ export function App(props: AppProps) {
     if (newResult.handled) {
       renderer.commitUserInput(text);
       try {
-        const resp = await props.client.session.create({});
+        const resp = await props.client.session.create({ query: { directory: process.cwd() } });
         const newID = resp.data!.id;
         await switchSession(newID, `new session started (${newID.slice(0, 8)})`);
       } catch (err) {

@@ -243,8 +243,9 @@ if (resumeArg) {
     process.exit(1);
   }
 } else {
-  // Default: create a new session
-  const session = await client.session.create({});
+  // Default: create a new session anchored to octmux's launch directory.
+  // Without this, OC inherits the daemon's cwd ($HOME) instead of where octmux was invoked.
+  const session = await client.session.create({ query: { directory: process.cwd() } });
   sessionID = session.data!.id;
   sessionLabel = sessionID.slice(0, 8);
 }
