@@ -628,7 +628,7 @@ Cycle with **Shift-TAB**: `ask → allow → deny → ask`.
 ### 2026-05-29--15-45 — Hot-fix: editable input buffer + pending queue during streaming
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-29--15-45
-**Commit(s):** `ac8fa86`
+**Commit(s):** `a65f833`
 
 Enable editing the input buffer while the model is streaming/thinking/calling tools (previously all input was blocked via `disabled=true` on `PromptInput`). Pressing Enter during streaming queues the text in `pendingQueue` state; the queue auto-submits as a single merged message when the model goes idle. Queued messages are visible via Up/Down history navigation as a single merged virtual entry.
 
