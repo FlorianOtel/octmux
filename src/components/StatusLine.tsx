@@ -7,6 +7,8 @@ export type StatusLineProps = {
   projectName: string;
   gitBranch: string;            // "" if not in git repo
   isCompacting?: boolean;
+  runningCost: number;
+  orchestraBadge?: { mode: "brain" | "duo"; title: string } | null;
 };
 
 /**
@@ -19,6 +21,8 @@ export function StatusLine({
   projectName,
   gitBranch,
   isCompacting,
+  runningCost,
+  orchestraBadge,
 }: StatusLineProps) {
   // Compute bar fill
   let filledCount = 0;
@@ -61,7 +65,10 @@ export function StatusLine({
     <Text>
       {`✦ ${modelLabel} | ctx `}
       <Text color={barColor}>{bar}</Text>
-      {` ${percentage}% ${usedStr}/${ctxStr} | ~$0.00 | ◆ ${projectName}${gitSuffix}`}
+      {` ${percentage}% ${usedStr}/${ctxStr} | Σ$${runningCost.toFixed(2)} | ◆ ${projectName}${gitSuffix}`}
+      {orchestraBadge && (
+        <Text color="#d3869b">{` | ♪ ${orchestraBadge.mode === "duo" ? "plan" : "brain"} ${orchestraBadge.title}`}</Text>
+      )}
       {isCompacting && <Text color="yellow"> · compacting…</Text>}
     </Text>
   );

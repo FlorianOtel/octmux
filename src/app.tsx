@@ -5,6 +5,7 @@ import type { Command as OcCommand } from "@opencode-ai/sdk/client";
 import * as path from "path";
 import { LineEditor } from "./editor.ts";
 import { replaySession } from "./replay.ts";
+import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
 import { filterEvent, resetEventState, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand } from "./commands.ts";
@@ -66,6 +67,8 @@ export function App(props: AppProps) {
   const [isCompacting, setIsCompacting] = useState(false);
   const [sessionPicker, setSessionPicker] = useState<{ items: SessionPickerItem[]; idx: number } | null>(null);
   const [permMode, setPermMode] = useState<"ask" | "allow" | "deny">("ask");
+  const [runningCost, setRunningCost] = useState<number>(0);
+  const [orchestraBadge, setOrchestraBadge] = useState<OrchestraBadge>(null);
 
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -110,6 +113,15 @@ export function App(props: AppProps) {
       const branch = await fetchGitBranch();
       setGitBranch(branch);
     })();
+  }, []);
+
+  // One-shot: set up orchestra badge watcher. Must be declared BEFORE any effect that
+  // references orchestraBadge (TDZ guard per feedback-react-effect-tdz.md).
+  useEffect(() => {
+    const watcher = new OrchestraWatcher(process.cwd());
+    watcher.on("changed", setOrchestraBadge);
+    watcher.start();
+    return () => watcher.dispose();
   }, []);
 
   // One-shot: discover opencode commands at startup
@@ -177,7 +189,8 @@ export function App(props: AppProps) {
     return () => editor.off("changed", recompute);
   }, [editor, opencodeCommands, isCompacting, sessionPicker]);
 
-  // Fetch and update token usage from the latest assistant message in a session.
+  // Fetch and update token usage from the latest assistant message in a session,
+  // and sum running cost from all assistant messages in the session + child sessions.
   const refreshTokenUsage = useCallback(async (sid: string) => {
     try {
       const messagesResp = await props.client.session.messages({ path: { id: sid } });
@@ -209,6 +222,43 @@ export function App(props: AppProps) {
           }
         }
       }
+
+      // Compute running cost: sum all assistant messages in parent + children
+      let totalCost = 0;
+      for (const msg of messages) {
+        if (msg.info.role === "assistant") {
+          const cost = msg.info.cost;
+          if (cost && !isNaN(cost) && cost >= 0) {
+            totalCost += cost;
+          }
+        }
+      }
+
+      // Sum child sessions (one level deep)
+      try {
+        const childrenResp = await props.client.session.children({ path: { id: sid } });
+        const children = childrenResp.data ?? [];
+        for (const child of children) {
+          try {
+            const childMessagesResp = await props.client.session.messages({ path: { id: child.id } });
+            const childMessages = childMessagesResp.data ?? [];
+            for (const msg of childMessages) {
+              if (msg.info.role === "assistant") {
+                const cost = msg.info.cost;
+                if (cost && !isNaN(cost) && cost >= 0) {
+                  totalCost += cost;
+                }
+              }
+            }
+          } catch {
+            // Silently skip failed child session fetches
+          }
+        }
+      } catch {
+        // Silently skip if children endpoint is unavailable
+      }
+
+      setRunningCost(totalCost);
     } catch {
       // Silently swallow errors; bar stays at last value
     }
@@ -361,6 +411,7 @@ export function App(props: AppProps) {
     setLastSubmitted("");
     setIsCompacting(false);
     setTokenUsage(null);
+    setRunningCost(0);
     setSessionID(newID);
     try {
       const resp = await props.client.session.get({ path: { id: newID } });
@@ -732,6 +783,8 @@ export function App(props: AppProps) {
           projectName={projectName}
           gitBranch={gitBranch}
           isCompacting={isCompacting}
+          runningCost={runningCost}
+          orchestraBadge={orchestraBadge}
         />
         <PermissionStatusLine permMode={permMode} />
       </Box>
