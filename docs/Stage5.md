@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-28--10-10
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-05-29--15-45
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -92,6 +92,41 @@ parse step is deferred until the orchestra integration is wired.
 
 Either way, `CommandSpec` stays additive: future code never has to refactor
 the existing entries.
+
+### External command auto-discovery (Stage 5.4 — future-proof)
+
+**`~/.config/opencode/commands/*.md` is scanned synchronously at startup** by
+`loadExternalCommands()` in `src/command-registry.ts`, called from `src/index.tsx`
+before `render()`. Each `.md` filename becomes a slash-command name (e.g.
+`brain.md` → `/brain`) and is appended to `expandCommands()`'s output.
+
+This makes the discovery **future-proof**: adding a new `.md` file to
+`~/.config/opencode/commands/` is automatically picked up on the next octmux
+start — no edit to `src/command-registry.ts` is required.
+
+**What this gives external commands:**
+- Bold-cyan `PromptInput` syntax highlighting (same as built-ins) from the first frame.
+- Slash-completion overlay visibility (same as built-ins).
+
+**What external commands do NOT get from auto-discovery:**
+- A `CommandSpec` entry with `usage` / `description` — so they are absent from
+  octmux's `/help` output and the overlay shows only the command name, no hint text.
+  (The async `client.command.list()` fetch still populates `opencodeCommands` with
+  descriptions for the `/help` "opencode commands" section, as before Stage 5.4.)
+- A parser or dispatch handler — typing `/brain` and submitting still goes to the
+  OpenCode server unchanged, via whatever fall-through path is eventually wired.
+
+**Scope constraint:** Only `~/.config/opencode/commands/` is scanned — NOT
+`.opencode/commands/` (per-project). This is deliberate: orchestra, RAG, and other
+global custom commands live in the global config dir; per-project overrides are an
+OpenCode-server concern, not an octmux UI concern.
+
+**Deduplication:** `expandCommands()` deduplicates `extraCandidates` (from the
+async fetch) against names already present from the built-in registry + filesystem
+scan, so the overlay and `/help` show no duplicate entries.
+
+**Not hot-reload:** External commands are scanned once at startup. Editing or adding
+`.md` files while octmux is running requires a restart to take effect.
 
 ### Backward-compat constraints — read before changing the registry shape
 
@@ -367,6 +402,48 @@ in the planner output.
 
 ## Implementation log (reverse chronological — newest at top)
 
+### 2026-05-29--14-48 — Stage 5.4 — dynamic external command discovery
+**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-29--14-48
+**Commit(s):** `d4050bc`
+
+**Problem:** External slash commands defined as `*.md` files under
+`~/.config/opencode/commands/` were not getting bold-cyan PromptInput highlighting
+even though they appeared in the slash-completion overlay. Root cause: `PromptInput.tsx`
+calls `expandCommands()` with no arguments — only the built-in `COMMANDS` registry and
+the async `client.command.list()` fetch fed the overlay, but `PromptInput` never saw the
+externally-discovered names.
+
+**What changed:**
+
+**`src/command-registry.ts`:**
+- Added imports: `readdirSync` from `"fs"`, `homedir` from `"os"`, `join` from `"path"`.
+- Added module-level `let _external: string[]` — populated once at startup, read-only thereafter.
+- Added `loadExternalCommands(): void` — synchronously scans `~/.config/opencode/commands/`
+  (and ONLY that directory — NOT `.opencode/commands/`), filters `*.md` files, maps each to
+  `/<basename-without-.md>`, skips names already in the built-in registry, stores in `_external`.
+  Silent on any FS error (directory absent, permission denied, etc.).
+- Updated `expandCommands()` to append `_external` after the built-in entries, and to
+  deduplicate `extraCandidates` against the existing set (so the async `client.command.list()`
+  fetch no longer produces duplicate overlay entries for commands that appear in both the
+  filesystem scan and the API response).
+
+**`src/index.tsx`:**
+- Added import of `loadExternalCommands` from `"./command-registry.ts"`.
+- Added `loadExternalCommands()` call immediately before `render()` — synchronous, sub-ms,
+  runs after all arg parsing and server setup.
+
+**Net effect:**
+- `/brain`, `/duo-plan`, `/duo-act`, `/duo-abandon`, `/brain-abandon`, `/rag`, and any
+  future `*.md` file added to `~/.config/opencode/commands/` get bold-cyan highlighting
+  and overlay visibility automatically on next octmux start.
+- No `src/command-registry.ts` edit needed for new external commands.
+
+**Files modified:**
+- `src/command-registry.ts` (loadExternalCommands, _external, expandCommands dedup)
+- `src/index.tsx` (import + call loadExternalCommands)
+
+---
+
 ### 2026-05-28--09-41 — Stage 5.3 — runtime permission-mode toggle (Shift-TAB cycles ask/allow/deny)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-28--09-41
@@ -545,5 +622,22 @@ Cycle with **Shift-TAB**: `ask → allow → deny → ask`.
 - `src/components/PromptInput.tsx` (bold-cyan input highlighting)
 
 **Verified (pending operator):** This phase is awaiting operator smoke-testing of the live overlay, Help command, and input highlighting.
+
+---
+
+### 2026-05-29--15-45 — Hot-fix: editable input buffer + pending queue during streaming
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-05-29--15-45
+**Commit(s):** `ac8fa86`
+
+Enable editing the input buffer while the model is streaming/thinking/calling tools (previously all input was blocked via `disabled=true` on `PromptInput`). Pressing Enter during streaming queues the text in `pendingQueue` state; the queue auto-submits as a single merged message when the model goes idle. Queued messages are visible via Up/Down history navigation as a single merged virtual entry.
+
+**`src/editor.ts`:** Added `_queueMode`, `_pendingEntry`, `_viewingPending` private fields. New methods: `setQueueMode()`, `addToHistory()`, `setPendingEntry()`. Modified `enterOnLastRow()` to skip history.push when in queue mode. Modified `histPrev()`/`histNext()` to show `_pendingEntry` as virtual entry between live draft and real history. `isInHistoryNav()` now includes `_viewingPending`.
+
+**`src/app.tsx`:** Added `pendingQueue` state + `pendingQueueRef`, `isGeneratingRef`, `handleSubmitRef` refs. Removed `isGenerating` from `PromptInput.disabled` prop (editing always allowed). Modified `handleSubmit` default path: if `isGeneratingRef.current`, push to queue and return; else call `editor.addToHistory(text)` before sending. Added two effects: one syncs `setQueueMode` + auto-submits on `session-idle`, one syncs `setPendingEntry` when queue changes. Added queue count indicator above input chrome.
+
+**Files modified:**
+- `src/editor.ts`
+- `src/app.tsx`
 
 ---

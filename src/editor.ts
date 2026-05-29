@@ -10,6 +10,9 @@ export class LineEditor extends EventEmitter {
   private histIdx = -1;
   // Unsaved draft saved when user starts navigating history; restored on return to present.
   private _draft: string | null = null;
+  private _queueMode = false;
+  private _pendingEntry: string | null = null;
+  private _viewingPending = false;
 
   // -----------------------------------------------------------------------
   // Public read-only accessors (for Renderer)
@@ -74,7 +77,7 @@ export class LineEditor extends EventEmitter {
 
   enterOnLastRow(): void {
     const text = this.lines.join("\n");
-    if (text.trim()) {
+    if (text.trim() && !this._queueMode) {
       this.history.push(text);
       this.histIdx = -1;
       this._draft = null;
@@ -178,23 +181,36 @@ export class LineEditor extends EventEmitter {
 
   // History navigation
   histPrev(): void {
-    if (this.history.length === 0) return;
-    if (this.histIdx === -1) {
-      this._draft = this.getText();   // save unsaved draft before entering history
+    if (this.histIdx === -1 && !this._viewingPending) {
+      this._draft = this.getText();
+      if (this._pendingEntry !== null) {
+        this._viewingPending = true;
+        this.lines = this._pendingEntry.split("\n");
+        this.row = this.lines.length - 1;
+        this.col = this.lines[this.row].length;
+        this.emit("changed");
+        return;
+      }
+      if (this.history.length === 0) return;
       this.histIdx = this.history.length - 1;
-    } else if (this.histIdx > 0) {
-      this.histIdx--;
+      this._loadHistory();
+      return;
     }
-    this._loadHistory();
+    if (this._viewingPending) {
+      this._viewingPending = false;
+      if (this.history.length > 0) {
+        this.histIdx = this.history.length - 1;
+        this._loadHistory();
+      }
+      return;
+    }
+    if (this.histIdx > 0) { this.histIdx--; this._loadHistory(); }
   }
 
   histNext(): void {
-    if (this.histIdx === -1) return;
-    if (this.histIdx < this.history.length - 1) {
-      this.histIdx++;
-      this._loadHistory();
-    } else {
-      // Return to present: restore draft instead of clearing
+    if (this.histIdx === -1 && !this._viewingPending) return;
+    if (this._viewingPending) {
+      this._viewingPending = false;
       const draft = this._draft ?? "";
       this._draft = null;
       this.histIdx = -1;
@@ -202,6 +218,27 @@ export class LineEditor extends EventEmitter {
       this.row = this.lines.length - 1;
       this.col = this.lines[this.row].length;
       this.emit("changed");
+      return;
+    }
+    if (this.histIdx < this.history.length - 1) {
+      this.histIdx++;
+      this._loadHistory();
+    } else {
+      this.histIdx = -1;
+      if (this._pendingEntry !== null) {
+        this._viewingPending = true;
+        this.lines = this._pendingEntry.split("\n");
+        this.row = this.lines.length - 1;
+        this.col = this.lines[this.row].length;
+        this.emit("changed");
+      } else {
+        const draft = this._draft ?? "";
+        this._draft = null;
+        this.lines = draft ? draft.split("\n") : [""];
+        this.row = this.lines.length - 1;
+        this.col = this.lines[this.row].length;
+        this.emit("changed");
+      }
     }
   }
 
@@ -223,7 +260,7 @@ export class LineEditor extends EventEmitter {
   // The slash-completion overlay uses this to stay closed during history
   // navigation — otherwise scrolling to a past "/command" entry would pop the
   // overlay and steal the arrow keys, trapping the user mid-scroll.
-  isInHistoryNav(): boolean { return this.histIdx !== -1; }
+  isInHistoryNav(): boolean { return this.histIdx !== -1 || this._viewingPending; }
 
   // Seed the history from an external source (e.g. replay synthesiser on resume).
   // Replaces any existing history.
@@ -231,6 +268,26 @@ export class LineEditor extends EventEmitter {
     this.history = [...items];
     this.histIdx = -1;
     this._draft = null;
+  }
+
+  setQueueMode(on: boolean): void { this._queueMode = on; }
+
+  addToHistory(text: string): void {
+    if (text.trim()) { this.history.push(text); this.histIdx = -1; this._draft = null; }
+  }
+
+  setPendingEntry(text: string | null): void {
+    this._pendingEntry = text;
+    if (text === null && this._viewingPending) {
+      this._viewingPending = false;
+      this.histIdx = -1;
+      const draft = this._draft ?? "";
+      this._draft = null;
+      this.lines = draft ? draft.split("\n") : [""];
+      this.row = this.lines.length - 1;
+      this.col = this.lines[this.row].length;
+      this.emit("changed");
+    }
   }
 
   // -----------------------------------------------------------------------

@@ -69,6 +69,12 @@ export function App(props: AppProps) {
   const [permMode, setPermMode] = useState<"ask" | "allow" | "deny">("ask");
   const [runningCost, setRunningCost] = useState<number>(0);
   const [orchestraBadge, setOrchestraBadge] = useState<OrchestraBadge>(null);
+  const [pendingQueue, setPendingQueue] = useState<string[]>([]);
+  const pendingQueueRef = useRef<string[]>([]);
+  pendingQueueRef.current = pendingQueue;
+  const isGeneratingRef = useRef(false);
+  isGeneratingRef.current = isGenerating;
+  const handleSubmitRef = useRef<((text: string) => Promise<void>) | null>(null);
 
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -373,6 +379,20 @@ export function App(props: AppProps) {
     return () => { cancelled = true; };
   }, [props.client, props.eventStream, renderer, refreshTokenUsage]);
 
+  // Sync queue mode; auto-submit pending queue when model goes idle
+  useEffect(() => {
+    editor.setQueueMode(isGenerating);
+    if (!isGenerating && pendingQueueRef.current.length > 0) {
+      const merged = pendingQueueRef.current.join("\n\n");
+      setPendingQueue([]);
+      handleSubmitRef.current?.(merged);
+    }
+  }, [isGenerating, editor]);
+
+  // Keep editor virtual pending-entry in sync with the queue
+  useEffect(() => {
+    editor.setPendingEntry(pendingQueue.length > 0 ? pendingQueue.join("\n\n") : null);
+  }, [pendingQueue, editor]);
 
   // Ctrl-C: three cases.
   useInput((input, key) => {
@@ -646,6 +666,12 @@ export function App(props: AppProps) {
       }
     }
     // Default: send to OpenCode server
+    // Queue for later if model is currently generating
+    if (isGeneratingRef.current) {
+      setPendingQueue(prev => [...prev, text]);
+      return;
+    }
+    editor.addToHistory(text);
     setLastSubmitted(text);
     renderer.commitUserInput(text);
     try {
@@ -660,7 +686,9 @@ export function App(props: AppProps) {
       setIsGenerating(false);
       renderer.commitError(`[send error] ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [props.client, sessionID, renderer, activeModel, opencodeCommands, switchSession]);
+  }, [props.client, sessionID, renderer, activeModel, opencodeCommands, switchSession, editor]);
+
+  handleSubmitRef.current = handleSubmit;
 
   const handlePermission = useCallback(async (answer: "once" | "always" | "reject") => {
     if (!permission) return;
@@ -770,8 +798,13 @@ export function App(props: AppProps) {
       )}
       <Box flexDirection="column" marginBottom={2}>
         <SubprocessStatus thinking={procTimes.thinking} tools={procTimes.tools} />
+        {pendingQueue.length > 0 && (
+          <Text color="yellow" dimColor>
+            {pendingQueue.length} message{pendingQueue.length !== 1 ? "s" : ""} queued — will send when done
+          </Text>
+        )}
         <Rule title={sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={isGenerating || !!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} />
+        <PromptInput editor={editor} disabled={!!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} />
         <Rule width={w} />
         <StatusLine
           modelLabel={

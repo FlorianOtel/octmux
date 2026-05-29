@@ -95,7 +95,7 @@ The `OrchestraWatcher` useEffect is declared BEFORE the SSE effect and BEFORE th
 
 ### 2026-05-29--11-01 — Stage 8.1: active subagent stage indicator
 **Implemented by:** Actor (Claude Haiku 4.5) — 2026-05-29--11-01
-**Commit(s):** `<HASH>`
+**Commit(s):** `c30d30a`
 
 **Summary of changes:**
 
