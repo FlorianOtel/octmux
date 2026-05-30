@@ -10,6 +10,7 @@ import { filterEvent, resetEventState, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
+import { loadTogglesConfig, getToggleDefaults, type ToggleBinding } from "./config.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
 import { StatusLine } from "./components/StatusLine.tsx";
@@ -21,8 +22,11 @@ import { ModelPickerModal, type ModelPickerItem } from "./components/ModelPicker
 import { CompactingModal } from "./components/CompactingModal.tsx";
 import { SessionPickerModal, type SessionPickerItem } from "./components/SessionPickerModal.tsx";
 import { SlashCompletionOverlay } from "./components/SlashCompletionOverlay.tsx";
+import { ToggleStatusLine } from "./components/ToggleStatusLine.tsx";
 import { expandCommands } from "./command-registry.ts";
 import { fetchGitBranch, getContextWindow, getToolCallSupport, prettyModelName, contextLabel } from "./utils/formatters.ts";
+
+const TOGGLES_CONFIG = loadTogglesConfig();
 
 type QuestionType = {
   question: string;
@@ -69,6 +73,9 @@ export function App(props: AppProps) {
   const [permMode, setPermMode] = useState<"ask" | "allow" | "deny">("ask");
   const [runningCost, setRunningCost] = useState<number>(0);
   const [orchestraBadge, setOrchestraBadge] = useState<OrchestraBadge>(null);
+  const [gateStates, setGateStates] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(getToggleDefaults(TOGGLES_CONFIG))
+  );
   const [pendingQueue, setPendingQueue] = useState<string[]>([]);
   const pendingQueueRef = useRef<string[]>([]);
   pendingQueueRef.current = pendingQueue;
@@ -85,6 +92,16 @@ export function App(props: AppProps) {
       prev === "ask" ? "allow" : prev === "allow" ? "deny" : "ask"
     );
   }, []);
+
+  const triggerHelp = useCallback(() => { handleSubmitRef.current?.("/help"); }, []);
+
+  const toggleGate = useCallback((gate: string) => {
+    setGateStates(prev => {
+      const next = !prev[gate];
+      renderer.setOutputEnabled(gate, next);
+      return { ...prev, [gate]: next };
+    });
+  }, [renderer]);
 
   // Project name: basename of current working directory
   const projectName = path.basename(process.cwd());
@@ -295,10 +312,13 @@ export function App(props: AppProps) {
       } catch {
         // No model set on session yet; /model command will set activeModel
       }
+      for (const [gate, val] of getToggleDefaults(TOGGLES_CONFIG)) {
+        renderer.setOutputEnabled(gate, val);
+      }
       await refreshTokenUsage(sessionID);
       await runReplay(sessionID);
     })();
-  }, [props.client, sessionID, refreshTokenUsage, runReplay]);
+  }, [props.client, sessionID, refreshTokenUsage, runReplay, renderer]);
 
   // SSE loop: thin translation layer — all rendering delegated to renderer.
   // SSE subscription is a single-consumer async iterable; we keep this effect stable
@@ -627,6 +647,11 @@ export function App(props: AppProps) {
     if (outputResult.handled) {
       renderer.commitUserInput(text);
       renderer.commitSystemMessage(outputResult.reply ?? "");
+      setGateStates(prev => {
+        const updated = { ...prev };
+        for (const gate of Object.keys(prev)) updated[gate] = renderer.isOutputEnabled(gate);
+        return updated;
+      });
       return;
     }
     // Forward unknown /cmd to opencode
@@ -804,7 +829,7 @@ export function App(props: AppProps) {
           </Text>
         )}
         <Rule title={sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={!!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} />
+        <PromptInput editor={editor} disabled={!!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} onHelp={triggerHelp} onToggleTools={() => toggleGate("tools")} onToggleThinking={() => toggleGate("thinking")} />
         <Rule width={w} />
         <StatusLine
           modelLabel={
@@ -820,6 +845,7 @@ export function App(props: AppProps) {
           orchestraBadge={orchestraBadge}
         />
         <PermissionStatusLine permMode={permMode} />
+        <ToggleStatusLine bindings={TOGGLES_CONFIG.bindings} gateStates={gateStates} />
       </Box>
     </>
   );

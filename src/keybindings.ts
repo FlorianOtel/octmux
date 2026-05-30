@@ -71,6 +71,11 @@ import type { LineEditor } from "./editor.ts";
 //   3. Add an `else if` branch here, in the appropriate group.
 //   4. Add the corresponding method to LineEditor if it doesn't exist yet.
 //
+// Documented keybindings:
+//   Ctrl-H   → /help (live keybinding, not in config file or status line)
+//   Ctrl-T   → toggle tools-output gate
+//   Ctrl-Shift-T → toggle thinking-output gate
+//
 // =============================================================================
 
 /**
@@ -83,7 +88,7 @@ import type { LineEditor } from "./editor.ts";
  * physical Backspace — both produce key.delete=true in Ink 5's API.
  *
  *   useInput((input, key) => {
- *     lastEscRef.current = handleKey(input, key, editor, lastEscRef.current, rawSeqRef.current);
+ *     lastEscRef.current = handleKey(input, key, editor, lastEscRef.current, rawSeqRef.current, overlayOpen, callbacks);
  *   });
  *
  * Returns lastEscTime unchanged for every key except Escape, where it returns
@@ -96,7 +101,12 @@ export function handleKey(
   lastEscTime: number,
   rawSeq: string = '',
   overlayOpen: boolean = false,
-  onCyclePermMode?: () => void,
+  callbacks: {
+    onCyclePermMode?: () => void;
+    onHelp?: () => void;
+    onToggleTools?: () => void;
+    onToggleThinking?: () => void;
+  } = {},
 ): number {
 
   // ── Enter / newline ─────────────────────────────────────────────────────────
@@ -114,14 +124,18 @@ export function handleKey(
 
   // ── Delete / backspace ───────────────────────────────────────────────────────
 
-  } else if (key.backspace || key.delete) {
-    // QUIRK 1: \x7f (Backspace) → key.delete; \x08 (Ctrl-H) → key.backspace.
-    // The physical Delete key (\x1b[3~) also gives key.delete=true — identical
-    // to Backspace in Ink's API. Use rawSeq to tell them apart.
+  } else if (key.backspace) {
+    // QUIRK 1: \x08 (Ctrl-H) → key.backspace on modern terminals where physical
+    // Backspace sends \x7f → key.delete instead. Repurposed as the /help shortcut.
+    callbacks.onHelp?.();
+
+  } else if (key.delete) {
+    // QUIRK 1: \x7f (Backspace) → key.delete; physical Delete (\x1b[3~) also
+    // gives key.delete=true. Use rawSeq to tell them apart.
     if (rawSeq === '\x1b[3~') {
       editor.deleteForward();   // physical Delete key → delete right
     } else {
-      editor.backspace();       // Backspace (\x7f) or Ctrl-H (\x08) → delete left
+      editor.backspace();       // Backspace (\x7f) → delete left
     }
 
   } else if (key.ctrl && input === "d") {
@@ -213,12 +227,16 @@ export function handleKey(
     editor.killWordBackward(); // Ctrl-W : kill word backward into kill ring
   } else if (key.ctrl && input === "y") {
     editor.yank();             // Ctrl-Y : yank (paste) from kill ring
+  } else if (key.ctrl && input === "t") {
+    callbacks.onToggleTools?.();    // Ctrl-t: toggle tools output gate
+  } else if (key.ctrl && input === "T") {
+    callbacks.onToggleThinking?.(); // Ctrl-T: toggle thinking output gate
 
   // ── Permission mode toggle ──────────────────────────────────────────────────
 
   } else if (key.tab && key.shift) {
     // Shift-TAB: cycle permission mode (ask → allow → deny → ask)
-    if (onCyclePermMode) onCyclePermMode();
+    callbacks.onCyclePermMode?.();
 
   // ── Printable character insertion ────────────────────────────────────────────
 

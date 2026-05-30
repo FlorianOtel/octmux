@@ -10,9 +10,12 @@ type Props = {
   overlayOpen?: boolean;
   onSubmit: (text: string) => void;
   onCyclePermMode?: () => void;
+  onHelp?: () => void;
+  onToggleTools?: () => void;
+  onToggleThinking?: () => void;
 };
 
-export function PromptInput({ editor, disabled = false, overlayOpen = false, onSubmit, onCyclePermMode }: Props) {
+export function PromptInput({ editor, disabled = false, overlayOpen = false, onSubmit, onCyclePermMode, onHelp, onToggleTools, onToggleThinking }: Props) {
   const [, forceUpdate] = useReducer((n: number) => n + 1, 0);
   const lastEscRef = useRef<number>(0);
   // Ink 5's useInput cannot distinguish physical Backspace (\x7f) from the
@@ -38,7 +41,7 @@ export function PromptInput({ editor, disabled = false, overlayOpen = false, onS
   }, []);
 
   useInput((input, key) => {
-    lastEscRef.current = handleKey(input, key, editor, lastEscRef.current, rawSeqRef.current, overlayOpen ?? false, onCyclePermMode);
+    lastEscRef.current = handleKey(input, key, editor, lastEscRef.current, rawSeqRef.current, overlayOpen ?? false, { onCyclePermMode, onHelp, onToggleTools, onToggleThinking });
   }, { isActive: !disabled });
 
   const lines = editor.getLines();
