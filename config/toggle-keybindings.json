@@ -1,0 +1,4 @@
+[
+  { "key": "^t", "gate": "tools",    "default": true },
+  { "key": "^T", "gate": "thinking", "default": true }
+]

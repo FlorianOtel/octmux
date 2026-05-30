@@ -19,11 +19,19 @@ After any change to `src/`, you MUST:
    - Refresh `updated_by` / `updated_at` frontmatter in every doc you touched
    - Update `/home/florian/.claude/projects/-mnt-nfs-Florian-Gin-AI-projects-octmux/memory/project-octmux.md` with stages shipped, architecture changes, and the new commit hash
 
-3. **Commit** — stage `src/` and updated docs (`dist/` is gitignored — the binary is not committed):
+3. **Commit** — stage `src/`, updated docs, and any changed config files (`dist/` is gitignored — the binary is not committed):
    ```
-   git add src/ docs/ CLAUDE.md
+   git add src/ docs/ CLAUDE.md config/
    git commit -m "feat(octmux): Stage N.x — <title>"
    ```
+
+4. **Deploy `config/` files** — if the commit touches any file under `config/`, copy it to its runtime location immediately after committing:
+   - `config/toggle-keybindings.json` → `~/.config/octmux/toggle-keybindings.json`
+   ```
+   mkdir -p ~/.config/octmux
+   cp config/toggle-keybindings.json ~/.config/octmux/toggle-keybindings.json
+   ```
+   The app reads `~/.config/octmux/toggle-keybindings.json` at startup. Without this deploy step, the committed change has no effect until the file is manually copied.
 
 ---
 
