@@ -96,10 +96,17 @@ export function App(props: AppProps) {
   const triggerHelp = useCallback(() => { handleSubmitRef.current?.("/help"); }, []);
 
   const toggleGate = useCallback((gate: string) => {
+    // Step 1: mutate renderer first — renderer is authoritative for gate state.
+    // This mirrors the slash-command path at lines 650-654 where parseBlockOutputCommand
+    // mutates the renderer before setGateStates reads back renderer.isOutputEnabled().
+    const next = !renderer.isOutputEnabled(rendererGateKey(gate));
+    renderer.setOutputEnabled(rendererGateKey(gate), next);
+
+    // Step 2: derive React state from renderer (pure read-back, no side effects).
     setGateStates(prev => {
-      const next = !prev[gate];
-      renderer.setOutputEnabled(rendererGateKey(gate), next);
-      return { ...prev, [gate]: next };
+      const updated = { ...prev };
+      for (const g of Object.keys(prev)) updated[g] = renderer.isOutputEnabled(rendererGateKey(g));
+      return updated;
     });
   }, [renderer]);
 

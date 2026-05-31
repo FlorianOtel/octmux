@@ -2,8 +2,8 @@
 title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Haiku 4.5, via Actor subagent dispatched by Claude Opus 4.7)
-updated_at: 2026-05-27--18-28
+updated_by: Claude Code (Claude Haiku 4.5, via Actor subagent)
+updated_at: 2026-05-31--20-28
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -621,3 +621,47 @@ is by `sessionID` only — single-user, single-flight. Acceptable.
 
 **Handoff to Stage 5:** UX foundation is complete. Stage 5 layers slash
 commands on top — `/` input branches before reaching `promptAsync`.
+
+---
+
+### 2026-05-30--22-10 — v4.7 — toggle keybindings + ToggleStatusLine 3rd status bar
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6, via Actor subagent) — 2026-05-30--22-10
+**Commit(s):** `43f3df1`, `0110138`
+
+Add Ctrl-t / Ctrl-T keybindings for toggling the `tools` and `thinking` output gates, plus a 3rd status bar (`ToggleStatusLine`) that shows each toggle's current on/off state. Toggle defaults are loaded at startup from `~/.config/octmux/toggle-keybindings.json`. Ctrl-H (`key.backspace`) is also wired to fire `/help` as a live keybinding (no config or status bar entry).
+
+**Architecture:**
+
+- **`src/config.ts`** (new) — `ToggleBinding` / `TogglesConfig` types, `loadTogglesConfig()` reads `~/.config/octmux/toggle-keybindings.json` with graceful fallback to `{tools:true, thinking:true}` on any error, `getToggleDefaults()` returns a `Map<string,boolean>` for initialising the renderer.
+- **`src/components/ToggleStatusLine.tsx`** (new) — iterates `bindings[]` from config in order; renders `^t /tools-output: on   ^T /thinking-output: on`; key notation + labels in default terminal colour; `on` = `#1dde00` bold, `off` = `#cc241d` bold (matches PermissionStatusLine palette).
+- **`config/toggle-keybindings.json`** (new, in repo at `config/toggle-keybindings.json`) — canonical source; runtime location is `~/.config/octmux/toggle-keybindings.json`. Any commit touching this file must deploy it: `cp config/toggle-keybindings.json ~/.config/octmux/toggle-keybindings.json`. Ordered array of `{ key, gate, default }` entries where `gate` uses the slash-command form (`"tools-output"`, `"thinking-output"`). `rendererGateKey()` in `src/config.ts` strips the `-output` suffix at the renderer boundary so the internal `OUTPUT_KEYS` (`"tools"`, `"thinking"`) remain unchanged.
+- **`src/keybindings.ts`** — `onCyclePermMode?` positional param replaced by a `callbacks` object (4 fields: `onCyclePermMode`, `onHelp`, `onToggleTools`, `onToggleThinking`). `key.backspace || key.delete` split into two branches: `key.backspace` → `onHelp` (Ctrl-H); `key.delete` → existing backspace/deleteForward logic. Added `key.ctrl && input === "t"` → `onToggleTools` and `key.ctrl && input === "T"` → `onToggleThinking` in the Emacs-ctrl group.
+- **`src/components/PromptInput.tsx`** — 3 new optional props (`onHelp`, `onToggleTools`, `onToggleThinking`); passes all 4 callbacks as an object to `handleKey`.
+- **`src/app.tsx`** — module-level `TOGGLES_CONFIG`; `gateStates` React state initialised from config defaults; renderer gates seeded from defaults in startup effect; `triggerHelp` / `toggleGate` callbacks; `gateStates` synced from renderer after manual `/tools-output` or `/thinking-output` commands; `ToggleStatusLine` rendered as the 3rd bottom status line.
+
+---
+
+### 2026-05-31--20-28 — v4.7 hotfix — Ctrl-t toggle aligned with slash-command path
+
+**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent) — 2026-05-31--20-28
+**Commit(s):** `<hash>`
+
+**What changed:**
+
+Refactored `toggleGate` callback in `src/app.tsx` (lines 98–111) to eliminate a React anti-pattern that froze the UI mid-stream. The previous implementation called `renderer.setOutputEnabled()` inside a React `setState` updater, which is unsafe during streaming — React's Strict Mode may double-invoke the updater, and concurrent async event delivery races with the timing.
+
+**The fix follows the slash-command path** established in Stage 4.5 (`parseBlockOutputCommand` → `setGateStates`):
+
+1. **Step 1** — Mutate renderer first (outside React state updater): read current gate state, negate it, call `renderer.setOutputEnabled()` with the new value.
+2. **Step 2** — Derive React state from renderer via pure read-back: `setGateStates` updater iterates all keys and reads back `renderer.isOutputEnabled()` for each, with zero side effects.
+
+This ordering ensures the renderer is the authoritative source of truth; React state is always synchronized via read-back, never by closure; and the in-flight stream is unblocked by state updates.
+
+**Rationale:**
+- Pressing Ctrl-t during tool-call streaming in `--single` mode now behaves identically to `/tools-output off` — gate mutated first, state derived second, stream continues.
+- Eliminates the event-loop block that froze the UI and prevented responsive input during streaming.
+- Pattern now uniform across both the slash-command path and the keybinding path.
+
+**Files modified:**
+- `src/app.tsx` — `toggleGate` callback refactored.
