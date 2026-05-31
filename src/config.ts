@@ -40,8 +40,15 @@ export function loadTogglesConfig(): TogglesConfig {
   }
 }
 
+// Maps a JSON gate name ("tools-output") to the renderer's OUTPUT_KEY ("tools").
+export function rendererGateKey(gate: string): string {
+  return gate.replace(/-output$/, "");
+}
+
+// Returns gate→default keyed by renderer OUTPUT_KEY (strips "-output" suffix).
+// Used to seed renderer.setOutputEnabled() at startup.
 export function getToggleDefaults(config: TogglesConfig): Map<string, boolean> {
   const m = new Map<string, boolean>();
-  for (const b of config.bindings) m.set(b.gate, b.default);
+  for (const b of config.bindings) m.set(rendererGateKey(b.gate), b.default);
   return m;
 }

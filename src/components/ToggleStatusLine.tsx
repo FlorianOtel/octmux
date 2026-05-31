@@ -19,7 +19,7 @@ export function ToggleStatusLine({ bindings, gateStates }: Props) {
     if (i > 0) parts.push("  ");
     parts.push(
       <Text key={b.gate}>
-        {`${b.key} /${b.gate}-output: `}
+        {`${b.key} /${b.gate}: `}
         <Text color={on ? "#1dde00" : "#cc241d"} bold>{on ? "on" : "off"}</Text>
       </Text>
     );

@@ -10,7 +10,7 @@ import { filterEvent, resetEventState, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
-import { loadTogglesConfig, getToggleDefaults, type ToggleBinding } from "./config.ts";
+import { loadTogglesConfig, getToggleDefaults, rendererGateKey, type ToggleBinding } from "./config.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
 import { StatusLine } from "./components/StatusLine.tsx";
@@ -74,7 +74,7 @@ export function App(props: AppProps) {
   const [runningCost, setRunningCost] = useState<number>(0);
   const [orchestraBadge, setOrchestraBadge] = useState<OrchestraBadge>(null);
   const [gateStates, setGateStates] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(getToggleDefaults(TOGGLES_CONFIG))
+    Object.fromEntries(TOGGLES_CONFIG.bindings.map(b => [b.gate, b.default]))
   );
   const [pendingQueue, setPendingQueue] = useState<string[]>([]);
   const pendingQueueRef = useRef<string[]>([]);
@@ -98,7 +98,7 @@ export function App(props: AppProps) {
   const toggleGate = useCallback((gate: string) => {
     setGateStates(prev => {
       const next = !prev[gate];
-      renderer.setOutputEnabled(gate, next);
+      renderer.setOutputEnabled(rendererGateKey(gate), next);
       return { ...prev, [gate]: next };
     });
   }, [renderer]);
@@ -649,7 +649,7 @@ export function App(props: AppProps) {
       renderer.commitSystemMessage(outputResult.reply ?? "");
       setGateStates(prev => {
         const updated = { ...prev };
-        for (const gate of Object.keys(prev)) updated[gate] = renderer.isOutputEnabled(gate);
+        for (const gate of Object.keys(prev)) updated[gate] = renderer.isOutputEnabled(rendererGateKey(gate));
         return updated;
       });
       return;
@@ -829,7 +829,7 @@ export function App(props: AppProps) {
           </Text>
         )}
         <Rule title={sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={!!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} onHelp={triggerHelp} onToggleTools={() => toggleGate("tools")} onToggleThinking={() => toggleGate("thinking")} />
+        <PromptInput editor={editor} disabled={!!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} onHelp={triggerHelp} onToggleTools={() => toggleGate("tools-output")} onToggleThinking={() => toggleGate("thinking-output")} />
         <Rule width={w} />
         <StatusLine
           modelLabel={

@@ -1,4 +1,4 @@
 [
-  { "key": "^t", "gate": "tools",    "default": true },
-  { "key": "^T", "gate": "thinking", "default": true }
+  { "key": "^t", "gate": "tools-output",    "default": true },
+  { "key": "^T", "gate": "thinking-output", "default": true }
 ]
