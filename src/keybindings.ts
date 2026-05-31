@@ -106,6 +106,7 @@ export function handleKey(
     onHelp?: () => void;
     onToggleTools?: () => void;
     onToggleThinking?: () => void;
+    onResync?: () => void;
   } = {},
 ): number {
 
@@ -231,6 +232,8 @@ export function handleKey(
     callbacks.onToggleTools?.();    // Ctrl-t: toggle tools output gate
   } else if (key.ctrl && input === "T") {
     callbacks.onToggleThinking?.(); // Ctrl-T: toggle thinking output gate
+  } else if (key.ctrl && input === "r") {
+    callbacks.onResync?.();         // Ctrl-R: manual full resync (Stage 4.5.3)
 
   // ── Permission mode toggle ──────────────────────────────────────────────────
 

@@ -46,6 +46,29 @@ export function resetEventState(): void {
   seenPartIDs.clear();
 }
 
+/**
+ * Walk the module-scope openParts map and return the same ReplEvent[] the
+ * SSE session.idle handler would produce. Used by the Stage 4.5.3 reconciler
+ * to synthesise a session-idle when SSE missed the real event. Mutates
+ * module state (clears openParts/seenPartIDs) — exactly matches the
+ * session.idle handler at lines 188-200.
+ *
+ * CRITICAL for --multi-window safety (see docs/Stage4.md Stage 4.5.1/4.5.2):
+ * the block-end events are necessary to flush TmuxWindowRenderer._lineBufs
+ * and clear _openBlocks so the next real beginBlock starts from a clean
+ * state. endBlock is idempotent on both renderers, so over-emission is
+ * harmless; under-emission corrupts FIFO state.
+ */
+export function synthesizeSessionIdleEvents(): ReplEvent[] {
+  const closeEvents: ReplEvent[] = [];
+  for (const [partID, role] of openParts) {
+    closeEvents.push({ kind: "block-end", partID, role });
+  }
+  openParts.clear();
+  seenPartIDs.clear();
+  return [{ kind: "session-idle" }, ...closeEvents];
+}
+
 // SDK part-type → Role mapping (assumptions based on SDK type inspection; confirm via live run):
 // | part.type    | message.part.delta field (assumed) | Role emitted    |
 // |--------------|-----------------------------------|-----------------|
@@ -243,6 +266,10 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
   }
 
   // v2 event type (not in v1 union): permission.asked
+  // Property shape matches the live OC daemon (verified via OpenAPI and live curl).
+  // The v1 SDK type union does NOT include this event, hence the `as unknown` cast;
+  // the daemon emits it anyway. See Stage 4.5.3 reconciler (app.tsx) for REST fallback
+  // that synthesises this event shape for missed-permission recovery.
   if (event.type === "permission.asked") {
     const e = event as unknown as { properties: {
       id: string; sessionID: string; permission: string; patterns: string[];
@@ -258,6 +285,10 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
   }
 
   // v2 event type (not in v1 union): question.asked
+  // Property shape matches the live OC daemon (verified via OpenAPI and live curl).
+  // The v1 SDK type union does NOT include this event, hence the `as unknown` cast;
+  // the daemon emits it anyway. See Stage 4.5.3 reconciler (app.tsx) for REST fallback
+  // that synthesises this event shape for missed-question recovery.
   if (event.type === "question.asked") {
     const e = event as unknown as { properties: {
       id: string; sessionID: string;

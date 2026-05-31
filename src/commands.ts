@@ -109,3 +109,7 @@ export function parseForkCommand(input: string): { handled: boolean } {
   return { handled: /^\/fork\s*$/.test(input.trim()) };
 }
 
+export function parseResyncCommand(input: string): { handled: boolean } {
+  return { handled: /^\/resync\s*$/.test(input.trim()) };
+}
+

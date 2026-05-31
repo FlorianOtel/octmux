@@ -6,9 +6,9 @@ import * as path from "path";
 import { LineEditor } from "./editor.ts";
 import { replaySession } from "./replay.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
-import { filterEvent, resetEventState, type ReplEvent } from "./events.ts";
+import { filterEvent, resetEventState, synthesizeSessionIdleEvents, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
-import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand } from "./commands.ts";
+import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand, parseResyncCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
 import { loadTogglesConfig, getToggleDefaults, rendererGateKey, type ToggleBinding } from "./config.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
@@ -87,6 +87,10 @@ export function App(props: AppProps) {
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionIDRef = useRef(sessionID);
 
+  // Stage 4.5.3: SSE health tracking and reconciliation
+  const [sseHealth, setSseHealth] = useState<"ok" | "reconnecting" | "silent">("ok");
+  const lastSseEventTimeRef = useRef<number>(Date.now());
+
   const cyclePermMode = useCallback(() => {
     setPermMode(prev =>
       prev === "ask" ? "allow" : prev === "allow" ? "deny" : "ask"
@@ -137,6 +141,16 @@ export function App(props: AppProps) {
     sessionIDRef.current = sessionID;
   }, [sessionID]);
 
+  // Stage 4.5.3: dedupe question and permission IDs for reconciler missed-event detection
+  const questionIDRef = useRef<string | null>(null);
+  const permissionIDRef = useRef<string | null>(null);
+  useEffect(() => {
+    questionIDRef.current = question?.reqID ?? null;
+  }, [question]);
+  useEffect(() => {
+    permissionIDRef.current = permission?.permID ?? null;
+  }, [permission]);
+
   // One-shot: fetch git branch at startup
   useEffect(() => {
     (async () => {
@@ -144,6 +158,80 @@ export function App(props: AppProps) {
       setGitBranch(branch);
     })();
   }, []);
+
+  // Stage 4.5.3: Reconciler pass ref — stored on ref so polling effect and SSE-reconnect path
+  // both invoke the current closure (captures latest refs/state).
+  const runReconcilerPassRef = useRef<(() => Promise<void>) | null>(null);
+  useEffect(() => {
+    runReconcilerPassRef.current = async () => {
+      // 1. SSE silence detection
+      if (isGeneratingRef.current && Date.now() - lastSseEventTimeRef.current > 8000) {
+        setSseHealth(prev => prev === "reconnecting" ? prev : "silent");
+      }
+      // 2. Idle synthesis
+      try {
+        const resp = await props.client.session.messages({ path: { id: sessionIDRef.current } });
+        const msgs = resp.data ?? [];
+        const anyPending = msgs.some(m =>
+          (m.parts ?? []).some(p =>
+            p.type === "tool" &&
+            (p.state?.status === "pending" || p.state?.status === "running")
+          )
+        );
+        if (!anyPending && isGeneratingRef.current) {
+          applyReplEvents(synthesizeSessionIdleEvents());
+        }
+      } catch {}
+      // 3. Missed question discovery
+      try {
+        const r = await fetch(`${props.baseUrl}/question`);
+        if (r.ok) {
+          const list = await r.json() as Array<{
+            id: string; sessionID: string;
+            questions: Array<{
+              question: string; header: string;
+              options: Array<{ label: string; description: string }>;
+              multiple?: boolean; custom?: boolean;
+            }>;
+          }>;
+          const ours = list.filter(q => q.sessionID === sessionIDRef.current).sort((a, b) => a.id.localeCompare(b.id));
+          const oldest = ours[0];
+          if (oldest && oldest.id !== questionIDRef.current) {
+            const evRaw = filterEvent({
+              type: "question.asked",
+              properties: { id: oldest.id, sessionID: oldest.sessionID, questions: oldest.questions },
+            } as unknown as Event, sessionIDRef.current);
+            if (evRaw) applyReplEvents(Array.isArray(evRaw) ? evRaw : [evRaw]);
+          }
+        }
+      } catch {}
+      // 4. Missed permission discovery
+      try {
+        const r = await fetch(`${props.baseUrl}/permission`);
+        if (r.ok) {
+          const list = await r.json() as Array<{
+            id: string; sessionID: string; permission: string; patterns?: string[];
+          }>;
+          const ours = list.filter(p => p.sessionID === sessionIDRef.current).sort((a, b) => a.id.localeCompare(b.id));
+          const oldest = ours[0];
+          if (oldest && oldest.id !== permissionIDRef.current) {
+            const evRaw = filterEvent({
+              type: "permission.asked",
+              properties: { id: oldest.id, sessionID: oldest.sessionID, permission: oldest.permission, patterns: oldest.patterns ?? [] },
+            } as unknown as Event, sessionIDRef.current);
+            if (evRaw) applyReplEvents(Array.isArray(evRaw) ? evRaw : [evRaw]);
+          }
+        }
+      } catch {}
+    };
+  });  // re-assign every render so closure captures current refs/state
+
+  // Stage 4.5.3: Polling effect — runs reconciler every 3s while generating
+  useEffect(() => {
+    if (!isGenerating) return;
+    const t = setInterval(() => { runReconcilerPassRef.current?.(); }, 3000);
+    return () => clearInterval(t);
+  }, [isGenerating]);
 
   // One-shot: set up orchestra badge watcher. Must be declared BEFORE any effect that
   // references orchestraBadge (TDZ guard per feedback-react-effect-tdz.md).
@@ -300,6 +388,72 @@ export function App(props: AppProps) {
     await replaySession(props.client, renderer, sid, editor);
   }, [props.client, renderer, editor]);
 
+  // Stage 4.5.3: Shared helper for processing ReplEvents from both live SSE and reconciler.
+  // Routes all event mutations through a single code path to guarantee multi-window FIFO safety.
+  // Permission responses are fired in background without awaiting (mirrors original code).
+  const applyReplEvents = useCallback((evList: ReplEvent[]) => {
+    for (const ev of evList) {
+      try {
+        if (ev.kind === "block-start") {
+          renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName });
+          if (ev.role === "thinking")
+            setProcTimes(p => p.thinking === null ? { ...p, thinking: Date.now() } : p);
+          else if (ev.role === "tool-call" || ev.role === "tool-result")
+            setProcTimes(p => p.tools === null ? { ...p, tools: Date.now() } : p);
+        }
+        else if (ev.kind === "block-delta")  renderer.appendToBlock(ev.partID, ev.text);
+        else if (ev.kind === "block-end") {
+          renderer.endBlock(ev.partID, ev.status);
+          if (ev.role === "thinking") setProcTimes(p => ({ ...p, thinking: null }));
+          else if (ev.role === "tool-result" || (ev.role === "tool-call" && ev.status === "error"))
+            setProcTimes(p => ({ ...p, tools: null }));
+        }
+        else if (ev.kind === "error")        { renderer.commitError(ev.message); setIsGenerating(false); }
+        else if (ev.kind === "generating")   setIsGenerating(true);
+        else if (ev.kind === "session-idle") {
+          renderer.commitTurnEnd();
+          setIsGenerating(false);
+          setLastSubmitted("");
+          setProcTimes({ thinking: null, tools: null });
+          refreshTokenUsage(sessionIDRef.current);
+        }
+        else if (ev.kind === "session-compacting") {
+          if (ev.sessionID === sessionIDRef.current) setIsCompacting(ev.compacting);
+        }
+        else if (ev.kind === "session-compacted") {
+          if (ev.sessionID === sessionIDRef.current) {
+            setIsCompacting(false);
+            refreshTokenUsage(sessionIDRef.current);
+          }
+        }
+        else if (ev.kind === "permission-asked") {
+          if (permModeRef.current === "ask") {
+            setPermission({ permID: ev.permID, title: ev.title });
+          } else if (permModeRef.current === "allow") {
+            // Fire in background without awaiting
+            props.client.postSessionIdPermissionsPermissionId({
+              path: { id: sessionIDRef.current, permissionID: ev.permID },
+              body: { response: "always" },
+            }).catch(() => {
+              // Silently swallow errors; permission will be retried or escalated by the server
+            });
+          } else if (permModeRef.current === "deny") {
+            // Fire in background without awaiting
+            props.client.postSessionIdPermissionsPermissionId({
+              path: { id: sessionIDRef.current, permissionID: ev.permID },
+              body: { response: "reject" },
+            }).catch(() => {
+              // Silently swallow errors
+            });
+          }
+        }
+        else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
+      } catch (err) {
+        renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }, [props.client, renderer, refreshTokenUsage]);
+
   // One-shot: fetch initial model from server and seed token-usage from the
   // latest assistant message. Fires on mount and on session switch (sessionID
   // state change). Critical for --resume / --resume-last / --fork startup:
@@ -327,84 +481,44 @@ export function App(props: AppProps) {
     })();
   }, [props.client, sessionID, refreshTokenUsage, runReplay, renderer]);
 
-  // SSE loop: thin translation layer — all rendering delegated to renderer.
-  // SSE subscription is a single-consumer async iterable; we keep this effect stable
-  // across session switches and read the current sessionID from sessionIDRef.
+  // SSE loop with reconnect: thin translation layer — all rendering delegated to renderer.
+  // Stage 4.5.3: wrapped in try/catch with exponential backoff reconnect (1s → 30s cap).
+  // On reconnect, runs one reconciliation pass before resuming event loop.
   useEffect(() => {
     let cancelled = false;
+    let backoff = 1000;
     (async () => {
-      for await (const globalEvent of props.eventStream) {
-        if (cancelled) break;
-        const evRaw = filterEvent(globalEvent.payload as unknown as Event, sessionIDRef.current);
-        if (!evRaw) continue;
-        const evList: ReplEvent[] = Array.isArray(evRaw) ? evRaw : [evRaw];
-        for (const ev of evList) {
-          try {
-            if (ev.kind === "block-start") {
-              renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName });
-              if (ev.role === "thinking")
-                setProcTimes(p => p.thinking === null ? { ...p, thinking: Date.now() } : p);
-              else if (ev.role === "tool-call" || ev.role === "tool-result")
-                setProcTimes(p => p.tools === null ? { ...p, tools: Date.now() } : p);
-            }
-            else if (ev.kind === "block-delta")  renderer.appendToBlock(ev.partID, ev.text);
-            else if (ev.kind === "block-end") {
-              renderer.endBlock(ev.partID, ev.status);
-              if (ev.role === "thinking") setProcTimes(p => ({ ...p, thinking: null }));
-              // Clear tools on tool-result end (normal path) or tool-call error (no result follows).
-              else if (ev.role === "tool-result" || (ev.role === "tool-call" && ev.status === "error"))
-                setProcTimes(p => ({ ...p, tools: null }));
-            }
-            else if (ev.kind === "error")        { renderer.commitError(ev.message); setIsGenerating(false); }
-            else if (ev.kind === "generating")   setIsGenerating(true);
-            else if (ev.kind === "session-idle") {
-              renderer.commitTurnEnd();
-              setIsGenerating(false);
-              setLastSubmitted("");
-              setProcTimes({ thinking: null, tools: null });
-              refreshTokenUsage(sessionIDRef.current);
-            }
-            else if (ev.kind === "session-compacting") {
-              if (ev.sessionID === sessionIDRef.current) setIsCompacting(ev.compacting);
-            }
-            else if (ev.kind === "session-compacted") {
-              if (ev.sessionID === sessionIDRef.current) {
-                setIsCompacting(false);
-                refreshTokenUsage(sessionIDRef.current);
-              }
-            }
-            else if (ev.kind === "permission-asked") {
-              if (permModeRef.current === "ask") {
-                setPermission({ permID: ev.permID, title: ev.title });
-              } else if (permModeRef.current === "allow") {
-                try {
-                  await props.client.postSessionIdPermissionsPermissionId({
-                    path: { id: sessionIDRef.current, permissionID: ev.permID },
-                    body: { response: "always" },
-                  });
-                } catch {
-                  // Silently swallow errors; permission will be retried or escalated by the server
-                }
-              } else if (permModeRef.current === "deny") {
-                try {
-                  await props.client.postSessionIdPermissionsPermissionId({
-                    path: { id: sessionIDRef.current, permissionID: ev.permID },
-                    body: { response: "reject" },
-                  });
-                } catch {
-                  // Silently swallow errors
-                }
-              }
-            }
-            else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
-          } catch (err) {
-            renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);
+      let stream: AsyncIterable<{ payload: unknown }> = props.eventStream;
+      while (!cancelled) {
+        try {
+          for await (const globalEvent of stream) {
+            if (cancelled) break;
+            lastSseEventTimeRef.current = Date.now();
+            setSseHealth("ok");
+            backoff = 1000;
+            const evRaw = filterEvent(globalEvent.payload as unknown as Event, sessionIDRef.current);
+            if (!evRaw) continue;
+            applyReplEvents(Array.isArray(evRaw) ? evRaw : [evRaw]);
           }
+        } catch {
+          // stream errored; fall through to reconnect
+        }
+        if (cancelled) break;
+        setSseHealth("reconnecting");
+        await new Promise(r => setTimeout(r, backoff));
+        backoff = Math.min(backoff * 2, 30000);
+        try {
+          const fresh = await props.client.global.event({});
+          stream = fresh.stream;
+          // One-shot reconciliation pass after reconnect
+          await runReconcilerPassRef.current?.();
+        } catch {
+          // retry after backoff
         }
       }
     })();
     return () => { cancelled = true; };
-  }, [props.client, props.eventStream, renderer, refreshTokenUsage]);
+  }, [props.client, props.eventStream, applyReplEvents]);
 
   // Sync queue mode; auto-submit pending queue when model goes idle
   useEffect(() => {
@@ -470,6 +584,11 @@ export function App(props: AppProps) {
     await refreshTokenUsage(newID);
     await runReplay(newID);
   }, [isGenerating, sessionID, props.client, renderer, refreshTokenUsage, runReplay]);
+
+  const handleResync = useCallback(async () => {
+    await runReconcilerPassRef.current?.();
+    await refreshTokenUsage(sessionIDRef.current);
+  }, [refreshTokenUsage]);
 
   const handleSubmit = useCallback(async (text: string) => {
     // /exit — clean shutdown
@@ -544,6 +663,13 @@ export function App(props: AppProps) {
       } catch (err) {
         renderer.commitSystemMessage(`/fork failed: ${err instanceof Error ? err.message : String(err)}`);
       }
+      return;
+    }
+    // /resync — force a full re-fetch of session state (Stage 4.5.3)
+    const resyncResult = parseResyncCommand(text);
+    if (resyncResult.handled) {
+      renderer.commitUserInput(text);
+      await handleResync();
       return;
     }
     // /rename <name> — rename session in DB and tmux windows
@@ -836,7 +962,7 @@ export function App(props: AppProps) {
           </Text>
         )}
         <Rule title={sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={!!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} onHelp={triggerHelp} onToggleTools={() => toggleGate("tools-output")} onToggleThinking={() => toggleGate("thinking-output")} />
+        <PromptInput editor={editor} disabled={!!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} onHelp={triggerHelp} onToggleTools={() => toggleGate("tools-output")} onToggleThinking={() => toggleGate("thinking-output")} onResync={handleResync} />
         <Rule width={w} />
         <StatusLine
           modelLabel={
@@ -850,6 +976,7 @@ export function App(props: AppProps) {
           isCompacting={isCompacting}
           runningCost={runningCost}
           orchestraBadge={orchestraBadge}
+          sseHealth={sseHealth}
         />
         <PermissionStatusLine permMode={permMode} />
         <ToggleStatusLine bindings={TOGGLES_CONFIG.bindings} gateStates={gateStates} />

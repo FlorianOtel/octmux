@@ -59,6 +59,11 @@ export const COMMANDS: CommandSpec[] = [
     description: "fork the current session into a child",
   },
   {
+    name: "/resync",
+    usage: "/resync",
+    description: "force a full re-fetch of session state (Ctrl-R)",
+  },
+  {
     name: "/help",
     usage: "/help",
     description: "list all known slash commands",

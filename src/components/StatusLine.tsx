@@ -9,6 +9,7 @@ export type StatusLineProps = {
   isCompacting?: boolean;
   runningCost: number;
   orchestraBadge?: { mode: "brain" | "duo"; title: string; stage?: string | null } | null;
+  sseHealth?: "ok" | "reconnecting" | "silent";
 };
 
 /**
@@ -23,6 +24,7 @@ export function StatusLine({
   isCompacting,
   runningCost,
   orchestraBadge,
+  sseHealth,
 }: StatusLineProps) {
   // Compute bar fill
   let filledCount = 0;
@@ -60,6 +62,16 @@ export function StatusLine({
   // Build git branch suffix
   const gitSuffix = gitBranch ? ` | ⎇ ${gitBranch}` : "";
 
+  // SSE health badge
+  let sseHealthBadge: JSX.Element | null = null;
+  if (sseHealth === "ok") {
+    sseHealthBadge = <Text dimColor> | SSE ok</Text>;
+  } else if (sseHealth === "reconnecting") {
+    sseHealthBadge = <Text color="yellow"> | SSE reconnect…</Text>;
+  } else if (sseHealth === "silent") {
+    sseHealthBadge = <Text color="yellow"> | SSE silent</Text>;
+  }
+
   // Full status line: color only the bar, not the rest
   return (
     <Text>
@@ -72,6 +84,7 @@ export function StatusLine({
       {orchestraBadge?.stage && (
         <Text color="#d79921">{`  ▶ ${orchestraBadge.stage}`}</Text>
       )}
+      {sseHealthBadge}
       {isCompacting && <Text color="yellow"> · compacting…</Text>}
     </Text>
   );
