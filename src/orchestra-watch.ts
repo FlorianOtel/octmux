@@ -132,7 +132,11 @@ export class OrchestraWatcher extends EventEmitter {
         try {
           if (fs.existsSync(projectDirPath)) {
             const storedDir = fs.readFileSync(projectDirPath, "utf-8").trim();
-            projectDirMatches = storedDir === this.projectDir;
+            // Normalize via realpathSync: brain.md writes $PWD (logical/symlink path),
+            // but process.cwd() in Bun returns the real path (getcwd syscall resolves symlinks).
+            // Without this, the badge never shows when octmux is launched via a symlink.
+            const resolvedStoredDir = (() => { try { return fs.realpathSync(storedDir); } catch { return storedDir; } })();
+            projectDirMatches = resolvedStoredDir === this.projectDir;
           }
         } catch {
           // Ignore read errors
