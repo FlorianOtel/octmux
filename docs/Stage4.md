@@ -3,7 +3,7 @@ title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Haiku 4.5, via Actor subagent)
-updated_at: 2026-05-31--20-28
+updated_at: 2026-05-31--22-28
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -642,10 +642,10 @@ Add Ctrl-t / Ctrl-T keybindings for toggling the `tools` and `thinking` output g
 
 ---
 
-### 2026-05-31--20-28 — v4.7 hotfix — Ctrl-t toggle aligned with slash-command path
+### 2026-05-31--22-28 — v4.7 hotfix — Ctrl-t toggle aligned with slash-command path
 
-**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent) — 2026-05-31--20-28
-**Commit(s):** `<hash>`
+**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent) — 2026-05-31--22-28
+**Commit(s):** `392d771`
 
 **What changed:**
 
