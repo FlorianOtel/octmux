@@ -3,7 +3,7 @@ title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Haiku 4.5, via Actor subagent)
-updated_at: 2026-05-31--22-28
+updated_at: 2026-06-01--01-15
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -155,6 +155,55 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-06-01--01-15 — Stage 4.5.3: SSE reconciler + reconnect + manual resync + health badge
+
+**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent) — 2026-06-01--01-15
+**Commit(s):** `994952a`
+
+**Why this hardening:**
+
+Operator hit a wedged octmux session inside an Opus-4.7 /brain run. Investigation showed the OC daemon was waiting on a pending `question` tool with the AskUserQuestion payload persisted in `/question?session=...`, but octmux's UI never opened the question modal — and showed stale ticker/counters/queue-flush indicators. The previous Ctrl-t fix (commit `392d771`) closed ONE trigger of a deeper architectural fragility: octmux's UI is purely SSE-event-driven against a single-shot stream with no reconciler against OC's REST state. Any SSE drop (network blip, server-side backpressure, missed event for any reason) silently wedges the TUI.
+
+The triple-abort of the runaway session showed OC's orchestra prompt auto-retries through aborts, generating new tool calls (cost climbed $0.95 → $1.93 between the operator's report and Brain's hard stop). This made it operationally clear the fragility is independent of model misbehaviour or specific event types.
+
+**What changed:**
+
+- New 3-second polling reconciler in `src/app.tsx` while `isGenerating === true`: polls `session.messages`, `/question`, `/permission`; synthesises missed `session.idle`, opens missed question/permission modals (mirroring SSE handler's permMode branch exactly).
+- SSE for-await loop wrapped in try/catch with exponential backoff reconnect (1s → 30s cap, reset on first event); calls `client.global.event({})` to obtain a fresh AsyncIterable; runs one reconciliation pass after reconnect.
+- `Ctrl-R` keybinding AND `/resync` slash command for manual full resync.
+- SSE health badge on status line (`| SSE ok` dim / `| SSE reconnect…` yellow / `| SSE silent` yellow).
+- New `synthesizeSessionIdleEvents()` export from `events.ts` so the reconciler's synthesised session-idle produces the same `block-end` events the real SSE handler does.
+- New shared helper `applyReplEvents()` in `app.tsx` so live SSE and reconciler synthesise route through the same renderer mutation code — guarantees `--multi-window` FIFO state is correctly closed regardless of source.
+- Comment block added to `events.ts` above `question.asked` and `permission.asked` handlers documenting property shapes match live OC daemon.
+
+**Why this is compatible with the Stage 4.5.1 pure-gate invariant + Stage 4.5.2 single-side-effect carve-out:**
+
+The reconciler does NOT call `renderer.setOutputEnabled(...)`. It does NOT call `_ensureWindow(...)` or any other window/FIFO lifecycle method. It only emits `block-end` events for already-open parts (via `applyReplEvents`) and updates React UI state. `endBlock` is idempotent on both renderers; `commitTurnEnd` is idempotent on both. The Stage 4.5.2 `_refreshLiveIdsAsync` kick path is untouched. Stage 4.4.3's lazy-on-block-start window lifecycle continues to be the exclusive window creation path.
+
+**Multi-window re-entry verification:**
+
+1. **No new call to `renderer.setOutputEnabled(...)`** anywhere in the reconciler / SSE-reconnect / resync paths — grep confirms Stage 4.5.1 pure-gate preserved.
+2. **No new call to `_ensureWindow(...)`** outside `beginBlock` — reconciler does not touch it.
+3. **Reconciler's synthesised `session-idle` routes through `applyReplEvents`**, not direct `renderer.commitTurnEnd()`. This guarantees `block-end` events fire for any open parts — verified in `synthesizeSessionIdleEvents()` export.
+4. **`synthesizeSessionIdleEvents()` clears `openParts` and `seenPartIDs`** after walking them — matches `events.ts:197-198` behaviour exactly per Stage 4.5.1/4.5.2 contract.
+5. **`endBlock` idempotency relied upon** — no new guards in reconciler around the synthesised endBlock calls; both renderers already handle this via existing gate checks and early-returns.
+6. **No new render path depends on `_ensureWindow` being called from outside `beginBlock`** — Stage 4.4.3 lazy-creation invariant preserved.
+7. **The Stage 4.5.2 `_refreshLiveIdsAsync` kick is unmodified** — reconciler does not flip output gates and does not call setOutputEnabled.
+8. **`Ctrl-R` / `/resync` does NOT call `setOutputEnabled` or `_ensureWindow`** — only triggers reconciler pass + `refreshTokenUsage` (pure state reads).
+
+**Files modified:**
+- `src/app.tsx` (SSE health state, applyReplEvents helper, runReconcilerPassRef + polling effect, SSE reconnect, handleResync callback, thread onResync to PromptInput)
+- `src/events.ts` (comment block + synthesizeSessionIdleEvents export)
+- `src/keybindings.ts` (Ctrl-R handler)
+- `src/commands.ts` (parseResyncCommand)
+- `src/command-registry.ts` (/resync entry)
+- `src/components/PromptInput.tsx` (thread onResync prop)
+- `src/components/StatusLine.tsx` (sseHealth prop + badge rendering)
+- `docs/Stage4.md` (this entry + frontmatter)
+- `docs/design.md` (NEW — cross-cutting design principles)
+
+---
 
 ### 2026-05-27--18-28 — Stage 4.6: Inline markdown rendering (bold / italic / inline code)
 
@@ -665,3 +714,21 @@ This ordering ensures the renderer is the authoritative source of truth; React s
 
 **Files modified:**
 - `src/app.tsx` — `toggleGate` callback refactored.
+
+---
+
+### 2026-05-31--22-40 — v4.7 hotfix — Stage4.md timestamps corrected to local CEST
+
+**Implemented by:** Claude Code (Claude Opus 4.7) — 2026-05-31--22-40
+**Commit(s):** `29138e4`
+
+**What changed:**
+
+Reviewer flagged that the previous v4.7-hotfix subsection (commit `392d771`) recorded its timestamps in UTC (`2026-05-31--20-28`) while every prior entry in `docs/Stage4.md` uses local CEST. Corrected three lines to keep the project convention consistent: the frontmatter `updated_at`, the subsection heading, and the `**Implemented by:**` line — all `20-28` → `22-28`.
+
+**Rationale:**
+- Consistency with all earlier Stage4 entries, which use local time.
+- The project's CLAUDE.md global rule (timestamp format `YYYY-MM-DD--HH-MM` sourced from file mtime / local clock) implicitly assumes local time; no entry in any project doc to date is UTC.
+
+**Files modified:**
+- `docs/Stage4.md` — three timestamp strings; no body-text change to the v4.7 hotfix entry it documents.
