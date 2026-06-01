@@ -23,13 +23,15 @@ let knownMissIDs = new Set<string>();
  * (or empty array if no cache exists).
  *
  * @param baseUrl - OC daemon base URL (e.g., "http://localhost:4096")
+ * @param cwd - Working directory to pass as x-opencode-directory header
  * @returns Array of sessions with id and optional parentID
  */
 export async function getSessionList(
-  baseUrl: string
+  baseUrl: string,
+  cwd: string
 ): Promise<Array<{ id: string; parentID?: string | null }>> {
   try {
-    const r = await fetch(`${baseUrl}/session`);
+    const r = await fetch(`${baseUrl}/session`, { headers: { "x-opencode-directory": cwd } });
     if (!r.ok) {
       // Return last cached list on error, or empty
       return sessionCache?.list ?? [];
@@ -59,16 +61,18 @@ export async function getSessionList(
  * @param candidateSessionID - The session ID to check
  * @param ancestorSessionID - The potential ancestor (parent) session ID
  * @param baseUrl - OC daemon base URL
+ * @param cwd - Working directory to pass as x-opencode-directory header
  * @returns true if candidate is a descendant; false otherwise
  */
 export async function isSessionDescendant(
   candidateSessionID: string,
   ancestorSessionID: string,
-  baseUrl: string
+  baseUrl: string,
+  cwd: string
 ): Promise<boolean> {
   // Ensure cache is initialized (populate if empty or stale)
   if (!sessionCache || Date.now() - sessionCache.fetchedAt > CACHE_TTL_MS) {
-    await getSessionList(baseUrl);
+    await getSessionList(baseUrl, cwd);
   }
 
   const list = sessionCache?.list ?? [];
@@ -89,7 +93,7 @@ export async function isSessionDescendant(
   // a revalidation in this TTL window, do one-shot refresh and retry.
   if (!list.find(s => s.id === candidateSessionID) && !knownMissIDs.has(candidateSessionID)) {
     knownMissIDs.add(candidateSessionID);
-    await getSessionList(baseUrl); // Force refresh
+    await getSessionList(baseUrl, cwd); // Force refresh
     const freshList = sessionCache?.list ?? [];
 
     // Retry the walk with fresh cache

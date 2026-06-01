@@ -47,6 +47,7 @@ type AppProps = {
   onExit: () => Promise<void>;
   baseUrl: string;
   renderer: Renderer;
+  cwd: string;
 };
 
 export function App(props: AppProps) {
@@ -91,6 +92,7 @@ export function App(props: AppProps) {
   // Stage 4.5.3: SSE health tracking and reconciliation
   const [sseHealth, setSseHealth] = useState<"ok" | "reconnecting" | "silent">("ok");
   const lastSseEventTimeRef = useRef<number>(Date.now());
+  const stallBannerShownRef = useRef<boolean>(false);
 
   const cyclePermMode = useCallback(() => {
     setPermMode(prev =>
@@ -214,7 +216,7 @@ export function App(props: AppProps) {
       // Question/permission discovery: run unconditionally (safe modal recovery, no stream mutation)
       // 1. Missed question discovery
       try {
-        const r = await fetch(`${props.baseUrl}/question`);
+        const r = await fetch(`${props.baseUrl}/question`, { headers: { "x-opencode-directory": props.cwd } });
         if (r.ok) {
           const list = await r.json() as Array<{
             id: string; sessionID: string;
@@ -228,7 +230,7 @@ export function App(props: AppProps) {
             list.map(q =>
               q.sessionID === sessionIDRef.current
                 ? Promise.resolve(true)
-                : isSessionDescendant(q.sessionID, sessionIDRef.current, props.baseUrl)
+                : isSessionDescendant(q.sessionID, sessionIDRef.current, props.baseUrl, props.cwd)
             )
           );
           const ours = list.filter((_, i) => flags[i]).sort((a, b) => a.id.localeCompare(b.id));
@@ -245,7 +247,7 @@ export function App(props: AppProps) {
 
       // 2. Missed permission discovery
       try {
-        const r = await fetch(`${props.baseUrl}/permission`);
+        const r = await fetch(`${props.baseUrl}/permission`, { headers: { "x-opencode-directory": props.cwd } });
         if (r.ok) {
           const list = await r.json() as Array<{
             id: string; sessionID: string; permission: string; patterns?: string[];
@@ -254,7 +256,7 @@ export function App(props: AppProps) {
             list.map(p =>
               p.sessionID === sessionIDRef.current
                 ? Promise.resolve(true)
-                : isSessionDescendant(p.sessionID, sessionIDRef.current, props.baseUrl)
+                : isSessionDescendant(p.sessionID, sessionIDRef.current, props.baseUrl, props.cwd)
             )
           );
           const ours = list.filter((_, i) => flags[i]).sort((a, b) => a.id.localeCompare(b.id));
@@ -296,6 +298,33 @@ export function App(props: AppProps) {
       setProcTimes(p => p.generating === null ? p : { ...p, generating: null });
     }
   }, [isGenerating]);
+
+  // Stall watchdog: detect when generation stalls (SSE silent for 3 min, but async generation ongoing)
+  useEffect(() => {
+    if (!isGenerating) {
+      stallBannerShownRef.current = false;
+      return;
+    }
+    const t = setInterval(async () => {
+      if (Date.now() - lastSseEventTimeRef.current < 180_000) return;
+      if (stallBannerShownRef.current) return;
+      try {
+        const resp = await props.client.session.messages({ path: { id: sessionIDRef.current } });
+        const msgs = resp.data ?? [];
+        const assistants = msgs.filter(m => m.info.role === "assistant");
+        if (assistants.length === 0) return;
+        const newest = assistants[assistants.length - 1];
+        const parts = newest.parts ?? [];
+        const completed = (newest.info as { time?: { completed?: number | null } }).time?.completed;
+        if (parts.length !== 0 || completed != null) return;
+      } catch {
+        return;
+      }
+      stallBannerShownRef.current = true;
+      renderer.commitSystemMessage("Generation stalled — press Ctrl-C to abort");
+    }, 30_000);
+    return () => clearInterval(t);
+  }, [isGenerating, props.client, renderer]);
 
   // One-shot: set up orchestra badge watcher. Must be declared BEFORE any effect that
   // references orchestraBadge (TDZ guard per feedback-react-effect-tdz.md).
@@ -519,7 +548,7 @@ export function App(props: AppProps) {
           // Fire in background — do not block the event-application loop.
           (async () => {
             try {
-              const r = await fetch(`${props.baseUrl}/question`);
+              const r = await fetch(`${props.baseUrl}/question`, { headers: { "x-opencode-directory": props.cwd } });
               if (!r.ok) return;
               const all = await r.json() as Array<{
                 id: string; sessionID: string;
@@ -601,7 +630,7 @@ export function App(props: AppProps) {
                 ev.properties?.sessionID &&
                 ev.properties.sessionID !== sessionIDRef.current
               ) {
-                const isDesc = await isSessionDescendant(ev.properties.sessionID, sessionIDRef.current, props.baseUrl);
+                const isDesc = await isSessionDescendant(ev.properties.sessionID, sessionIDRef.current, props.baseUrl, props.cwd);
                 if (isDesc) {
                   const childEvRaw = filterEvent(globalEvent.payload as unknown as Event, ev.properties.sessionID);
                   if (childEvRaw) applyReplEvents(Array.isArray(childEvRaw) ? childEvRaw : [childEvRaw]);
@@ -987,11 +1016,11 @@ export function App(props: AppProps) {
     if (!question) return;
     await fetch(`${props.baseUrl}/question/${question.reqID}/reply`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-opencode-directory": props.cwd },
       body: JSON.stringify({ answers }),
     }).catch(() => {});
     setQuestion(null);
-  }, [question, props.baseUrl]);
+  }, [question, props.baseUrl, props.cwd]);
 
   const handleModelSelect = useCallback((item: ModelPickerItem) => {
     setActiveModel({ providerID: item.providerID, modelID: item.modelID });

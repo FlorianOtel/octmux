@@ -180,7 +180,11 @@ process.on("SIGTERM", async () => { await serverHandle?.dispose(); await rendere
 
 // ─── SDK: client / session / event stream ────────────────────────────────────
 
-const client    = createOpencodeClient({ baseUrl });
+// Capture the operator's working directory once — threaded to the SDK client and
+// all raw fetch() calls so OC's directory-scoped endpoints return the right data.
+const cwd = process.cwd();
+
+const client    = createOpencodeClient({ baseUrl, directory: cwd });
 
 // Determine which session to use: resume by ID, resume last, fork, or create new.
 // Capture both banner and sessionLabel: banner for startup confirmation, sessionLabel for chrome.
@@ -245,7 +249,7 @@ if (resumeArg) {
 } else {
   // Default: create a new session anchored to octmux's launch directory.
   // Without this, OC inherits the daemon's cwd ($HOME) instead of where octmux was invoked.
-  const session = await client.session.create({ query: { directory: process.cwd() } });
+  const session = await client.session.create({ query: { directory: cwd } });
   sessionID = session.data!.id;
   sessionLabel = sessionID.slice(0, 8);
 }
@@ -312,6 +316,7 @@ render(
     onExit={async () => { await serverHandle?.dispose(); await renderer.dispose(); }}
     baseUrl={baseUrl}
     renderer={renderer}
+    cwd={cwd}
   />,
   { exitOnCtrlC: false }
 );
