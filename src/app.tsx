@@ -163,11 +163,15 @@ export function App(props: AppProps) {
   // Stage 4.5.3: Reconciler pass ref — stored on ref so polling effect and SSE-reconnect path
   // both invoke the current closure (captures latest refs/state).
   const runReconcilerPassRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Stage 4.5.4.2: Discovery pass ref — separate from reconciler, runs unconditionally.
+  const runDiscoveryPassRef = useRef<(() => Promise<void>) | null>(null);
+
   useEffect(() => {
     runReconcilerPassRef.current = async () => {
       // Stage 4.5.3 redesigned reconciler: four-layer guard on idle synthesis.
       // Layer 1 (trigger gate) + Layer 2 (recency) + Layer 3 (openParts) guard
-      // the idle synthesis path. Question/permission discovery runs unconditionally.
+      // the idle synthesis path. Question/permission discovery runs separately via runDiscoveryPassRef.
 
       // Preamble: SSE silence detection (updates sseHealth state)
       if (isGeneratingRef.current && Date.now() - lastSseEventTimeRef.current > 8000) {
@@ -199,6 +203,14 @@ export function App(props: AppProps) {
         }
       }
 
+      // Discovery happens separately via unconditional runDiscoveryPassRef
+      await runDiscoveryPassRef.current?.();
+    };
+  });  // re-assign every render so closure captures current refs/state
+
+  // Stage 4.5.4.2: Discovery pass — question/permission lookup (idempotent, runs unconditionally)
+  useEffect(() => {
+    runDiscoveryPassRef.current = async () => {
       // Question/permission discovery: run unconditionally (safe modal recovery, no stream mutation)
       // 1. Missed question discovery
       try {
@@ -259,7 +271,7 @@ export function App(props: AppProps) {
     };
   });  // re-assign every render so closure captures current refs/state
 
-  // Stage 4.5.3 redesign: Polling reconciler — arms ONLY when SSE is degraded.
+  // Stage 4.5.3 redesign: Idle-synthesis polling — arms ONLY when SSE is degraded.
   // In steady-state SSE, NO polling. Belt-and-suspenders:
   // even when armed, the reconciler pass has its own recency + openParts guards.
   useEffect(() => {
@@ -267,6 +279,14 @@ export function App(props: AppProps) {
     const t = setInterval(() => { runReconcilerPassRef.current?.(); }, 3000);
     return () => clearInterval(t);
   }, [isGenerating, sseHealth]);
+
+  // Stage 4.5.4.2: Discovery loop — unconditional, fires at mount and every 5s.
+  // Safe: discovery is idempotent via questionIDRef/permissionIDRef guards.
+  useEffect(() => {
+    runDiscoveryPassRef.current?.();
+    const t = setInterval(() => { runDiscoveryPassRef.current?.(); }, 5000);
+    return () => clearInterval(t);
+  }, []);
 
   // Sync procTimes.generating with isGenerating state for SubprocessStatus rendering
   useEffect(() => {

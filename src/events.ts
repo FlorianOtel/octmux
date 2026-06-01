@@ -197,7 +197,6 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       // One-shot per callID: OC may emit multiple running updates as the tool's
       // JSON input streams in. detectedQuestionToolCallIDs prevents re-fire.
       if (state.status === "running" && toolPart.tool === "question"
-          && openParts.get(toolPart.id) === "tool-call"
           && !detectedQuestionToolCallIDs.has(toolPart.id)) {
         detectedQuestionToolCallIDs.add(toolPart.id);
         return {
