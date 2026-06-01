@@ -468,6 +468,36 @@ export function App(props: AppProps) {
           }
         }
         else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
+        else if (ev.kind === "question-tool-detected") {
+          // One-shot lookup: OC's question registry should now contain the MCP
+          // question that triggered this tool=question part. Match by
+          // (sessionID, callID) to avoid cross-session or stale-event contamination.
+          // Fire in background — do not block the event-application loop.
+          (async () => {
+            try {
+              const r = await fetch(`${props.baseUrl}/question`);
+              if (!r.ok) return;
+              const all = await r.json() as Array<{
+                id: string; sessionID: string;
+                questions: Array<{
+                  question: string; header: string;
+                  options: Array<{ label: string; description: string }>;
+                  multiple?: boolean; custom?: boolean;
+                }>;
+                tool?: { messageID: string; callID: string };
+              }>;
+              const match = all.find(q =>
+                q.sessionID === ev.sessionID &&
+                q.tool?.callID === ev.callID
+              );
+              if (match && match.id !== questionIDRef.current) {
+                setQuestion({ reqID: match.id, questions: match.questions });
+              }
+            } catch {
+              // Silent — operator can Ctrl-C (now safe under Bug 1 fix) and retry.
+            }
+          })();
+        }
       } catch (err) {
         renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -560,8 +590,17 @@ export function App(props: AppProps) {
     if (key.ctrl && input === "c") {
       if (isGenerating) {
         props.client.session.abort({ path: { id: sessionID } }).catch(() => {});
-        editor.loadText(lastSubmitted);
         setIsGenerating(false);
+        setLastSubmitted("");
+        // Defensive: ensure PromptInput cannot be left disabled by a stale modal
+        // or stray session.updated event. Ctrl-C-during-generation explicitly
+        // means "bail to a fresh prompt"; any modal in flight is intentionally
+        // dismissed. The non-isGenerating Ctrl-C branches below stay unchanged.
+        setPermission(null);
+        setQuestion(null);
+        setModelPicker(null);
+        setSessionPicker(null);
+        setIsCompacting(false);
         return;
       }
       if (editor.getText().trim()) {

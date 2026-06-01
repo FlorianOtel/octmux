@@ -27,6 +27,7 @@ export type ReplEvent =
       question: string; header: string; options: Array<{ label: string; description: string }>;
       multiple?: boolean; custom?: boolean;
     }> }
+  | { kind: "question-tool-detected"; sessionID: string; callID: string }
   | { kind: "session-compacting"; sessionID: string; compacting: boolean }
   | { kind: "session-compacted"; sessionID: string };
 
@@ -39,11 +40,18 @@ const openParts = new Map<string, Role>();
 // Used only for "emit generating exactly once" logic.
 const seenPartIDs = new Set<string>();
 
+// Tracks callIDs of tool=question parts for which we've already emitted
+// question-tool-detected. Prevents re-fire on repeated message.part.updated
+// events with state.status=running (which OC sends as the question tool's
+// input streams in). Cleared on session switch via resetEventState.
+const detectedQuestionToolCallIDs = new Set<string>();
+
 // Reset event tracking state on session switch.
 export function resetEventState(): void {
   userMessageIDs.clear();
   openParts.clear();
   seenPartIDs.clear();
+  detectedQuestionToolCallIDs.clear();
 }
 
 /**
@@ -179,9 +187,29 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
         return { kind: "block-start", partID: toolPart.id, role: "tool-call", toolName: toolPart.tool };
       }
 
+      // MCP-question side-channel: when a tool=question part transitions to running,
+      // signal app.tsx to do a one-shot /question lookup.
+      // We detect on "running" (not "pending") because the OC question registry is
+      // only populated once the MCP handler receives the dispatched tool call —
+      // before that, /question would return nothing. Returning this event has no
+      // renderer side-effect by itself.
+      // One-shot per callID: OC may emit multiple running updates as the tool's
+      // JSON input streams in. detectedQuestionToolCallIDs prevents re-fire.
+      if (state.status === "running" && toolPart.tool === "question"
+          && openParts.get(toolPart.id) === "tool-call"
+          && !detectedQuestionToolCallIDs.has(toolPart.id)) {
+        detectedQuestionToolCallIDs.add(toolPart.id);
+        return {
+          kind: "question-tool-detected",
+          sessionID: toolPart.sessionID,
+          callID: toolPart.id,
+        };
+      }
+
       // Tool completed: end tool-call block; emit tool-result block.
       if (state.status === "completed" && openParts.get(toolPart.id) === "tool-call") {
         openParts.delete(toolPart.id);
+        detectedQuestionToolCallIDs.delete(toolPart.id);
         const output = state.output ?? "";
         const events: ReplEvent[] = [
           { kind: "block-end", partID: toolPart.id, role: "tool-call", status: "ok" },
@@ -200,6 +228,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       // Tool errored: end tool-call block with error.
       if (state.status === "error" && openParts.get(toolPart.id) === "tool-call") {
         openParts.delete(toolPart.id);
+        detectedQuestionToolCallIDs.delete(toolPart.id);
         return { kind: "block-end", partID: toolPart.id, role: "tool-call", status: "error" };
       }
 
