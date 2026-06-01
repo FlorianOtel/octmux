@@ -175,6 +175,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       const toolPart = part as unknown as {
         id: string; messageID: string; sessionID: string;
         type: "tool"; tool: string;
+        callID: string;
         state: { status: string; input?: unknown; raw?: string; output?: string; error?: string; title?: string };
       };
       if (userMessageIDs.has(toolPart.messageID)) return null;
@@ -202,7 +203,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
         return {
           kind: "question-tool-detected",
           sessionID: toolPart.sessionID,
-          callID: toolPart.id,
+          callID: toolPart.callID,
         };
       }
 
