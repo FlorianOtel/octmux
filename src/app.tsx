@@ -56,7 +56,7 @@ export function App(props: AppProps) {
   const [permission, setPermission] = useState<{ permID: string; title: string } | null>(null);
   const [question, setQuestion] = useState<{ reqID: string; questions: QuestionType[] } | null>(null);
   const [lastSubmitted, setLastSubmitted] = useState<string>("");
-  const [procTimes, setProcTimes] = useState<{ thinking: number | null; tools: number | null }>({ thinking: null, tools: null });
+  const [procTimes, setProcTimes] = useState<{ thinking: number | null; tools: number | null; generating: number | null }>({ thinking: null, tools: null, generating: null });
   const [sessionID, setSessionID] = useState(props.sessionID);
   const [sessionLabel, setSessionLabel] = useState(props.sessionLabel);
   const [activeModel, setActiveModel] = useState<{ providerID: string; modelID: string } | null>(null);
@@ -253,6 +253,15 @@ export function App(props: AppProps) {
     return () => clearInterval(t);
   }, [isGenerating, sseHealth]);
 
+  // Sync procTimes.generating with isGenerating state for SubprocessStatus rendering
+  useEffect(() => {
+    if (isGenerating) {
+      setProcTimes(p => p.generating === null ? { ...p, generating: Date.now() } : p);
+    } else {
+      setProcTimes(p => p.generating === null ? p : { ...p, generating: null });
+    }
+  }, [isGenerating]);
+
   // One-shot: set up orchestra badge watcher. Must be declared BEFORE any effect that
   // references orchestraBadge (TDZ guard per feedback-react-effect-tdz.md).
   useEffect(() => {
@@ -434,7 +443,7 @@ export function App(props: AppProps) {
           renderer.commitTurnEnd();
           setIsGenerating(false);
           setLastSubmitted("");
-          setProcTimes({ thinking: null, tools: null });
+          setProcTimes({ thinking: null, tools: null, generating: null });
           refreshTokenUsage(sessionIDRef.current);
         }
         else if (ev.kind === "session-compacting") {
@@ -601,6 +610,7 @@ export function App(props: AppProps) {
         setModelPicker(null);
         setSessionPicker(null);
         setIsCompacting(false);
+        renderer.commitSystemMessage("Interrupted: What next?");
         return;
       }
       if (editor.getText().trim()) {
@@ -627,7 +637,7 @@ export function App(props: AppProps) {
     }
     resetEventState();
     renderer.clearAll();
-    setProcTimes({ thinking: null, tools: null });
+    setProcTimes({ thinking: null, tools: null, generating: null });
     setLastSubmitted("");
     setIsCompacting(false);
     setTokenUsage(null);
@@ -869,6 +879,7 @@ export function App(props: AppProps) {
             );
           }
         }
+        setIsGenerating(true);
         try {
           await props.client.session.command({
             path: { id: sessionID },
@@ -894,6 +905,7 @@ export function App(props: AppProps) {
     editor.addToHistory(text);
     setLastSubmitted(text);
     renderer.commitUserInput(text);
+    setIsGenerating(true);
     try {
       await props.client.session.promptAsync({
         path: { id: sessionID },
@@ -985,7 +997,6 @@ export function App(props: AppProps) {
         {(item) => <Text key={item.id}>{item.ansi}</Text>}
       </Static>
       {tail && <Text>{formatLine(tail.role, tail.text, false)}</Text>}
-      {isGenerating && !tail && <Text dimColor>[generating…]</Text>}
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}
       {permission && <PermissionModal title={permission.title} onAnswer={handlePermission} />}
       {question && <QuestionModal questions={question.questions} onAnswer={handleQuestion} />}
@@ -1017,7 +1028,7 @@ export function App(props: AppProps) {
         />
       )}
       <Box flexDirection="column" marginBottom={2}>
-        <SubprocessStatus thinking={procTimes.thinking} tools={procTimes.tools} />
+        <SubprocessStatus thinking={procTimes.thinking} tools={procTimes.tools} generating={procTimes.generating} />
         {pendingQueue.length > 0 && (
           <Text color="yellow" dimColor>
             {pendingQueue.length} message{pendingQueue.length !== 1 ? "s" : ""} queued — will send when done

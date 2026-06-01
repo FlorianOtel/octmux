@@ -17,12 +17,13 @@ function ProcLine({ label, startTime }: { label: string; startTime: number }) {
   );
 }
 
-export function SubprocessStatus({ thinking, tools }: { thinking: number | null; tools: number | null }) {
-  if (thinking === null && tools === null) return null;
+export function SubprocessStatus({ thinking, tools, generating }: { thinking: number | null; tools: number | null; generating: number | null }) {
+  if (thinking === null && tools === null && generating === null) return null;
   return (
     <Box flexDirection="column">
-      {thinking !== null && <ProcLine label="thinking" startTime={thinking} />}
-      {tools    !== null && <ProcLine label="tools"    startTime={tools}    />}
+      {thinking   !== null && <ProcLine label="thinking"   startTime={thinking}   />}
+      {tools      !== null && <ProcLine label="tools"      startTime={tools}      />}
+      {generating !== null && <ProcLine label="generating" startTime={generating} />}
     </Box>
   );
 }
