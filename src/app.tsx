@@ -7,6 +7,7 @@ import { LineEditor } from "./editor.ts";
 import { replaySession } from "./replay.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
 import { filterEvent, resetEventState, synthesizeSessionIdleEvents, hasOpenStreamingPart, type ReplEvent } from "./events.ts";
+import { isSessionDescendant } from "./utils/session-ancestry.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand, parseResyncCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
@@ -53,7 +54,7 @@ export function App(props: AppProps) {
   const [editor] = useState(() => new LineEditor());
   const [isGenerating, setIsGenerating] = useState(false);
   const [ctrlcPending, setCtrlcPending] = useState(false);
-  const [permission, setPermission] = useState<{ permID: string; title: string } | null>(null);
+  const [permission, setPermission] = useState<{ permID: string; title: string; sessionID: string } | null>(null);
   const [question, setQuestion] = useState<{ reqID: string; questions: QuestionType[] } | null>(null);
   const [lastSubmitted, setLastSubmitted] = useState<string>("");
   const [procTimes, setProcTimes] = useState<{ thinking: number | null; tools: number | null; generating: number | null }>({ thinking: null, tools: null, generating: null });
@@ -211,13 +212,20 @@ export function App(props: AppProps) {
               multiple?: boolean; custom?: boolean;
             }>;
           }>;
-          const ours = list.filter(q => q.sessionID === sessionIDRef.current).sort((a, b) => a.id.localeCompare(b.id));
+          const flags = await Promise.all(
+            list.map(q =>
+              q.sessionID === sessionIDRef.current
+                ? Promise.resolve(true)
+                : isSessionDescendant(q.sessionID, sessionIDRef.current, props.baseUrl)
+            )
+          );
+          const ours = list.filter((_, i) => flags[i]).sort((a, b) => a.id.localeCompare(b.id));
           const oldest = ours[0];
           if (oldest && oldest.id !== questionIDRef.current) {
             const evRaw = filterEvent({
               type: "question.asked",
               properties: { id: oldest.id, sessionID: oldest.sessionID, questions: oldest.questions },
-            } as unknown as Event, sessionIDRef.current);
+            } as unknown as Event, oldest.sessionID);
             if (evRaw) applyReplEvents(Array.isArray(evRaw) ? evRaw : [evRaw]);
           }
         }
@@ -230,13 +238,20 @@ export function App(props: AppProps) {
           const list = await r.json() as Array<{
             id: string; sessionID: string; permission: string; patterns?: string[];
           }>;
-          const ours = list.filter(p => p.sessionID === sessionIDRef.current).sort((a, b) => a.id.localeCompare(b.id));
+          const flags = await Promise.all(
+            list.map(p =>
+              p.sessionID === sessionIDRef.current
+                ? Promise.resolve(true)
+                : isSessionDescendant(p.sessionID, sessionIDRef.current, props.baseUrl)
+            )
+          );
+          const ours = list.filter((_, i) => flags[i]).sort((a, b) => a.id.localeCompare(b.id));
           const oldest = ours[0];
           if (oldest && oldest.id !== permissionIDRef.current) {
             const evRaw = filterEvent({
               type: "permission.asked",
               properties: { id: oldest.id, sessionID: oldest.sessionID, permission: oldest.permission, patterns: oldest.patterns ?? [] },
-            } as unknown as Event, sessionIDRef.current);
+            } as unknown as Event, oldest.sessionID);
             if (evRaw) applyReplEvents(Array.isArray(evRaw) ? evRaw : [evRaw]);
           }
         }
@@ -457,11 +472,11 @@ export function App(props: AppProps) {
         }
         else if (ev.kind === "permission-asked") {
           if (permModeRef.current === "ask") {
-            setPermission({ permID: ev.permID, title: ev.title });
+            setPermission({ permID: ev.permID, title: ev.title, sessionID: ev.sessionID });
           } else if (permModeRef.current === "allow") {
             // Fire in background without awaiting
             props.client.postSessionIdPermissionsPermissionId({
-              path: { id: sessionIDRef.current, permissionID: ev.permID },
+              path: { id: ev.sessionID, permissionID: ev.permID },
               body: { response: "always" },
             }).catch(() => {
               // Silently swallow errors; permission will be retried or escalated by the server
@@ -469,7 +484,7 @@ export function App(props: AppProps) {
           } else if (permModeRef.current === "deny") {
             // Fire in background without awaiting
             props.client.postSessionIdPermissionsPermissionId({
-              path: { id: sessionIDRef.current, permissionID: ev.permID },
+              path: { id: ev.sessionID, permissionID: ev.permID },
               body: { response: "reject" },
             }).catch(() => {
               // Silently swallow errors
@@ -556,7 +571,24 @@ export function App(props: AppProps) {
             setSseHealth("ok");
             backoff = 1000;
             const evRaw = filterEvent(globalEvent.payload as unknown as Event, sessionIDRef.current);
-            if (!evRaw) continue;
+            if (!evRaw) {
+              // For permission/question events from descendant sessions, filterEvent returns null
+              // because it only accepts events from sessionIDRef.current. Re-check those event types
+              // with a descendant walk.
+              const ev = globalEvent.payload as unknown as { type: string; properties?: { sessionID?: string } };
+              if (
+                (ev.type === "permission.asked" || ev.type === "permission.updated" || ev.type === "question.asked") &&
+                ev.properties?.sessionID &&
+                ev.properties.sessionID !== sessionIDRef.current
+              ) {
+                const isDesc = await isSessionDescendant(ev.properties.sessionID, sessionIDRef.current, props.baseUrl);
+                if (isDesc) {
+                  const childEvRaw = filterEvent(globalEvent.payload as unknown as Event, ev.properties.sessionID);
+                  if (childEvRaw) applyReplEvents(Array.isArray(childEvRaw) ? childEvRaw : [childEvRaw]);
+                }
+              }
+              continue;
+            }
             applyReplEvents(Array.isArray(evRaw) ? evRaw : [evRaw]);
           }
         } catch {
@@ -925,11 +957,11 @@ export function App(props: AppProps) {
   const handlePermission = useCallback(async (answer: "once" | "always" | "reject") => {
     if (!permission) return;
     await props.client.postSessionIdPermissionsPermissionId({
-      path: { id: sessionID, permissionID: permission.permID },
+      path: { id: permission.sessionID, permissionID: permission.permID },
       body: { response: answer },
     }).catch(() => {});
     setPermission(null);
-  }, [permission, props.client, sessionID]);
+  }, [permission, props.client]);
 
   const handleQuestion = useCallback(async (answers: string[][]) => {
     if (!question) return;
