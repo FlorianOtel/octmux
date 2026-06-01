@@ -69,6 +69,20 @@ export function synthesizeSessionIdleEvents(): ReplEvent[] {
   return [{ kind: "session-idle" }, ...closeEvents];
 }
 
+/**
+ * Returns true if openParts currently contains any part with role "text" or
+ * "thinking" — i.e., a streaming text/reasoning block is in progress.
+ * Pure read; does not mutate openParts or seenPartIDs.
+ * Used by the Stage 4.5.3 redesigned reconciler (layer 3 guard) to refuse
+ * idle synthesis while live text streaming is happening.
+ */
+export function hasOpenStreamingPart(): boolean {
+  for (const role of openParts.values()) {
+    if (role === "text" || role === "thinking") return true;
+  }
+  return false;
+}
+
 // SDK part-type → Role mapping (assumptions based on SDK type inspection; confirm via live run):
 // | part.type    | message.part.delta field (assumed) | Role emitted    |
 // |--------------|-----------------------------------|-----------------|

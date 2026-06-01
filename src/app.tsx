@@ -6,7 +6,7 @@ import * as path from "path";
 import { LineEditor } from "./editor.ts";
 import { replaySession } from "./replay.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
-import { filterEvent, resetEventState, synthesizeSessionIdleEvents, type ReplEvent } from "./events.ts";
+import { filterEvent, resetEventState, synthesizeSessionIdleEvents, hasOpenStreamingPart, type ReplEvent } from "./events.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand, parseResyncCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
@@ -164,25 +164,42 @@ export function App(props: AppProps) {
   const runReconcilerPassRef = useRef<(() => Promise<void>) | null>(null);
   useEffect(() => {
     runReconcilerPassRef.current = async () => {
-      // 1. SSE silence detection
+      // Stage 4.5.3 redesigned reconciler: four-layer guard on idle synthesis.
+      // Layer 1 (trigger gate) + Layer 2 (recency) + Layer 3 (openParts) guard
+      // the idle synthesis path. Question/permission discovery runs unconditionally.
+
+      // Preamble: SSE silence detection (updates sseHealth state)
       if (isGeneratingRef.current && Date.now() - lastSseEventTimeRef.current > 8000) {
         setSseHealth(prev => prev === "reconnecting" ? prev : "silent");
       }
-      // 2. Idle synthesis
-      try {
-        const resp = await props.client.session.messages({ path: { id: sessionIDRef.current } });
-        const msgs = resp.data ?? [];
-        const anyPending = msgs.some(m =>
-          (m.parts ?? []).some(p =>
-            p.type === "tool" &&
-            (p.state?.status === "pending" || p.state?.status === "running")
-          )
-        );
-        if (!anyPending && isGeneratingRef.current) {
-          applyReplEvents(synthesizeSessionIdleEvents());
+
+      // Idle synthesis path: guarded by layers 1–4
+      // Layer 1: skip if SSE is healthy
+      if (sseHealth !== "ok") {
+        // Layer 2: skip if an SSE event arrived recently (within 5 s)
+        if (Date.now() - lastSseEventTimeRef.current >= 5000) {
+          // Layer 3: skip if a streaming text/reasoning part is open
+          if (!hasOpenStreamingPart()) {
+            // Layer 4: REST confirmation — original anyPending + isGenerating check
+            try {
+              const resp = await props.client.session.messages({ path: { id: sessionIDRef.current } });
+              const msgs = resp.data ?? [];
+              const anyPending = msgs.some(m =>
+                (m.parts ?? []).some(p =>
+                  p.type === "tool" &&
+                  (p.state?.status === "pending" || p.state?.status === "running")
+                )
+              );
+              if (!anyPending && isGeneratingRef.current) {
+                applyReplEvents(synthesizeSessionIdleEvents());
+              }
+            } catch {}
+          }
         }
-      } catch {}
-      // 3. Missed question discovery
+      }
+
+      // Question/permission discovery: run unconditionally (safe modal recovery, no stream mutation)
+      // 1. Missed question discovery
       try {
         const r = await fetch(`${props.baseUrl}/question`);
         if (r.ok) {
@@ -205,7 +222,8 @@ export function App(props: AppProps) {
           }
         }
       } catch {}
-      // 4. Missed permission discovery
+
+      // 2. Missed permission discovery
       try {
         const r = await fetch(`${props.baseUrl}/permission`);
         if (r.ok) {
@@ -226,12 +244,14 @@ export function App(props: AppProps) {
     };
   });  // re-assign every render so closure captures current refs/state
 
-  // Stage 4.5.3: Polling effect — runs reconciler every 3s while generating
+  // Stage 4.5.3 redesign: Polling reconciler — arms ONLY when SSE is degraded.
+  // In steady-state SSE, NO polling. Belt-and-suspenders:
+  // even when armed, the reconciler pass has its own recency + openParts guards.
   useEffect(() => {
-    if (!isGenerating) return;
+    if (!isGenerating || sseHealth === "ok") return;
     const t = setInterval(() => { runReconcilerPassRef.current?.(); }, 3000);
     return () => clearInterval(t);
-  }, [isGenerating]);
+  }, [isGenerating, sseHealth]);
 
   // One-shot: set up orchestra badge watcher. Must be declared BEFORE any effect that
   // references orchestraBadge (TDZ guard per feedback-react-effect-tdz.md).
@@ -586,6 +606,9 @@ export function App(props: AppProps) {
   }, [isGenerating, sessionID, props.client, renderer, refreshTokenUsage, runReplay]);
 
   const handleResync = useCallback(async () => {
+    // Ctrl-R / /resync triggers the guarded reconciler (see lines 166–244).
+    // Even if the user presses Ctrl-R during streaming, the reconciler's
+    // layer 2 and 3 guards prevent idle synthesis (recency + openParts check).
     await runReconcilerPassRef.current?.();
     await refreshTokenUsage(sessionIDRef.current);
   }, [refreshTokenUsage]);
