@@ -1079,6 +1079,9 @@ export function App(props: AppProps) {
       </Static>
       {tail && <Text>{formatLine(tail.role, tail.text, false)}</Text>}
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}
+      {/* Modal-bearing events (permission, question) bypass the renderer's output
+          gates by design — interactive prompts must always surface to the operator
+          regardless of /tools-output or /thinking-output toggle state. */}
       {permission && <PermissionModal title={permission.title} onAnswer={handlePermission} />}
       {question && <QuestionModal questions={question.questions} onAnswer={handleQuestion} />}
       {isCompacting && <CompactingModal />}
