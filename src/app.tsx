@@ -386,13 +386,19 @@ export function App(props: AppProps) {
       const token = firstLine.split(/\s/)[0];
       const all = expandCommands([...opencodeCommands.keys()].map(n => "/" + n));
       const filtered = all.filter(c => c.startsWith(token));
-      if (firstLine.includes(" ") && filtered.length === 1 && filtered[0] === token) {
+      if (firstLine.includes(" ")) {
         setSlashCompletion(null);
         return;
       }
+      // Sort: exact token match first, then alphabetical — ensures /brain beats /brain-abandon on TAB
+      const sorted = [...filtered].sort((a, b) => {
+        if (a === token) return -1;
+        if (b === token) return 1;
+        return a.localeCompare(b);
+      });
       setSlashCompletion(prev => ({
-        candidates: filtered,
-        selectedIdx: prev ? Math.min(prev.selectedIdx, Math.max(0, filtered.length - 1)) : 0,
+        candidates: sorted,
+        selectedIdx: prev ? Math.min(prev.selectedIdx, Math.max(0, sorted.length - 1)) : 0,
       }));
     };
     editor.on("changed", recompute);
