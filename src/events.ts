@@ -29,7 +29,8 @@ export type ReplEvent =
     }> }
   | { kind: "question-tool-detected"; sessionID: string; callID: string }
   | { kind: "session-compacting"; sessionID: string; compacting: boolean }
-  | { kind: "session-compacted"; sessionID: string };
+  | { kind: "session-compacted"; sessionID: string }
+  | { kind: "message-completed"; messageID: string };
 
 // Track user message IDs so we don't echo the user's own input back to them.
 // opencode fires message.part.updated for user messages too — we skip them.
@@ -46,12 +47,19 @@ const seenPartIDs = new Set<string>();
 // input streams in). Cleared on session switch via resetEventState.
 const detectedQuestionToolCallIDs = new Set<string>();
 
+// Tracks assistant messageIDs for which we've already emitted message-completed.
+// Prevents re-firing when OC broadcasts repeated message.updated events after
+// time.completed is first set (e.g. follow-up metadata updates). Cleared on
+// session switch via resetEventState().
+const completedAssistantMessageIDs = new Set<string>();
+
 // Reset event tracking state on session switch.
 export function resetEventState(): void {
   userMessageIDs.clear();
   openParts.clear();
   seenPartIDs.clear();
   detectedQuestionToolCallIDs.clear();
+  completedAssistantMessageIDs.clear();
 }
 
 /**
@@ -107,6 +115,13 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     const info = (event as EventMessageUpdated).properties.info;
     if (info.sessionID === sessionID && info.role === "user") {
       userMessageIDs.add(info.id);
+    }
+    if (info.sessionID === sessionID && info.role === "assistant") {
+      const completed = (info as { time?: { completed?: number | null } }).time?.completed;
+      if (completed != null && !completedAssistantMessageIDs.has(info.id)) {
+        completedAssistantMessageIDs.add(info.id);
+        return { kind: "message-completed", messageID: info.id };
+      }
     }
     return null;
   }

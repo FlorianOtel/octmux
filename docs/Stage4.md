@@ -2,8 +2,8 @@
 title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Haiku 4.5, via Actor subagent)
-updated_at: 2026-06-01--01-15
+updated_by: Claude Code (Claude Haiku 4.5 via /brain pipeline — Actor)
+updated_at: 2026-06-02--14-43
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -156,52 +156,481 @@ When finishing a phase:
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-06-01--01-15 — Stage 4.5.3: SSE reconciler + reconnect + manual resync + health badge
+### 2026-06-02--14-43 — Stage 4.5.7: per-message cost refresh + ticker reset
 
-**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent) — 2026-06-01--01-15
-**Commit(s):** `994952a`
+**Implemented by:** Claude Code (Claude Sonnet 4.6 — Planner; Claude Haiku 4.5 — Actor) via /brain pipeline — 2026-06-02--14-43
+**Commit(s):** `1e08d2b`
 
-**Why this hardening:**
+**A. Motivation and OC protocol context**
 
-Operator hit a wedged octmux session inside an Opus-4.7 /brain run. Investigation showed the OC daemon was waiting on a pending `question` tool with the AskUserQuestion payload persisted in `/question?session=...`, but octmux's UI never opened the question modal — and showed stale ticker/counters/queue-flush indicators. The previous Ctrl-t fix (commit `392d771`) closed ONE trigger of a deeper architectural fragility: octmux's UI is purely SSE-event-driven against a single-shot stream with no reconciler against OC's REST state. Any SSE drop (network blip, server-side backpressure, missed event for any reason) silently wedges the TUI.
+The OC protocol fires `session.idle` exactly once at the end of an assistant-message chain. In the investigated run (36 assistant messages over 10.5 minutes), this meant `Σ$` cost display was static — updated only when the entire pipeline completed. Operators working long-running multi-turn chains observed the running cost "stuck" at an old value while the spinner/ticker accumulated full pipeline wall time, creating false impression that no billing was happening during the 10+ minute chain. Root cause: both `refreshTokenUsage` and the `procTimes.generating` reset were wired exclusively to the `session-idle` handler in `applyReplEvents`.
 
-The triple-abort of the runaway session showed OC's orchestra prompt auto-retries through aborts, generating new tool calls (cost climbed $0.95 → $1.93 between the operator's report and Brain's hard stop). This made it operationally clear the fragility is independent of model misbehaviour or specific event types.
+**B. Implementation approach**
 
-**What changed:**
+New `message-completed` ReplEvent variant added to the `ReplEvent` union in `src/events.ts`. Module-scope `completedAssistantMessageIDs: Set<string>` tracks assistant messageIDs to prevent re-firing on repeated `message.updated` events after OC sets `time.completed`. The Set is cleared in `resetEventState()` on session switch. In `filterEvent`, the `message.updated` handler now reads assistant messages and emits `message-completed` at most once per messageID when `info.time?.completed` is non-null. In `src/app.tsx`, the `applyReplEvents` handler adds a new arm for `message-completed`: calls `refreshTokenUsage(sessionIDRef.current)` to update Σ$ incrementally + calls `setProcTimes(p => ({ ...p, generating: Date.now() }))` to reset the "generating" ticker to zero for the next logical turn. `isGenerating` remains untouched — the OC pipeline is still running; only the display timer resets.
 
-- New 3-second polling reconciler in `src/app.tsx` while `isGenerating === true`: polls `session.messages`, `/question`, `/permission`; synthesises missed `session.idle`, opens missed question/permission modals (mirroring SSE handler's permMode branch exactly).
-- SSE for-await loop wrapped in try/catch with exponential backoff reconnect (1s → 30s cap, reset on first event); calls `client.global.event({})` to obtain a fresh AsyncIterable; runs one reconciliation pass after reconnect.
-- `Ctrl-R` keybinding AND `/resync` slash command for manual full resync.
-- SSE health badge on status line (`| SSE ok` dim / `| SSE reconnect…` yellow / `| SSE silent` yellow).
-- New `synthesizeSessionIdleEvents()` export from `events.ts` so the reconciler's synthesised session-idle produces the same `block-end` events the real SSE handler does.
-- New shared helper `applyReplEvents()` in `app.tsx` so live SSE and reconciler synthesise route through the same renderer mutation code — guarantees `--multi-window` FIFO state is correctly closed regardless of source.
-- Comment block added to `events.ts` above `question.asked` and `permission.asked` handlers documenting property shapes match live OC daemon.
+**C. Ground-truth cost data table**
 
-**Why this is compatible with the Stage 4.5.1 pure-gate invariant + Stage 4.5.2 single-side-effect carve-out:**
+| Tier | OC Session ID | cost ($) | tokens_input | tokens_output | tokens_reasoning | cache_read | cache_write |
+|------|---------------|----------|--------------|---------------|------------------|------------|-------------|
+| Brain (Opus-4.7) | `ses_1785516e0ffe93IUMMdfoJDzZS` | $1.993335 | 41 | 23262 | 0 | 1841435 | 78538 |
+| Plan (free — sohoai/ollama-cloud/glm-5.1) | `ses_1784f1abbffe65fEMrJAUbHzGq` | $0.0 | 24264 | 538 | 324 | 0 | 0 |
+| Actor (free — sohoai/ollama-cloud/qwen3-coder-next) | `ses_1784caa22ffeZig8EU39QZGxTS` | $0.0 | 83257 | 1305 | 0 | 0 | 0 |
+| Reviewer (Sonnet-4.6) | `ses_1784bd40fffeJW3j02ShMKT6zm` | $0.05470815 | 5 | 870 | 0 | 17548 | 9701 |
 
-The reconciler does NOT call `renderer.setOutputEnabled(...)`. It does NOT call `_ensureWindow(...)` or any other window/FIFO lifecycle method. It only emits `block-end` events for already-open parts (via `applyReplEvents`) and updates React UI state. `endBlock` is idempotent on both renderers; `commitTurnEnd` is idempotent on both. The Stage 4.5.2 `_refreshLiveIdsAsync` kick path is untouched. Stage 4.4.3's lazy-on-block-start window lifecycle continues to be the exclusive window creation path.
+Note: non-Anthropic free tiers correctly show cost=$0 with non-zero tokens.
 
-**Multi-window re-entry verification:**
+**D. Three numbers, two gaps**
 
-1. **No new call to `renderer.setOutputEnabled(...)`** anywhere in the reconciler / SSE-reconnect / resync paths — grep confirms Stage 4.5.1 pure-gate preserved.
-2. **No new call to `_ensureWindow(...)`** outside `beginBlock` — reconciler does not touch it.
-3. **Reconciler's synthesised `session-idle` routes through `applyReplEvents`**, not direct `renderer.commitTurnEnd()`. This guarantees `block-end` events fire for any open parts — verified in `synthesizeSessionIdleEvents()` export.
-4. **`synthesizeSessionIdleEvents()` clears `openParts` and `seenPartIDs`** after walking them — matches `events.ts:197-198` behaviour exactly per Stage 4.5.1/4.5.2 contract.
-5. **`endBlock` idempotency relied upon** — no new guards in reconciler around the synthesised endBlock calls; both renderers already handle this via existing gate checks and early-returns.
-6. **No new render path depends on `_ensureWindow` being called from outside `beginBlock`** — Stage 4.4.3 lazy-creation invariant preserved.
-7. **The Stage 4.5.2 `_refreshLiveIdsAsync` kick is unmodified** — reconciler does not flip output gates and does not call setOutputEnabled.
-8. **`Ctrl-R` / `/resync` does NOT call `setOutputEnabled` or `_ensureWindow`** — only triggers reconciler pass + `refreshTokenUsage` (pure state reads).
+Status-bar live $2.78; telemetry.json $1.847182; DB sum $2.048043. Gap A: −$0.20 (T2 summariser ran at ~09:40:34 when brain.session.cost was ~$1.79; row grew to $1.993 by 09:41:04 — oconona cleanup-block ordering artifact; deferred). Gap B: +$0.73 (open mystery; hedged hypotheses: stale runningCost from earlier turns, grandchildren beyond one-level walk, SDK/DB skew; no fix attempted).
 
-**Files modified:**
-- `src/app.tsx` (SSE health state, applyReplEvents helper, runReconcilerPassRef + polling effect, SSE reconnect, handleResync callback, thread onResync to PromptInput)
-- `src/events.ts` (comment block + synthesizeSessionIdleEvents export)
+**E. UX root cause this stage fixes**
+
+`refreshTokenUsage` and `procTimes.generating` reset were both wired exclusively to the `session-idle` handler; correct for single-turn interactive use but produced two UX failures during long pipelines: (1) Σ$ frozen at old value while chain runs, (2) "generating" ticker accumulates full wall time instead of counting from zero on each message boundary. Fix: `message-completed` fires both updates at each assistant message boundary, so operators see Σ$ and timers refresh incrementally.
+
+**F. Dedup correctness argument**
+
+OC broadcasts `message.updated` repeatedly after `time.completed` is set (e.g. follow-up metadata updates). The `completedAssistantMessageIDs` Set guarantees at-most-once emission per messageID via the `!completedAssistantMessageIDs.has(info.id)` guard before emission and the `add(info.id)` before return. Bounded by message count per session (Set is cleared on session switch via `resetEventState()`). No memory leak.
+
+### 2026-06-01--22-00 — Stage 4.5.6: Bordered modal chrome for QuestionModal + PermissionModal
+
+**Implemented by:** Claude Haiku 4.5 (Actor, direct Brain spec — no /brain pipeline per operator's request) — 2026-06-01--22-00
+**Commit(s):** `9a7a478`
+
+**Motivation:** Stage 4.5.5 unblocked the question modal end-to-end (directory header now threaded everywhere), but operator-side testing surfaced a separate UX issue — the modal was opening but operators didn't recognise it as a modal. Root cause: `QuestionModal.tsx` and `PermissionModal.tsx` previously rendered as bare `<Box flexDirection="column">` with `<Text bold>` + dim numbered options. No border, no header label, no key hint, no visual distinction from inline scrollback content (streamed text, tool-call output). Compounded by OC's protocol behaviour: while the question tool is `status=running`, OC's `time.completed=null` keeps the assistant turn in-flight, and octmux faithfully shows the "generating" + "tools" tickers — operators interpreted this as "model still working" rather than "modal awaiting input". Live observed in OC session ses_17b53d0fcffeRdCTxw3CVo6JYf (cwd-bug-fix-test-too) where the operator did not realise the QuestionModal had already opened and was waiting on keystroke 1/2/3.
+
+**Fix — bordered chrome for both modals (gruvbox palette consistent with `src/components/StatusLine.tsx`):**
+
+- **QuestionModal.tsx:** wrap return JSX in `<Box borderStyle="round" borderColor="#83a598" paddingX={1}>`; add header line `▶ Question N/M — <header>` in blue (#83a598) bold; body `<Text bold color="#ebdbb2">` ivory; options block `flexDirection="column" marginTop={1}` with each option rendered as nested `<Text>` — bold yellow (#fabd2f) numbered prefix + label + dim description; footer `Press 1–N to answer` with `· X more after this` suffix when `questions.length > 1`. `useInput` handler, Props type, imports — unchanged.
+
+- **PermissionModal.tsx:** same chrome pattern but with amber border `#fe8019` (deliberately distinct from question blue so the operator immediately registers "warning, decision required" vs. informational). Header `▶ Permission requested` in amber bold; body `<Text bold color="#ebdbb2">{title}</Text>` ivory; footer with coloured key letters — bold yellow (#fabd2f) `y`, `a`, `n` interleaved with `= allow once`, `= always`, `= reject`. `useInput` handler unchanged.
+
+- **app.tsx ~line 1080:** 3-line invariant comment immediately above the `permission` / `question` render expressions documenting that modal-bearing events bypass the renderer's output gates by design — interactive prompts must always surface to the operator regardless of `/tools-output` or `/thinking-output` toggle state. Codifies the architectural separation between modal rendering (direct in App tree) and scrollback rendering (gated through `_outputEnabled`).
+
+**No behavioural change:** both modals' `useInput` handlers, Props types, and imports are byte-identical to pre-diff state. Only JSX `return` blocks changed. Diff total: 40 insertions, 8 deletions across 3 files.
+
+**Trade-off considered:** routing modals through `renderInlineMarkdown` was raised as an alternative but rejected — QuestionModal bypasses the renderer entirely (intentional Stage 4.5.6 invariant), so markdown layer-tuning would be the wrong level. Adding scrollback boundary markers via `renderer.commitSystemMessage("── Operator question ──")` before/after `setQuestion` was a viable Option B but deferred — the bordered modal alone delivers the visibility the operator needed; Option B can be added later as an audit-trail enhancement if requested.
+
+Build verified: `dist/octmux` mtime `2026-06-01 21:54` (newer than source). No new dependencies. Out-of-scope hard fence respected — events.ts, SubprocessStatus.tsx, Ctrl-C handler, session.abort semantics, reconciler logic all untouched.
+
+### 2026-06-01--21-30 — Stage 4.5.5: x-opencode-directory header + stall watchdog
+
+**Implemented by:** Claude Opus 4.7 (Actor under /brain) — 2026-06-01--21-30
+**Commit(s):** `d54560d`
+
+**Fix A — directory-header threading:**
+
+Root cause: OC daemon scopes `/question`, `/permission`, `/session` by `x-opencode-directory` header. Without it, these endpoints return `[]` silently. Confirmed live: `GET /question` returned `[]` in OC session ses_17b81f462ffeFFLuu2hRLkwNBq even though a registered question existed (que_e848a00330016chnFfeW6N39oF, callID toolu_01GTiqX3KisQ4KBwgBhogTzU); adding `x-opencode-directory: /mnt/nfs/Florian/Gin-AI/projects/octmux` made it appear.
+
+Fix: capture `process.cwd()` once in `src/index.tsx` at startup; pass to `createOpencodeClient({ baseUrl, directory: cwd })` so the SDK auto-attaches the header on all SDK calls including `client.global.event({})` (the SSE event stream). Thread `cwd` as a `cwd: string` prop on `<App>`. Add explicit `headers: { "x-opencode-directory": props.cwd }` to all 5 raw fetch sites (lines 217, 248, 522, 988 in app.tsx; line 32 in session-ancestry.ts). Add `cwd` parameter to `getSessionList` and `isSessionDescendant` in session-ancestry; update 3 call sites in app.tsx.
+
+Side effect: **Stage 4.5.4.1's descendant-aware modal surfacing (commit 66cb73b) has been silently broken since shipping** because the ancestry walk's `GET /session` returned `[]` without the directory header. Without sessions, the parentID chain walk always returned false. Live verification: `curl http://127.0.0.1:4096/session` returns `total sessions: 0` without the header; with the header, sessions appear. Stage 4.5.5 makes the 4.5.4.1 descendant path functional for the first time.
+
+**Fix B — stalled-generation watchdog:**
+
+Symptom: OC daemon ↔ Anthropic API hang produces an assistant message with `time.completed=null`, zero parts, zero tokens, zero cost. Live observed in the same session: msg_e847f5061001U48BIWbtMaS5N6 was in-flight for 10+ minutes in this state. The existing f899e91 spinner+timer + Ctrl-C UX surfaces that a turn is taking long but does not distinguish "stalled" from "slow".
+
+Fix: new useEffect at `src/app.tsx:302-327` arms a 30-second setInterval while `isGenerating === true`. On each tick, if `Date.now() - lastSseEventTimeRef.current > 180_000` ms AND `stallBannerShownRef` is not yet set, AND a REST cross-check (`client.session.messages`) confirms the newest assistant message has `parts.length === 0` AND `time.completed === null`, then `renderer.commitSystemMessage("Generation stalled — press Ctrl-C to abort")` is called and the ref is set. Reset to false on `isGenerating → false` so the next turn's stall can re-fire.
+
+No auto-abort; the operator's existing Ctrl-C path (synchronous `setIsGenerating(false)`) remains the abort mechanism. f899e91's "Interrupted: What next?" UX is unchanged.
+
+**Reviewer iter 1 found 2 blocker bugs (SDK shape):** the watchdog initially used `m.role` / `newest.time` but the SDK returns `Array<{ info: Message; parts: Part[] }>`. Fixed to `m.info.role` and `newest.info.time` in iter 2. Canonical reference: `refreshTokenUsage` at `src/app.tsx:412`. Memory note: see new `feedback-oc-directory-header.md`.
+
+---
+
+### 2026-06-01--18-20 — Stage 4.5.4.2: Question modal openParts gate removal + unconditional discovery loop
+
+**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent dispatched by Claude Opus 4.7) — 2026-06-01--17-55
+**Commit(s):** `81bb718`
+
+**Why this hotfix:**
+
+Live repro on `ses_17c415ad7ffedNz4F1UQnoy1Lw` (parent session, no descendants — so 4.5.4.1's descendant-aware path was not even involved). Assistant message `msg_e83c2da13001TWJe31vyLWHn46` ended with `tool=question status=running, callID=toolu_0167ud9mfETWCjZ6AgBQd4Mt`; OC's `/question` registry had the matching entry (`que_e83c3bec0001edF3fHbCQlyWC1`, 4 questions). Modal never opened. Operator on octmux Stage 4.5.4.1 binary, attached to the right session, with `permMode=allow` — none of the prior known issues could explain it.
+
+**Root cause (octmux, two layers):**
+
+1. **`src/events.ts:198-208`** (question-tool-detected emit, post-Stage 4.5.3 iter 4) required `openParts.get(toolPart.id) === "tool-call"` as a precondition for emission. `openParts` is only seeded by the `state.status === "pending"` branch above. When OC publishes the MCP-question tool part directly at `state.status === "running"` (which MCP-bridged tools may do because the tool begins running the moment the LLM dispatches it — no daemon-side `pending` lifecycle phase), the openParts gate fails silently and `question-tool-detected` is never emitted. The dedup intent (one-shot per callID) was already provided by `detectedQuestionToolCallIDs`; the openParts gate was a redundant defensive layer introduced in iter 3 that turned out to be too strict.
+
+2. **`src/app.tsx` reconciler arming useEffect** was gated on `isGenerating && sseHealth !== "ok"`. In steady-state healthy SSE the polling reconciler never armed, so the question/permission discovery REST poll (which 4.5.4.1 correctly fixed for descendant-session matching via `Promise.all` + `isSessionDescendant`) was unreachable. The inline comment "Question/permission discovery: run unconditionally (safe modal recovery, no stream mutation)" referred to within-pass unconditionality, NOT loop-arming unconditionality — a subtle mismatch between intent and implementation.
+
+**Fix (Track B):**
+
+##### Fix A — drop the openParts gate
+
+`src/events.ts:199-201`:
+
+```ts
+// before:
+if (state.status === "running" && toolPart.tool === "question"
+    && openParts.get(toolPart.id) === "tool-call"      // ← removed
+    && !detectedQuestionToolCallIDs.has(toolPart.id)) {
+
+// after:
+if (state.status === "running" && toolPart.tool === "question"
+    && !detectedQuestionToolCallIDs.has(toolPart.id)) {
+```
+
+The `detectedQuestionToolCallIDs` set (added in the same emit branch, deleted on tool `completed`/`error` transitions, cleared on `resetEventState`) is the real one-shot dedup. The openParts gate added no safety it provides — only fragility.
+
+##### Fix B — split the reconciler-arming useEffect; ungate discovery
+
+Factored question/permission discovery sub-blocks out of `runReconcilerPassRef` into a new `runDiscoveryPassRef`:
+
+- New ref `runDiscoveryPassRef = useRef<(() => Promise<void>) | null>(null)` declared immediately after `runReconcilerPassRef` (TDZ-safe per [[feedback-react-effect-tdz]]).
+- New `useEffect(() => { runDiscoveryPassRef.current = async () => { <question discovery> <permission discovery> } });` — no deps array, re-assigned every render.
+- `runReconcilerPassRef.current` now ends with `await runDiscoveryPassRef.current?.();` so discovery still runs from the degraded-SSE reconciler.
+- The single gated arming useEffect was SPLIT into two:
+  1. **Idle-synthesis loop** (unchanged): gated on `isGenerating && sseHealth !== "ok"`, 3-second interval, runs `runReconcilerPassRef` which includes the discovery delegation. This preserves the Stage 4.5.3 four-layer-guard semantics.
+  2. **Discovery loop** (new): empty deps array, fires `runDiscoveryPassRef.current?.()` immediately on mount + every 5 seconds thereafter, regardless of SSE health or `isGenerating` state. Mount-time fire catches pre-existing pending questions/permissions on resume/fork (OQ-B1: yes).
+
+Idempotency when both loops fire concurrently (degraded SSE + isGenerating): preserved by the existing `oldest.id !== questionIDRef.current` / `permissionIDRef.current` checks. No race.
+
+##### Files modified
+
+- `src/events.ts` (-1: openParts gate removed)
+- `src/app.tsx` (+22, -2: runDiscoveryPassRef declaration + assignment useEffect + reconciler delegation + split arming useEffects)
+- `dist/octmux` rebuilt; not committed (gitignored).
+- `docs/Stage4.md` (this section appended + frontmatter refresh — left uncommitted for next-session pickup per established pattern).
+
+##### Verification
+
+Live repro is the test: after restarting octmux on the new binary and attaching to a session with a pending MCP question, the modal should appear within 5 seconds of mount (cold-start case) or instantly via SSE (warm case). The fact that the SSE event path now fires regardless of OC's pending/running lifecycle for tool parts is the primary fix; the 5-second discovery loop is the safety net for missed/dropped SSE events.
+
+##### Multi-track context
+
+Track B of a two-track /brain. Track A was the upstream OC daemon fix (subagent session.create now inherits parent's directory + workspaceID — addresses the systemic root cause that motivated Stage 4.5.4.1's surface-level workaround). Track A ships as a PR-ready commit in the operator's OC fork at `~/Gin-AI/projects/opencode` branch `fix/subagent-session-directory-inheritance` — not part of octmux's history but documented at `~/Gin-AI/tmp/opencode-upstream-fix.md` for PR submission.
+
+---
+
+### 2026-06-01--15-22 — Stage 4.5.4: Slow-generation indicator + Ctrl-C "Interrupted" UX + early-Ctrl-C abort
+
+**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent dispatched by Claude Opus 4.7) — 2026-06-01--15-22
+**Commit(s):** `f899e91`
+
+Three UX improvements surfaced by an OC daemon ↔ Anthropic API hang observed during Stage 4.5.3 iteration-4 verification. Live evidence: OC session `ses_17cdba9cfffeC5A6FQLkMAFYtM`, `msg[62]` in-flight for **7.8 minutes** with `parts=0, tokens.input=0, tokens.output=0, cost=$0.00`. The hang is server-side (OC's HTTP call to Anthropic was not progressing). Octmux correctly showed `[generating…]` but the operator had:
+- No visibility into how long the call had been silent
+- No "Interrupted" feedback after Ctrl-C
+- A window after-submit-before-first-text-part where Ctrl-C fell through to the double-tap exit path instead of aborting
+
+The OC-side hang itself is out of scope for this work (separate /brain). This entry covers the octmux UX gaps.
+
+##### A. Slow-generation indicator — `generating` ProcLine in SubprocessStatus
+
+The existing `SubprocessStatus` component (`src/components/SubprocessStatus.tsx`) renders animated spinner + M:SS timer lines above the input chrome for `thinking` and `tools` proc states. Extended to render a third `generating` ProcLine driven by a new `procTimes.generating: number | null` field.
+
+State changes in `src/app.tsx`:
+- `procTimes` shape extended: `{ thinking, tools, generating: number | null }`. All `setProcTimes(...)` reset sites updated (session-idle handler at line 446 and `switchSession` callback at line 640).
+- New `useEffect([isGenerating])` syncs `procTimes.generating` with `isGenerating` via `===null` guard to suppress redundant setState. The guard matters because `setIsGenerating(true)` is now called from multiple sites (per change C); the effect must be idempotent.
+
+Component changes in `src/components/SubprocessStatus.tsx`:
+- Signature accepts `generating: number | null`; null-check covers all three; render adds `<ProcLine label="generating" startTime={generating} />`. The `ProcLine` already had spinner + timer logic; no changes there. `padEnd(10)` accommodates the 10-char "generating" label exactly.
+
+Inline `[generating…]` scrollback indicator removed (was at the post-tail / pre-modal slot). All generation feedback now lives in `SubprocessStatus`.
+
+##### B. "Interrupted: What next?" feedback after Ctrl-C abort
+
+In the Ctrl-C handler's `isGenerating` branch (`src/app.tsx:611-622`), after the iteration-3 abort + state-reset sequence (`setIsGenerating(false)`, `setLastSubmitted("")`, then the five PromptInput-disable flag resets), the last statement before `return;` now commits a system message:
+
+```ts
+renderer.commitSystemMessage("Interrupted: What next?");
+```
+
+Renders as a dim `→ Interrupted: What next?` line in scrollback, matching the existing `commitSystemMessage` UX used for `tool_call=false` warnings, `/new`/`/compact` banners, etc. Matches Claude Code's Ctrl-C UX pattern.
+
+##### C. Early-Ctrl-C abort — synchronous `setIsGenerating(true)` in handleSubmit
+
+Previously `isGenerating` only became `true` when the SSE `generating` event fired, which is bound to the first TEXT part opening (`src/events.ts:148`). For:
+- Reasoning-first models (Opus 4.7 with extended thinking), reasoning parts come before text — `isGenerating` stayed false during the entire reasoning phase
+- Hung calls, no parts ever arrive — `isGenerating` stayed false until session-idle (which itself never fires when there's no completion)
+
+The Ctrl-C handler's `if (isGenerating)` branch therefore did NOT fire in the window between submit and the first text part. Operators hit Ctrl-C expecting a fresh-turn abort and instead got the double-tap exit prompt.
+
+Fix: `setIsGenerating(true)` immediately before the OC RPC in both `handleSubmit` paths:
+- Before `client.session.promptAsync(...)` at `src/app.tsx:908` (default text submit)
+- Before `client.session.command(...)` at `src/app.tsx:882` (slash-command-forward path for `/brain`, `/duo`, etc.)
+
+Client-side-only slash command handlers (`/exit`, `/new`, `/compact`, `/sessions`, `/fork`, `/resync`, `/rename`, `/model`, `/help`, `/show`, output-gate toggles) return early before reaching these sites — none receive the synchronous setIsGenerating(true). Existing catch blocks at both RPC sites already call `setIsGenerating(false)` on error, so no double-toggle issue.
+
+##### Files modified
+
+- `src/app.tsx` (3 changes: procTimes shape + new useEffect; commitSystemMessage after Ctrl-C abort; two synchronous setIsGenerating(true) sites in handleSubmit; inline [generating…] removed; SubprocessStatus call site updated).
+- `src/components/SubprocessStatus.tsx` (signature + render extended with `generating`).
+- `dist/octmux` rebuilt; not committed (gitignored).
+- `docs/Stage4.md` (this section appended + frontmatter refresh — left uncommitted for next-session pickup per the established pattern).
+
+---
+
+### 2026-06-01--17-05 — Stage 4.5.4.1: Surface permission/question modals for descendant (subagent) sessions
+
+**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent dispatched by Claude Opus 4.7) — 2026-06-01--16-50 (iter 1 + iter 2)
+**Commit(s):** `66cb73b`
+
+**Why this fix:**
+
+After Stage 4.5.4 shipped, a `/brain` Planner subagent dispatched against parent session `ses_17cdba9cfffeC5A6FQLkMAFYtM` hung indefinitely on its first turn. SoHoAI gateway log showed the model returned 200 OK in ~1 s with 5 parallel `read` tool_use blocks; octmux UI sat on `[generating…]` for 60+ minutes with no modal, no progress. Live REST probe revealed 4 `external_directory` permission asks pending on the **child** session, none on the parent. Operator had no way to see or answer them — the deferred in OC's permission layer (`permission/index.ts:209`, `Deferred.await`) never resolved.
+
+**Root cause (octmux side, two-layer):**
+
+1. **`src/events.ts:filterEvent`** rejected every `permission.asked` / `permission.updated` / `question.asked` event whose `properties.sessionID` was not the currently-attached parent session ID — a strict-equality gate. The Planner subagent runs in a **child** session (`parentID = parent`); its permission events carry the child's `sessionID` and were silently dropped on the floor. Same shape applied to the reconciler poll's `/permission` and `/question` REST consumers in `src/app.tsx`.
+2. **`src/app.tsx:handlePermission` and the auto-allow/auto-deny SSE branches** passed the parent's `sessionID` as `path.id` to `postSessionIdPermissionsPermissionId(...)`. Even if Layer 1 had been fixed first, the reply URL would have hit the parent session — which doesn't own the pending permission — so the child would have stayed stuck regardless. Both layers had to ship together.
+
+The OC daemon itself was doing the right thing — publishing `permission.asked` with the correct child sessionID and registering the pending permission against the child. Octmux was the consumer that mis-routed everything.
+
+**Fix:**
+
+##### Layer A — accept events from descendant sessions
+
+New file `src/utils/session-ancestry.ts`:
+- Module-scope cached `GET /session` list, 5 s TTL.
+- `knownMissIDs: Set<string>` (cleared on each refresh) prevents repeated revalidations of a truly unknown ID within one cache window.
+- `isSessionDescendant(candidate, ancestor, baseUrl)`: walks `parentID` chain up to depth 5; on first cache miss for `candidate`, force-refreshes once and retries (one-shot anti-stale-miss). Returns `false` after one failed revalidation.
+
+`filterEvent` stays synchronous — async ancestry walking would have cascaded through every SSE call site. Instead, the looser check lives in `src/app.tsx`'s SSE consumer:
+- When `filterEvent` returns `null` AND the incoming event type is `permission.asked` / `permission.updated` / `question.asked` AND `properties.sessionID` is not the parent's, `await isSessionDescendant(...)`. If descendant, re-call `filterEvent` with the **child's** `sessionID` so its property-extraction branches succeed, then `applyReplEvents`.
+- The reconciler poll loops over `/permission` and `/question` apply the same logic via `Promise.all` + index-aligned filter (`flags.map((_, i) => flags[i])`). When synthesising the recovery event for `applyReplEvents`, the second argument to `filterEvent` is `oldest.sessionID` (the child), NOT `sessionIDRef.current` — Reviewer caught this on iteration 1 (`PLAN.md` Step 7 had drifted to use the parent ID at both reconciler call sites; iteration 2 fixed both lines).
+
+Strict-equality gates on `session.idle` / `session.error` / `message.part.*` events were **deliberately preserved** — we do not want child-session streaming output (text, tool calls, reasoning) to leak into the parent's viewport. Only modal-bearing events propagate.
+
+##### Layer B — reply to the permission's own sessionID
+
+- `permission` React state shape extended to carry `sessionID` in addition to `permID` and `title`.
+- `handlePermission` modal reply path uses `permission.sessionID` for `path.id`.
+- SSE auto-allow / auto-deny branches in `applyReplEvents` use `ev.sessionID` (already present on the `permission-asked` ReplEvent variant) for `path.id`.
+
+Question reply needs no path fix — `POST /question/{reqID}/reply` has no sessionID in the URL.
+
+##### Files modified
+
+- `src/utils/session-ancestry.ts` — new file (~106 lines): cache + `isSessionDescendant` walk.
+- `src/app.tsx` — `permission` state shape + SSE descendant-aware re-call + reconciler `Promise.all` ancestry filter + correct reply-path `sessionID` in 3 sites (handlePermission, auto-allow branch, auto-deny branch).
+- `dist/octmux` rebuilt; not committed (gitignored).
+- `docs/Stage4.md` (this section appended + frontmatter refresh — left uncommitted for next-session pickup per the established pattern).
+
+##### Verification
+
+- Live repro present at investigation time: `ses_17cdba9cfffeC5A6FQLkMAFYtM` parent + 2 child Planner sessions with 8 pending `external_directory` asks. Operator confirmed they had `permission` set to `allow` globally; root cause was the agent ruleset's specific `external_directory: ask` override (`*=allow` defeated by more-specific `external_directory: ask` rule) — a config-level inheritance, not the bug. The bug was octmux dropping the asks before they could be auto-allowed by `permMode === "allow"`.
+- Acceptance test: dispatch a fresh `/brain` Planner against the rebuilt binary in a project whose subagent will read external paths; PermissionModal should appear; selecting "always" should auto-allow the path family for the rest of the session; subagent unblocks and continues.
+
+##### Multi-window safety
+
+`PermissionModal` and `QuestionModal` live in the main App Ink tree; `TmuxWindowRenderer` only routes block-streaming output to FIFOs. Even with `--multi-window` enabled and a sibling `tools` window, modals render to the operator's main interaction window. This fix changes no rendering path.
+
+---
+
+### 2026-06-01--11-30 — Stage 4.5.3: Redesigned reconciler with four-layer guard (SSE + polling + resync) — iterations 2 + 3 + 4
+
+**Implemented by:** Claude Code (Claude Haiku 4.5, via Actor subagent dispatched by Claude Opus 4.7) — 2026-06-01--11-26 (iter 2), 2026-06-01--13-45 (iter 3), 2026-06-01--14-19 (iter 4)
+**Commit(s):** `8ee7b36` (iter 2), `fc8c5ae` (iter 3 — MCP question modal + Ctrl-C un-wedge), `6afdda6` (iter 4 — use tool callID not partID for registry match)
+
+**Why this redesign:**
+
+The first Stage 4.5.3 attempt (commit `994952a`) introduced a 3-second polling reconciler to handle missed SSE events. However, the implementation had a critical flaw: the reconciler's idle-detection logic relied solely on `anyPending` (inspection of `tool` parts), which is insufficient for pure-text assistant turns. During a text-only streaming response, `anyPending` is false (no tool parts in pending/running state), causing the reconciler to fire `synthesizeSessionIdleEvents()` at the 3-second polling mark. This cleared the `openParts` map mid-stream, and all subsequent `message.part.delta` events were silently dropped at the `filterEvent` guard (`openParts.get(partID)` returned undefined). Operators reported 5–25% of long messages were lost before reaching the UI.
+
+The redesign eliminates unconditional polling during steady-state SSE. Instead, the reconciler arms only when SSE health degrades, and guards the idle-synthesis path with three additional layers of defense.
+
+**The four-layer guard design:**
+
+1. **Layer 1 — SSE health gate:** Polling reconciler (3s interval) runs only when `sseHealth !== "ok"` (i.e., during SSE reconnect or >5s silence). Steady-state good SSE has zero polling overhead.
+
+2. **Layer 2 — Recency guard:** Inside the reconciler, idle synthesis only fires if the last SSE event was delivered >5 seconds ago (`Date.now() - lastSseEventTime > 5000`). This prevents a race where the reconciler fires just before SSE recovers.
+
+3. **Layer 3 — Active stream inspection:** Before synthesizing idle, call the new `hasOpenStreamingPart()` pure-read helper (exported from `src/events.ts`). This inspects all open parts in the `openParts` map for any text or reasoning blocks currently streaming. If true, idle synthesis is skipped — the stream is still active, even if it has no pending tool parts.
+
+4. **Layer 4 — REST fallback check:** As a final safety net, poll `/session/{id}?query=anyPending` via REST. If `anyPending` is true, skip idle synthesis.
+
+Together, these four guards prevent the reconciler from firing `synthesizeSessionIdleEvents()` during any active text or reasoning stream.
+
+**New helper in `src/events.ts`:**
+
+```typescript
+export function hasOpenStreamingPart(): boolean {
+  // Pure read: returns true if openParts contains any text or reasoning block
+  for (const role of openParts.values()) {
+    if (role === "text" || role === "thinking") {
+      return true;
+    }
+  }
+  return false;
+}
+```
+
+**Changes to reconciler polling effect (`src/app.tsx`):**
+
+- The `sseHealth` state is updated: `ok` (steady-state), `reconnecting` (attempting reconnect), `silent` (>5s no event).
+- Polling effect dependency changed from `isGenerating` alone to a composite: `[isGenerating, sseHealth]`.
+- When `isGenerating && sseHealth !== "ok"`, the 3-second interval runs; when `sseHealth === "ok"`, the interval is cleared (no polling).
+- Inside the reconciliation pass, idle synthesis gates on `lastSseEventTimeRef.current` (Layer 2), `hasOpenStreamingPart()` (Layer 3), and REST anyPending check (Layer 4) before calling `synthesizeSessionIdleEvents()`.
+
+**Why this is compatible with Stage 4.5.1 pure-gate invariant + Stage 4.5.2 single-side-effect carve-out:**
+
+Unchanged — the reconciler does NOT call `renderer.setOutputEnabled(...)` or `_ensureWindow(...)`; it only emits `block-end` events via `applyReplEvents()` and reads REST state. The Stage 4.5.2 `_refreshLiveIdsAsync` kick is untouched. Stage 4.4.3 lazy-on-block-start window lifecycle remains the exclusive window creation path.
+
+**Regression history:**
+
+The first Stage 4.5.3 implementation (commit `994952a`) deployed a 3-second polling reconciler that ran unconditionally while `isGenerating === true`. The idle-detection branch checked `anyPending` (tool-part inspection only) to decide whether to synthesize `session.idle`. For assistant turns containing only text or reasoning output (no tool calls), `anyPending` is false during the entire streaming phase — it only becomes true when the *next* turn's tool calls arrive. At the 3-second polling mark, the reconciler fired `synthesizeSessionIdleEvents()`, which cleared the `openParts: Map<partID, Role>` state. All subsequent `message.part.delta` SSE events for that text/reasoning part failed the `filterEvent` guard at `openParts.get(partID)` (undefined), and their content was silently dropped. Operators observed 5–25% loss on messages longer than ~3 seconds to stream.
+
+The redesigned Stage 4.5.3 (commit `8ee7b36`) addresses the root cause: never rely on tool-part state alone to infer session idleness. The four-layer guard ensures the reconciler cannot fire idle synthesis while *any* text or reasoning part is actively streaming.
+
+**Multi-window safety verification (six invariants):**
+
+1. **Polling is conditional, not unconditional:** The reconciler interval runs only when `sseHealth !== "ok"`. Steady-state SSE has zero polling.
+2. **Idle synthesis is triple-guarded at the source:** Before calling `synthesizeSessionIdleEvents()`, the reconciler checks (a) `lastSseEventTime` recency, (b) `hasOpenStreamingPart()` result, (c) REST anyPending fallback. All three must pass.
+3. **No new call to `renderer.setOutputEnabled(...)`** anywhere in reconciler / SSE-reconnect / resync paths.
+4. **No new call to `_ensureWindow(...)`** outside `beginBlock`.
+5. **Reconciler's synthesised `session-idle` routes through `applyReplEvents`**, not direct renderer calls.
+6. **`endBlock` idempotency relied upon** — no new guards in reconciler around synthesised endBlock calls; both renderers handle via existing gate checks and early-returns.
+
+**Files modified (iteration 2 — commit `8ee7b36`):**
+- `src/app.tsx` (SSE health state with conditional polling, three-layer guard inside reconciler, applyReplEvents helper, runReconcilerPassRef + effect, SSE reconnect, handleResync callback, onResync threading)
+- `src/events.ts` (new `hasOpenStreamingPart()` export, comment blocks on question/permission handlers)
 - `src/keybindings.ts` (Ctrl-R handler)
 - `src/commands.ts` (parseResyncCommand)
 - `src/command-registry.ts` (/resync entry)
-- `src/components/PromptInput.tsx` (thread onResync prop)
+- `src/components/PromptInput.tsx` (onResync prop threading)
 - `src/components/StatusLine.tsx` (sseHealth prop + badge rendering)
-- `docs/Stage4.md` (this entry + frontmatter)
-- `docs/design.md` (NEW — cross-cutting design principles)
+- `docs/Stage4.md` (this completely rewritten entry + frontmatter refresh)
+- `docs/design.md` (refreshed Principles 1 and 3, removed first-attempt language)
+
+---
+
+#### Iteration 3 (commit `fc8c5ae`, 2026-06-01--13-45) — MCP question modal + Ctrl-C un-wedge
+
+The four-layer guard in iteration 2 fixed the streaming-text wedge, but live testing exposed two follow-on failures that iteration 2 did not cover. Both are downstream of the same architectural mismatch: opencode delivers some events as `message.part.updated` shadow carriers rather than as the first-class `question.asked` / `permission.asked` SSE events that the reconciler is built around.
+
+##### Bug 2 (primary failure) — MCP question modal never opens
+
+**Symptom.** Operator runs `/brain` against opencode; the Opus-driven Phase-0 subagent calls its `AskUserQuestion` equivalent; octmux shows a streaming `tool=question` block in the chat but no question modal opens. The operator has no in-band way to answer; the model stalls awaiting `tool_result`. Permissions are set to `ask` mode; SSE health is `ok`.
+
+**Root cause.** Two interlocking facts:
+
+1. opencode does **not** emit the SSE `question.asked` event for the MCP-tool-style `question` carrier. The model's tool call surfaces as `message.part.updated` with `part.type=tool, tool=question, state.status=running`. `filterEvent` in `src/events.ts` (pre-fix) handles this exactly like any other tool call — opens a tool-call block and renders the streaming JSON input as tool output. No question event fires.
+2. The Stage 4.5.3 iteration-2 reconciler is structurally gated on `sseHealth !== "ok"`. The question-discovery branch (poll `/question`, synthesise a missed event) was correct, but in steady-state healthy SSE the reconciler interval is never armed — the whole branch is unreachable.
+
+Empirical evidence: the MCP question IS in opencode's `/question` registry with a real `que_…` requestID and the exact modal-friendly `questions[]` shape that the existing `QuestionModal` consumes. The back-reference `tool: { messageID, callID }` links each registry entry to its tool part. So the missing piece is purely discovery: detect the MCP-question carrier and fire a one-shot registry lookup.
+
+**Fix.** Add a side-channel SSE detector that runs whether or not the reconciler is armed.
+
+In `src/events.ts`:
+- New ReplEvent variant `{ kind: "question-tool-detected"; sessionID: string; callID: string }`.
+- New module-scope `detectedQuestionToolCallIDs: Set<string>` (cleared in `resetEventState`; also cleared on each tool's `completed` / `error` transition so the set stays bounded to in-flight question tools, typically ≤1).
+- In `filterEvent`'s tool-part branch, when `state.status === "running" && toolPart.tool === "question"` and the callID has not been detected yet, return the new event and add the callID to the dedupe set. Detection happens on the `running` transition (not `pending`) because the opencode `/question` registry is only populated after the MCP handler receives the dispatched tool call.
+
+In `src/app.tsx applyReplEvents`:
+- New branch for `question-tool-detected` that fires a background `GET /question` (unfiltered — the `directory` filter is keyed by opencode's per-session `projectID` which mismatches `session.directory` for orchestra sessions), finds the entry by `(sessionID, callID)`, and calls `setQuestion({ reqID, questions })`. The existing `questionIDRef` dedupe prevents reopening an already-active modal; the existing modal-answer path (`POST /question/{reqID}/reply`) is unchanged.
+
+The reconciler stays disarmed under healthy SSE — no change to the iteration-2 gating. The MCP-question path is a new SSE-side detection, not a polling revival.
+
+##### Bug 1 (escape-hatch safety net) — Ctrl-C left octmux input-dead
+
+**Symptom.** With Bug 2 unfixed, the operator's only escape from a stalled MCP question was Ctrl-C. The server-side abort succeeded cleanly (tool transitioned to `status=error`; message `info.error = MessageAbortedError`), but the client-side state left octmux functionally wedged: only the App-level Ctrl-C handler still responded, normal typing did nothing. The operator's only recovery was Ctrl-C twice to trigger the double-tap exit (i.e. kill the whole TUI).
+
+**Root cause.** Two contributing mechanisms that share a single trigger.
+
+1. **Editor backpressure.** The Ctrl-C handler at `src/app.tsx:559-582` (pre-fix) called `editor.loadText(lastSubmitted)` to restore the previously-submitted text into the buffer. For a `/brain ...` invocation, `lastSubmitted` is the *full* skill body — ~26 KB / ~500 lines. `loadText` splits on `\n` and emits one `"changed"` event; PromptInput's `lines.map(...)` then creates ~500 `<Text>` elements for Ink to measure and reconcile. The reconciler exceeds the stdin event arrival rate and keystrokes appear dropped (they are not actually dropped — they are buried behind the layout queue). If `lastSubmitted` starts with `/` (as `/brain ...` does), the first `"changed"` emission also triggers `SlashCompletionOverlay`, which registers its own `useInput` and contends for the same stdin stream.
+2. **PromptInput disabled by stale modal/compacting flag.** Operator clarified after a second test that the wedge persisted even after the initial reconciler backlog should have drained: only App-level Ctrl-C responded; PromptInput's keystroke handler was inactive. PromptInput's `useInput` is registered with `{ isActive: !disabled }`, and `disabled = !!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker`. With no visible modal, the most likely path is a race during abort cleanup that leaves one of these flags truthy (e.g. a `session.updated` event with a transient compacting time field, or a `permission.asked` event arriving moments after the abort fires).
+
+**Fix.** Drop the `editor.loadText` call entirely and explicitly reset every flag that controls `PromptInput.disabled` whenever Ctrl-C is pressed during in-flight generation:
+
+```ts
+if (isGenerating) {
+  props.client.session.abort({ path: { id: sessionID } }).catch(() => {});
+  setIsGenerating(false);
+  setLastSubmitted("");
+  // Defensive: ensure PromptInput cannot be left disabled by a stale modal
+  // or stray session.updated event. Ctrl-C-during-generation explicitly
+  // means "bail to a fresh prompt"; any modal in flight is intentionally
+  // dismissed. The non-isGenerating Ctrl-C branches below stay unchanged.
+  setPermission(null);
+  setQuestion(null);
+  setModelPicker(null);
+  setSessionPicker(null);
+  setIsCompacting(false);
+  return;
+}
+```
+
+Editor is left in its post-submit empty state (no `loadText`, no `clearBuffer` needed — pendingQueue-while-generating is a separate state, not the editor's `lines`). PromptInput renders one line, so there is no reconciler backpressure. No buffer starts with `/`, so no SlashCompletionOverlay auto-opens. Every disable-causing flag is explicitly cleared, so PromptInput's `useInput` is guaranteed `isActive: true`.
+
+The non-`isGenerating` Ctrl-C branches (clear-buffer-if-text, double-tap-exit) are untouched — Ctrl-C when not generating still preserves any modal that is legitimately open.
+
+**Why this is the safety net, not the main fix.** With Bug 2 fixed, the modal opens automatically and the operator answers in-band. They never need to Ctrl-C in this scenario. Bug 1 exists for the case where Bug 2's lookup races, opencode emits an unexpected variant, or future regressions reintroduce a wedge. A safe Ctrl-C is the floor.
+
+##### Multi-window safety (operator constraint)
+
+Operator required confirmation that the modal-opening path is re-entry safe under `--multi-window` — specifically that if the operator has killed the "tools" output window in some earlier turn, the question modal must still appear in the operator's main interaction window, not be lost to a defunct pane.
+
+Confirmed safe by construction. `QuestionModal` (`src/components/QuestionModal.tsx`) is a React component mounted in the main App JSX tree at `src/app.tsx:952` via `{question && <QuestionModal ... />}`. Ink renders this directly to the operator's main stdout in both single-window and `--multi-window` modes. The `TmuxWindowRenderer` only routes block-streaming output (`beginBlock/appendToBlock/endBlock` for roles with an `OUTPUT_KEY` entry) to FIFOs and secondary windows. React component renders bypass it entirely. The new `setQuestion(...)` call from `applyReplEvents`:
+- triggers a React state update — no `beginBlock`, no FIFO write, no `_ensureWindow`
+- mounts `QuestionModal` via Ink to the main stdout
+- has zero dependence on `_fifos`, `_liveIds`, or any window-lifecycle state
+
+If the operator has killed the "tools" window, the question modal still appears in their main interaction window. No additional safeguards required.
+
+##### Files modified (iteration 3 — commit `fc8c5ae`)
+
+- `src/events.ts` — added `question-tool-detected` ReplEvent variant; added module-scope `detectedQuestionToolCallIDs: Set<string>` with clear/add/delete maintenance across `resetEventState`, the running guard, and the completed/error transitions.
+- `src/app.tsx` — new `question-tool-detected` branch in `applyReplEvents` (one-shot `/question` fetch, match by `(sessionID, callID)`, `setQuestion`); rewritten Ctrl-C-during-isGenerating branch (removed `editor.loadText`, cleared `lastSubmitted`, defensive reset of all five PromptInput-disable flags).
+- `dist/octmux` rebuilt; not committed (gitignored).
+- `docs/Stage4.md` (this section appended; backfilled with commit hash per operator instruction — left uncommitted for next-session pickup).
+
+---
+
+#### Iteration 4 (commit `6afdda6`, 2026-06-01--14-19) — use tool callID, not partID, for question registry match
+
+Operator-tested commit `fc8c5ae` against live session `ses_17cea1503ffeJ7TdRC6yGFIbwF`: bug persisted. Tool spinner still spun; no modal opened. Investigation revealed a two-ID confusion that iteration 3's Actor reported having verified but had not.
+
+##### Root cause
+
+OpenCode's `message.part.updated` payload for a `tool` part carries TWO distinct ID fields:
+- `id` — the part's own database ID, prefixed `prt_` (e.g. `prt_e83192971001U6siLjvs80ovg1`).
+- `callID` — the model's tool-call ID, prefixed `toolu_` (e.g. `toolu_016km24yKxyDVss4Y8yjbkpn`). This is a top-level field on the tool part, **not** inside `state`.
+
+OpenCode's `/question` registry entry's back-reference to its originating tool part is `tool.callID = toolu_…` (the model's tool-call ID, not the part's database ID). For the live session:
+- Tool part: `id=prt_e83192971001U6siLjvs80ovg1, callID=toolu_016km24yKxyDVss4Y8yjbkpn`.
+- Registry entry: `id=que_e8319737e001tjYue6g5xhJK7L, tool.callID=toolu_016km24yKxyDVss4Y8yjbkpn`.
+
+Iteration 3's emit in `src/events.ts` was:
+```ts
+return { kind: "question-tool-detected", sessionID: toolPart.sessionID, callID: toolPart.id };
+```
+This sent the `prt_…` value as the event's `callID`. In `src/app.tsx`, the handler's match comparison `q.tool?.callID === ev.callID` compared `toolu_…` (from the registry) against `prt_…` (from the event) — **always false**. `setQuestion(...)` was therefore never called.
+
+##### Fix
+
+Two-line correction in `src/events.ts`:
+
+1. Extend the inline `toolPart` cast (lines 175-180) to declare the top-level `callID: string` field:
+   ```ts
+   const toolPart = part as unknown as {
+     id: string; messageID: string; sessionID: string;
+     type: "tool"; tool: string;
+     callID: string;   // ← added
+     state: { status: string; input?: unknown; raw?: string; output?: string; error?: string; title?: string };
+   };
+   ```
+
+2. In the `question-tool-detected` emit block, change `callID: toolPart.id` to `callID: toolPart.callID`:
+   ```ts
+   return {
+     kind: "question-tool-detected",
+     sessionID: toolPart.sessionID,
+     callID: toolPart.callID,
+   };
+   ```
+
+The `detectedQuestionToolCallIDs` dedupe `Set` continues to key on `toolPart.id` (the part's stable database ID). The set is about whether THIS part has already triggered an emission; using the part ID is correct. Only the value carried OUT of the emission needed to change.
+
+`src/app.tsx` is unchanged. The handler's match logic was correct all along; it was just receiving wrong data.
+
+##### Process failure (for posterity)
+
+The iteration-3 PLAN.md explicitly flagged this exact risk: "**`toolPart.id` vs `callID`.** Live evidence: both are equal `toolu_…` for MCP questions. Actor should verify against one live message in the OC API before committing." That risk note was wrong on its facts (the "live evidence" cited only listed one ID field; both IDs ARE in the payload but I had not noticed the `callID` was separate at the top level). The iteration-3 Actor reported "verified", but did not actually inspect a live tool part to confirm. Reviewer 1 and Reviewer 2 missed it because the local cast and the comparison were internally self-consistent — the code looked right but the inputs were wrong. Captured as a lesson in the related memory file.
+
+##### Files modified (iteration 4 — commit `6afdda6`)
+
+- `src/events.ts` — extended inline `toolPart` cast to declare `callID: string`; changed the emit to use `toolPart.callID` instead of `toolPart.id`.
+- `dist/octmux` rebuilt; not committed.
+- `docs/Stage4.md` (this section appended; backfilled with commit hash per operator instruction — uncommitted for next-session pickup).
 
 ---
 

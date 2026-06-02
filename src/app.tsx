@@ -519,6 +519,16 @@ export function App(props: AppProps) {
             refreshTokenUsage(sessionIDRef.current);
           }
         }
+        else if (ev.kind === "message-completed") {
+          // One assistant message has fully completed. Refresh cost display so Σ$
+          // updates incrementally during a long pipeline rather than only at
+          // session-idle. Also reset the "generating" elapsed-time ticker so the
+          // display counts up from zero for the next logical turn.
+          // isGenerating is intentionally left true — the OC pipeline is still
+          // running; only the display timer resets.
+          refreshTokenUsage(sessionIDRef.current);
+          setProcTimes(p => ({ ...p, generating: Date.now() }));
+        }
         else if (ev.kind === "permission-asked") {
           if (permModeRef.current === "ask") {
             setPermission({ permID: ev.permID, title: ev.title, sessionID: ev.sessionID });
