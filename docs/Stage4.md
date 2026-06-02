@@ -159,7 +159,7 @@ When finishing a phase:
 ### 2026-06-02--14-43 — Stage 4.5.7: per-message cost refresh + ticker reset
 
 **Implemented by:** Claude Code (Claude Sonnet 4.6 — Planner; Claude Haiku 4.5 — Actor) via /brain pipeline — 2026-06-02--14-43
-**Commit(s):** `1e08d2b`
+**Commit(s):** `5ee4660`
 
 **A. Motivation and OC protocol context**
 
