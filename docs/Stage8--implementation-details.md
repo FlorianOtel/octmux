@@ -81,9 +81,8 @@ The following are **out of scope** for this document:
 5. Read per-session `telemetry.json` at `${sessionDir}/telemetry.json`:
    - Extract `parser_warnings: Array<{code, message}>`. Guard: `Array.isArray(...) ? ... : []`.
    - Present only for completed segments; absent during live session.
-6. Read `~/.config/opencode/orchestra/invocations.log` for active subagent (see Subagent section below).
-7. Among matched dirs, pick the one with the most recent inflight marker mtime. Priority: `duo > brain`.
-8. Count only **inflight-bearing matched dirs** toward `matchedSessionCount` (Stage 8.2.1 fix). If `>1`, render `#N` instead of title (multi-concurrent case).
+6. Among matched dirs, pick the one with the most recent inflight marker mtime. Priority: `duo > brain`.
+7. Count only **inflight-bearing matched dirs** toward `matchedSessionCount` (Stage 8.2.1 fix). If `>1`, render `#N` instead of title (multi-concurrent case).
 
 ### Polling and event sources
 
@@ -324,7 +323,6 @@ The matrix below enumerates the failure modes discovered during Stage 8.0–8.2.
 | C1 | SSE drops mid-session | `refreshTokenUsage` doesn't fire; Σ$ stays at last value; badge polling continues via 5s interval | Stage 4.5.3 reconciler reconnects + re-fetches on resume | low |
 | C2 | NFS attribute cache lag (`fs.watch` misses events) | Badge update delayed up to 5s | 5s `setInterval` is the safety net | low |
 | C3 | Bun `process.cwd()` realpath vs oconona's bash `$PWD` (logical) divergence under symlinks | OC HTTP API `directory` filter may not match | `safeRealpath()` applied to both sides of the comparison; oconona also uses `realpath` in setup curl. Stage 4.5.5 directory-header fix addressed the related class of bugs | low (now) |
-| C4 | `invocations.log` is global; multiple concurrent orchestra sessions write events to the same file | Reads are snapshot (whole-file read + parse); no streaming race on octmux side. Cross-session contamination prevented by the `session_id` filter on both start AND end events (Stage 8.2.1) | session_id filter; back-compat falls through on absent field | low |
 | C5 | `setOcSessionID()` cache: same input → no re-resolve. If OC session was destroyed + recreated with the same UUID (unusual), cache is stale | Edge case unlikely in practice; OC session IDs are time-encoded UUIDs | None; would require manual `dispose()` + reinstantiate | low |
 | C6 | `ORCHESTRA_TITLE=` in `state.env` is global. Two concurrent `/brain` sessions in different projects on the same host would clobber the title | Operator sees the most-recently-set title for either project. Octmux's `.oc-session-id` filter prevents the wrong dir from being shown, but the title field on the right dir may be wrong | None on octmux side. Oconona could move ORCHESTRA_TITLE to per-session (currently global). Practical risk: low — most operators run one orchestra at a time | low |
 
