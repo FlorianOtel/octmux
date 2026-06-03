@@ -1,4 +1,4 @@
-import { Text } from "ink";
+import { Text, Box } from "ink";
 import { formatTokens, contextLabel } from "../utils/formatters.ts";
 import type { OrchestraBadge } from "../orchestra-watch.ts";
 
@@ -73,21 +73,61 @@ export function StatusLine({
     sseHealthBadge = <Text color="yellow"> | SSE silent</Text>;
   }
 
-  // Full status line: color only the bar, not the rest
+  // Full status line with downward-stacked orchestra rows
   return (
-    <Text>
-      {`✦ ${modelLabel} | ctx `}
-      <Text color={barColor}>{bar}</Text>
-      {` ${percentage}% ${usedStr}/${ctxStr} | Σ$${runningCost.toFixed(2)} | ◆ ${projectName}${gitSuffix}`}
-      {orchestraBadge && (
-        <Text color="#d3869b">
-          {` | ♪ orchestra -> ${orchestraBadge.title} -> ${orchestraBadge.mode}`}
-          {orchestraBadge.subagent ? ` -> ${orchestraBadge.subagent}` : ""}
-          {(orchestraBadge.parserWarnings?.length ?? 0) > 0 ? " !" : ""}
-        </Text>
+    <Box flexDirection="column">
+      {/* Main status row */}
+      <Text>
+        {`✦ ${modelLabel} | ctx `}
+        <Text color={barColor}>{bar}</Text>
+        {` ${percentage}% ${usedStr}/${ctxStr} | Σ$${runningCost.toFixed(2)} | ◆ ${projectName}${gitSuffix}`}
+        {orchestraBadge && (
+          <Text color="#d3869b">
+            {` | ♪ orchestra -> ${orchestraBadge.title}`}
+            {(orchestraBadge.parserWarnings?.length ?? 0) > 0 ? " !" : ""}
+          </Text>
+        )}
+        {sseHealthBadge}
+        {isCompacting && <Text color="yellow"> · compacting…</Text>}
+      </Text>
+
+      {/* Mode row (only when orchestraBadge is not null) */}
+      {orchestraBadge && (() => {
+        const isWaiting = orchestraBadge.subagents.length > 0;
+        const modeText = `${orchestraBadge.mode}${orchestraBadge.parentModelLabel ? " " + orchestraBadge.parentModelLabel : ""}`;
+
+        if (isWaiting) {
+          return <Text color="#d3869b" dimColor>{`○ ${modeText}`}</Text>;
+        } else {
+          return (
+            <Text>
+              <Text color="#b8bb26">● </Text>
+              <Text color="#d3869b">{modeText}</Text>
+            </Text>
+          );
+        }
+      })()}
+
+      {/* Subagent rows (max 5, oldest first) */}
+      {orchestraBadge && orchestraBadge.subagents.slice(0, 5).map((subagent) => {
+        const parts = [
+          subagent.agent,
+          subagent.modelLabel || "",
+          subagent.description ? (subagent.description.length > 30 ? subagent.description.slice(0, 30) + "…" : subagent.description) : "",
+        ].filter(Boolean);
+
+        return (
+          <Text key={subagent.partID}>
+            <Text color="#b8bb26">● </Text>
+            <Text color="#d3869b">{parts.join(" ")}</Text>
+          </Text>
+        );
+      })}
+
+      {/* Overflow row */}
+      {orchestraBadge && orchestraBadge.subagents.length > 5 && (
+        <Text color="#d3869b" dimColor>{`+${orchestraBadge.subagents.length - 5} more`}</Text>
       )}
-      {sseHealthBadge}
-      {isCompacting && <Text color="yellow"> · compacting…</Text>}
-    </Text>
+    </Box>
   );
 }

@@ -526,6 +526,7 @@ export function App(props: AppProps) {
           setIsGenerating(false);
           setLastSubmitted("");
           setProcTimes({ thinking: null, tools: null, generating: null });
+          watcherRef.current?.notifyAllSubtasksEnded();
           refreshTokenUsage(sessionIDRef.current);
         }
         else if (ev.kind === "session-compacting") {
@@ -598,6 +599,12 @@ export function App(props: AppProps) {
               // Silent — operator can Ctrl-C (now safe under Bug 1 fix) and retry.
             }
           })();
+        }
+        else if (ev.kind === "subagent-detected") {
+          watcherRef.current?.notifySubtaskStarted(ev.partID, ev.agent, ev.description);
+        }
+        else if (ev.kind === "subagent-ended") {
+          watcherRef.current?.notifySubtaskEnded(ev.partID);
         }
       } catch (err) {
         renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);

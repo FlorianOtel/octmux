@@ -30,7 +30,9 @@ export type ReplEvent =
   | { kind: "question-tool-detected"; sessionID: string; callID: string }
   | { kind: "session-compacting"; sessionID: string; compacting: boolean }
   | { kind: "session-compacted"; sessionID: string }
-  | { kind: "message-completed"; messageID: string };
+  | { kind: "message-completed"; messageID: string }
+  | { kind: "subagent-detected"; partID: string; agent: string; description?: string }
+  | { kind: "subagent-ended"; partID: string };
 
 // Track user message IDs so we don't echo the user's own input back to them.
 // opencode fires message.part.updated for user messages too — we skip them.
@@ -53,6 +55,11 @@ const detectedQuestionToolCallIDs = new Set<string>();
 // session switch via resetEventState().
 const completedAssistantMessageIDs = new Set<string>();
 
+// Tracks subtask partIDs for which we've detected and emitted subagent-detected.
+// Prevents re-fire on repeated message.part.updated events for the same subtask.
+// Cleared on session switch via resetEventState().
+const detectedSubtaskPartIDs = new Set<string>();
+
 // Reset event tracking state on session switch.
 export function resetEventState(): void {
   userMessageIDs.clear();
@@ -60,6 +67,7 @@ export function resetEventState(): void {
   seenPartIDs.clear();
   detectedQuestionToolCallIDs.clear();
   completedAssistantMessageIDs.clear();
+  detectedSubtaskPartIDs.clear();
 }
 
 /**
@@ -82,7 +90,15 @@ export function synthesizeSessionIdleEvents(): ReplEvent[] {
   }
   openParts.clear();
   seenPartIDs.clear();
-  return [{ kind: "session-idle" }, ...closeEvents];
+
+  // Flush all detected subtasks via subagent-ended events
+  const subtaskEndEvents: ReplEvent[] = [];
+  for (const partID of detectedSubtaskPartIDs) {
+    subtaskEndEvents.push({ kind: "subagent-ended", partID });
+  }
+  detectedSubtaskPartIDs.clear();
+
+  return [...subtaskEndEvents, { kind: "session-idle" }, ...closeEvents];
 }
 
 /**
@@ -250,6 +266,20 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       return null;
     }
 
+    // --- subtask parts ---
+    if (part.type === "subtask") {
+      if (part.sessionID === sessionID && !detectedSubtaskPartIDs.has(part.id)) {
+        detectedSubtaskPartIDs.add(part.id);
+        return {
+          kind: "subagent-detected",
+          partID: part.id,
+          agent: part.agent,
+          description: part.description || undefined,
+        };
+      }
+      return null;
+    }
+
     return null;
   }
 
@@ -278,7 +308,14 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     openParts.clear();
     seenPartIDs.clear();
 
-    return [{ kind: "session-idle" }, ...closeEvents];
+    // Emit subagent-ended for all detected subtasks
+    const subtaskEndEvents: ReplEvent[] = [];
+    for (const partID of detectedSubtaskPartIDs) {
+      subtaskEndEvents.push({ kind: "subagent-ended", partID });
+    }
+    detectedSubtaskPartIDs.clear();
+
+    return [...subtaskEndEvents, { kind: "session-idle" }, ...closeEvents];
   }
 
   if (event.type === "session.error") {
@@ -307,6 +344,10 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       openParts.delete(partId);
     }
     seenPartIDs.delete(partId);
+    if (detectedSubtaskPartIDs.has(partId)) {
+      detectedSubtaskPartIDs.delete(partId);
+      events.push({ kind: "subagent-ended", partID: partId });
+    }
     return events;
   }
 

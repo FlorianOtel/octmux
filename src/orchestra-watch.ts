@@ -1,13 +1,14 @@
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
 import { EventEmitter } from "events";
 import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 
 export type OrchestraBadge = {
   mode: "brain" | "duo";
   title: string;
-  subagent?: string | null;
+  parentModelRaw?: string;
+  parentModelLabel?: string;
+  subagents: Array<{ partID: string; agent: string; description?: string; modelRaw?: string; modelLabel?: string }>;
   parserWarnings?: Array<{ code: string; message: string }>;
 } | null;
 
@@ -24,6 +25,9 @@ export class OrchestraWatcher extends EventEmitter {
   private pollInterval: NodeJS.Timer | null = null;
   private harnessOcSessionID: string | null = null;
   private lastSessionIDInput: string | null = null;
+  private agentModelMap: Map<string, string> = new Map();       // agent name → "provider/modelId"
+  private modelFriendlyMap: Map<string, string> = new Map();    // "provider/modelId" → friendly name
+  private harnessOcSessionModel: { providerID: string; id: string } | null = null;
 
   constructor(client: Client) {
     super();
@@ -35,6 +39,10 @@ export class OrchestraWatcher extends EventEmitter {
    * Sets up fs.watch + 5-second fallback poll.
    */
   start(): void {
+    // Load agent models and friendly names before initial scan
+    this.loadAgentModels();
+    this.loadModelFriendlyNames();
+
     // Initial scan
     this.scan();
 
@@ -96,10 +104,91 @@ export class OrchestraWatcher extends EventEmitter {
       });
 
       const last = candidates[0];
+      if (last) {
+        const modelField = (last as any).model as { providerID: string; id: string } | undefined;
+        this.harnessOcSessionModel = modelField ?? null;
+      }
       return last ? last.id : null;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Load agent name → model mapping from ~/.config/opencode/agents/*.md files.
+   */
+  private loadAgentModels(): void {
+    try {
+      const agentsDir = path.join(
+        process.env.HOME || "/root",
+        ".config/opencode/agents"
+      );
+      if (!fs.existsSync(agentsDir)) return;
+
+      const files = fs.readdirSync(agentsDir).filter(f => f.endsWith(".md"));
+      for (const file of files) {
+        try {
+          const content = fs.readFileSync(path.join(agentsDir, file), "utf-8");
+          const nameMatch = content.match(/^name:\s*(\S+)/m);
+          const modelMatch = content.match(/^model:\s*(\S+)/m);
+          if (nameMatch && modelMatch) {
+            const name = nameMatch[1];
+            const model = modelMatch[1];
+            this.agentModelMap.set(name, model);
+          }
+        } catch {
+          // Silent on per-file errors
+        }
+      }
+    } catch {
+      // Silent on scan errors
+    }
+  }
+
+  /**
+   * Load friendly model names from ~/.config/opencode/opencode.json.
+   */
+  private loadModelFriendlyNames(): void {
+    try {
+      const configPath = path.join(
+        process.env.HOME || "/root",
+        ".config/opencode/opencode.json"
+      );
+      if (!fs.existsSync(configPath)) return;
+
+      const content = fs.readFileSync(configPath, "utf-8");
+      const data = JSON.parse(content) as {
+        provider?: Record<string, { models?: Record<string, { name?: string }> }>;
+      };
+
+      if (data.provider) {
+        for (const [providerKey, providerData] of Object.entries(data.provider)) {
+          if (providerData.models) {
+            for (const [modelKey, modelData] of Object.entries(providerData.models)) {
+              const friendlyName = (modelData as any).name;
+              if (friendlyName) {
+                const key = `${providerKey}/${modelKey}`;
+                this.modelFriendlyMap.set(key, friendlyName);
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Silent on parse/read errors
+    }
+  }
+
+  /**
+   * Format a raw model string into a labeled display string.
+   * Format: [provider/friendly] where friendly is looked up from opencode.json.
+   */
+  private formatModelLabel(raw?: string): string {
+    if (!raw) return "";
+    const parts = raw.split("/");
+    const providerPart = parts[0];
+    const friendly = this.modelFriendlyMap.get(raw) ?? parts.slice(1).join("/") ?? raw;
+    return `[${providerPart}/${friendly}]`;
   }
 
   /**
@@ -119,62 +208,6 @@ export class OrchestraWatcher extends EventEmitter {
     }).catch(() => {
       // Silently fail; leave cached value
     });
-  }
-
-  /**
-   * Read ~/.config/opencode/orchestra/invocations.log and detect active subagent.
-   * Filters by session_id matching the provided sessionDirBasename.
-   * Returns subagent (or stage for back-compat) if last start event > last end event, null otherwise.
-   */
-  private readActiveSubagent(sessionDirBasename: string): string | null {
-    try {
-      const invocPath = path.join(
-        os.homedir(),
-        ".config/opencode/orchestra/invocations.log"
-      );
-      if (!fs.existsSync(invocPath)) {
-        return null;
-      }
-
-      const content = fs.readFileSync(invocPath, "utf-8");
-      const lines = content.split("\n").filter((l) => l.trim());
-
-      let lastStart: { ts: string; subagent?: string | null; stage?: string | null; session_id?: string } | null = null;
-      let lastEnd: { ts: string } | null = null;
-
-      // Reverse scan to find most recent start and end events
-      for (let i = lines.length - 1; i >= 0; i--) {
-        try {
-          const entry = JSON.parse(lines[i]);
-          if (entry.event === "start" && !lastStart) {
-            // Skip if session_id present but doesn't match
-            if (entry.session_id != null && entry.session_id !== sessionDirBasename) {
-              continue;
-            }
-            lastStart = { ts: entry.ts, subagent: entry.subagent ?? null, stage: entry.stage ?? null, session_id: entry.session_id };
-          }
-          if (entry.event === "end" && !lastEnd) {
-            // Apply same session_id filter as start for cross-session isolation
-            if (entry.session_id != null && entry.session_id !== sessionDirBasename) {
-              continue; // skip end events from other sessions
-            }
-            lastEnd = { ts: entry.ts };
-          }
-          if (lastStart && lastEnd) break;
-        } catch {
-          // Skip malformed lines
-        }
-      }
-
-      // Compare timestamps lexicographically (ISO 8601 sorts correctly)
-      if (lastStart && (!lastEnd || lastStart.ts > lastEnd.ts)) {
-        return lastStart.subagent ?? lastStart.stage ?? null;
-      }
-
-      return null;
-    } catch {
-      return null;
-    }
   }
 
   /**
@@ -203,7 +236,6 @@ export class OrchestraWatcher extends EventEmitter {
     let bestPrio = -1;
     let bestMtime = 0;
     let matchedSessionCount = 0;
-    let bestSessionDirBasename: string | null = null;
 
     try {
       const entries = fs.readdirSync(sessionsDir);
@@ -264,10 +296,22 @@ export class OrchestraWatcher extends EventEmitter {
             try {
               const title = fs.readFileSync(duoMarkerPath, "utf-8").trim();
               const truncated = title.slice(0, 30);
-              bestBadge = { mode: "duo", title: truncated, subagent: null, parserWarnings: dirParserWarnings };
+              bestBadge = {
+                mode: "duo",
+                title: truncated,
+                subagents: [],
+                parentModelRaw: this.harnessOcSessionModel
+                  ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
+                  : undefined,
+                parentModelLabel: this.formatModelLabel(
+                  this.harnessOcSessionModel
+                    ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
+                    : undefined
+                ),
+                parserWarnings: dirParserWarnings,
+              };
               bestPrio = 2;
               bestMtime = duoMtime;
-              bestSessionDirBasename = entry;
             } catch {
               // Ignore read errors
             }
@@ -299,10 +343,22 @@ export class OrchestraWatcher extends EventEmitter {
               // Ignore read errors; use default
             }
             const truncated = title.slice(0, 30);
-            bestBadge = { mode: "brain", title: truncated, subagent: null, parserWarnings: dirParserWarnings };
+            bestBadge = {
+              mode: "brain",
+              title: truncated,
+              subagents: [],
+              parentModelRaw: this.harnessOcSessionModel
+                ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
+                : undefined,
+              parentModelLabel: this.formatModelLabel(
+                this.harnessOcSessionModel
+                  ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
+                  : undefined
+              ),
+              parserWarnings: dirParserWarnings,
+            };
             bestPrio = 1;
             bestMtime = brainMtime;
-            bestSessionDirBasename = entry;
           }
         }
 
@@ -317,12 +373,51 @@ export class OrchestraWatcher extends EventEmitter {
       // Silently ignore scan errors
     }
 
-    // Attach active subagent if badge is non-null
-    if (bestBadge && bestSessionDirBasename) {
-      bestBadge.subagent = this.readActiveSubagent(bestSessionDirBasename);
-    }
-
     this._updateBadge(bestBadge);
+  }
+
+  /**
+   * Notify of a detected subtask (subagent started).
+   */
+  notifySubtaskStarted(partID: string, agent: string, description?: string): void {
+    if (!this.badge) return;
+
+    // Dedup by partID
+    if (this.badge.subagents.some(s => s.partID === partID)) return;
+
+    // Lookup model from agentModelMap
+    const modelRaw = this.agentModelMap.get(agent);
+    const modelLabel = this.formatModelLabel(modelRaw);
+
+    this.badge.subagents.push({
+      partID,
+      agent,
+      description,
+      modelRaw,
+      modelLabel,
+    });
+
+    this._updateBadge({ ...this.badge });
+  }
+
+  /**
+   * Notify of a subtask end.
+   */
+  notifySubtaskEnded(partID: string): void {
+    if (!this.badge) return;
+
+    this.badge.subagents = this.badge.subagents.filter(s => s.partID !== partID);
+    this._updateBadge({ ...this.badge });
+  }
+
+  /**
+   * Notify all subtasks ended (session-idle or explicit flush).
+   */
+  notifyAllSubtasksEnded(): void {
+    if (!this.badge) return;
+
+    this.badge.subagents = [];
+    this._updateBadge({ ...this.badge });
   }
 
   /**
