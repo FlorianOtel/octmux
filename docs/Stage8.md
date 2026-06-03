@@ -2,8 +2,8 @@
 title: "Stage 8 — Live cost display (OC SDK) + orchestra inflight badge"
 created_at: 2026-05-29--08-27
 created_by: Claude Code (Claude Haiku 4.5)
-updated_by: Claude Code (Claude Opus 4.7 — split implementation details into Stage8--implementation-details.md)
-updated_at: 2026-06-03--16-50
+updated_by: Claude Code (Claude Haiku 4.5 — Actor via /brain)
+updated_at: 2026-06-03--23-28
 context: >
   octmux's status bar shows live `Σ$X.XX` cost (from OC SDK `AssistantMessage.cost`,
   summed over parent session + one-level children) and an orchestra inflight badge
@@ -25,6 +25,12 @@ context: >
 ---
 
 ## Implementation log
+
+### 2026-06-03--23-28 — Stage 8.1.1 — SSE subagent detection + downward-stacked role rows + model labels
+**Implemented by:** Actor (Claude Haiku 4.5 via /brain) — 2026-06-03--23-28
+**Commit(s):** `7256de8`
+
+Replaced invocations.log-based subagent detection (which never fires on OC) with live SSE SubtaskPart event detection via `message.part.updated` where `part.type === "subtask"`. Redesigned OrchestraBadge from single-field `subagent?` to widened type carrying parent model labels and an array of live subagents, each with agent role, description, and model info. Redesigned StatusLine rendering from single inline badge to downward-growing stack: main status row, optional mode row (●/○ based on subagent liveness with parent model label), per-subagent rows (max 5 visible with overflow counter), all in correct colors. Model labels (agent.name, agent.model → provider/modelId → friendly name) sourced from agent frontmatter YAML and opencode.json, read once at watcher startup. Supersedes Stage 8.1. Full implementation details at `docs/Stage8--implementation-details.md` §Subagent role detection.
 
 ### 2026-06-03 — Stage 8.2.1 (commit `e28973e`)
 **Implemented by:** Claude Code (Claude Opus 4.7) — 2026-06-03--16-30

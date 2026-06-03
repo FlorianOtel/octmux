@@ -2,6 +2,8 @@
 title: "Stage 8 — octmux consumer-side contract: cost path, badge mechanics, fragility analysis"
 created_at: 2026-06-03--16-50
 created_by: Claude Code (Claude Opus 4.7 1M context)
+updated_by: Claude Code (Claude Haiku 4.5 — Actor via /brain)
+updated_at: 2026-06-03--23-28
 context: >
   Consumer-side implementation reference for the cost display + orchestra badge in octmux.
   Mirrors the structure of oconona's docs/Stage7.5--implementation-details.md (the provider
@@ -104,35 +106,46 @@ This prevents `fs.watch` callbacks from blocking on an HTTP roundtrip while pres
 
 ---
 
-## Subagent role detection (`invocations.log` reader)
+## Subagent role detection (SSE SubtaskPart)
 
 ### What octmux reads
 
-- **Path:** `~/.config/opencode/orchestra/invocations.log` (global, NOT per-session).
-- **Format:** NDJSON (newline-delimited JSON), one event per line.
+Live subagent detection operates via OpenCode SSE `message.part.updated` events for `part.type === "subtask"`. The SubtaskPart carries these fields:
+- `id: string` — unique part ID
+- `sessionID: string` — OC session ID of the subagent session
+- `agent: string` — subagent role (planner, actor, actor-heavy, reviewer)
+- `description?: string` — optional description
+- `messageID: string`, `prompt: string` — other fields not used by octmux
 
-### Detection algorithm
+### Detection mechanism
 
-`readActiveSubagent(sessionDirBasename: string): string | null`:
+1. **Event stream:** `src/events.ts:filterEvent` processes `message.part.updated` events; if `part.type === "subtask"` and `part.sessionID === sessionID` (matches current harness OC session), emit `{ kind: "subagent-detected", partID, agent, description }`.
+2. **State tracking:** `detectedSubtaskPartIDs: Set<string>` in `src/events.ts` tracks active partIDs. Deduplicates repeated updates for the same part (only first detection emits event).
+3. **Lifecycle end:** On `message.part.removed` for a subtask part, emit `{ kind: "subagent-ended", partID }` and remove from set. On `session.idle`, flush all remaining detected parts via `subagent-ended` events.
+4. **Watcher notification:** `src/app.tsx` applies these events to `OrchestraWatcher` via `notifySubtaskStarted(partID, agent, description)`, `notifySubtaskEnded(partID)`, and `notifyAllSubtasksEnded()`.
 
-1. Read the whole file synchronously (small append-only log; size bounded in practice).
-2. Reverse-scan lines, parsing each as JSON. Skip malformed lines.
-3. For `event === "start"`:
-   - **Skip if `entry.session_id != null && entry.session_id !== sessionDirBasename`** (cross-session isolation; back-compat falls through when `session_id` is absent on pre-v7.5 entries).
-   - Record as `lastStart` with fields `{ ts, subagent, stage, session_id }`.
-4. For `event === "end"`:
-   - **Apply the same session_id filter as start** (Stage 8.2.1 added; symmetric to start to prevent a foreign session's end event from suppressing the current session's live status).
-   - Record as `lastEnd` with field `ts`.
-5. If `lastStart && (!lastEnd || lastStart.ts > lastEnd.ts)` → return `lastStart.subagent ?? lastStart.stage ?? null` (canonical field with back-compat fallback).
+### Model labels
 
-### Canonical vs back-compat fields
+Agent names (planner, actor, etc.) are resolved to friendly model labels via:
+1. **Agent frontmatter lookup** (`~/.config/opencode/agents/*.md`): extract `name:` and `model:` YAML fields (e.g., `model: sohoai/qwen3-coder-next`).
+2. **opencode.json mapping** (`~/.config/opencode/opencode.json`): `provider.<P>.models.<M>.name` structure maps provider/modelID to a friendly name (e.g., "Qwen3 Coder Next").
+3. **Fallback:** if friendly name missing, use the model ID tail (after last `/`).
+4. **Label format:** `[provider/friendly_name]` (brackets and provider prefix always shown; fallback `[provider/modelID]`).
 
-- **`subagent`** (canonical, v7.5+): values `planner`, `actor`, `actor-heavy`, `reviewer`.
-- **`stage`** (deprecated; pre-v7.5): values `plan`, `implement`, `review`. Read only as fallback when `subagent` is absent.
+Both maps are loaded once in `OrchestraWatcher.start()` and remain constant for the watcher lifetime. Stale during live orchestration if oconona updates agents; octmux restart needed to refresh.
+
+### OrchestraBadge shape
+
+The badge carries:
+- `parentModelRaw?: string` — parent harness model as `provider/modelId`
+- `parentModelLabel?: string` — formatted parent label
+- `subagents: Array<{ partID, agent, description?, modelRaw?, modelLabel? }>` — current live subagents (max 5 shown; overflow indicated by `+N more` row)
 
 ### File:line reference
 
-`src/orchestra-watch.ts:131–177` — `readActiveSubagent()`.
+- `src/events.ts` — SubtaskPart event filtering and `detectedSubtaskPartIDs` state
+- `src/orchestra-watch.ts:105–127` — `notifySubtaskStarted()`, `notifySubtaskEnded()`, `notifyAllSubtasksEnded()` public API; `loadAgentModels()`, `loadModelFriendlyNames()`, `formatModelLabel()` private helpers
+- `src/app.tsx:505–530` — wiring (subagent-detected, subagent-ended, session-idle branches)
 
 ---
 
@@ -162,32 +175,39 @@ Inside the per-session scan loop, before the marker checks — so each matched d
 
 ---
 
-## Symmetric badge format spec
+## Badge rendering spec
 
-The badge has **four canonical states**, all rendered in color `#d3869b` (gruvbox bright purple). The mode segment is always present (symmetry: brain and duo both include it).
+The badge renders as a downward-growing stack of rows (flex column) when an orchestra session is active.
 
-| State | Condition | Badge |
-|---|---|---|
-| Idle | No matched dir with inflight marker | *(nothing rendered)* |
-| `/duo` active | One matched dir with `.duo-inflight` | `♪ orchestra -> <title> -> duo` |
-| `/duo` + subagent | One matched dir with `.duo-inflight`, `invocations.log` shows live subagent | `♪ orchestra -> <title> -> duo -> <subagent>` |
-| `/brain` active | One matched dir with `.brain-inflight` | `♪ orchestra -> <title> -> brain` |
-| `/brain` + subagent | One matched dir with `.brain-inflight`, `invocations.log` shows live subagent | `♪ orchestra -> <title> -> brain -> <subagent>` |
-| Multi-concurrent | ≥2 matched dirs WITH inflight markers | `♪ orchestra -> #N -> <mode>` |
-| Parser warning | Any of the above + completed segment had parser_warnings | (above) + ` !` suffix |
+### Main status row (always present)
 
-### Source of each field
+Inline segment in the main status line: `♪ orchestra -> <title>` plus ` !` suffix if `parser_warnings.length > 0`. The mode and subagent status are no longer inline; they appear as separate rows below (see next sections).
 
-- **`<title>`**:
-  - `/duo`: first 30 chars of `.duo-inflight` content.
-  - `/brain`: `ORCHESTRA_TITLE=` from global `state.env` (NOT per-session).
-- **`<mode>`**: literal string `brain` or `duo` from inflight marker filename.
-- **`<subagent>`**: from `invocations.log` (see Subagent section).
-- **` !`**: present when `parser_warnings.length > 0` on the matched dir's `telemetry.json`.
+### Mode row (only when `orchestraBadge !== null`)
+
+Rendered below main status row via IIFE:
+- **Waiting** (subagents detected): `○ {mode} {parentModelLabel}` (● circle is dim/grey)
+- **Idle** (no subagents): `● {mode} {parentModelLabel}` (● circle is bright green)
+
+Color: purple `#d3869b` for text; `#b8bb26` (bright green) for `●` when idle, dim when waiting.
+
+### Subagent rows
+
+For each detected subagent (max 5 rows shown):
+- `● {agent} {modelLabel} {description_truncated}`
+
+Color: purple `#d3869b` for text; bright green `#b8bb26` for `●`.
+
+If `subagents.length > 5`, add overflow row:
+- `+{N} more` in dim purple
+
+### Idle state
+
+When `orchestraBadge === null`, no mode/subagent/overflow rows render. Layout functionally identical to pre-Stage-8.1.1 (only main status row visible).
 
 ### File:line reference
 
-`src/components/StatusLine.tsx:80–86` — badge render block.
+`src/components/StatusLine.tsx:80–150` — downward-stack layout with mode row, subagent rows, overflow counter.
 
 ---
 
@@ -203,7 +223,9 @@ Symmetric to oconona §What each consumer reads — this is the consumer-side vi
 | `.oc-session-id` | `~/.config/opencode/orchestra/sessions/*/` | oconona setup (v7.5) | Match key — filters which session dirs belong to this OC session |
 | `.brain-inflight` / `.duo-inflight` | `~/.config/opencode/orchestra/sessions/*/` | oconona setup + cleanup | Active-session signal — primary discovery, mode source, 24h stale guard |
 | `state.env` `ORCHESTRA_TITLE=` | `~/.config/opencode/orchestra/state.env` | oconona `/brain` setup | Brain title source (global; NOT per-session) |
-| `invocations.log` events | `~/.config/opencode/orchestra/invocations.log` | oconona hooks (start/end/stop) | Active subagent detection |
+| `SubtaskPart` SSE events | OC HTTP SSE `/message` | OpenCode (oconona creates subtask parts) | Live subagent detection (part.type === "subtask") |
+| Agent frontmatter | `~/.config/opencode/agents/*.md` | oconona setup | Subagent role → model mapping (name + model YAML fields) |
+| `opencode.json` model names | `~/.config/opencode/opencode.json` | oconona setup | Provider/modelId → friendly name mapping |
 | `telemetry.json` `parser_warnings` | `${sessionDir}/telemetry.json` | oconona telemetry-summarize.py (v7.5) | Completed-segment diagnostics — surfaces ` !` indicator |
 
 ---
