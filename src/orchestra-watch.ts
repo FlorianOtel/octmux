@@ -225,7 +225,6 @@ export class OrchestraWatcher extends EventEmitter {
         }
 
         if (!ocSessionIdMatches) continue;
-        matchedSessionCount++;
 
         // Check mtime — skip if older than 24h (stale-after-crash guard)
         const nowSecs = Date.now() / 1000;
@@ -248,9 +247,17 @@ export class OrchestraWatcher extends EventEmitter {
           // ignore
         }
 
+        // Track whether THIS dir contributes a live inflight marker. Only
+        // count such dirs toward matchedSessionCount — completed dirs (same
+        // .oc-session-id but no marker) must not inflate the concurrency
+        // count, otherwise the #N rewrite below mislabels a single live
+        // session as multi-concurrent on every subsequent /brain run.
+        let dirHasInflight = false;
+
         // Check for .duo-inflight (priority 2, higher than brain)
         const duoMarkerPath = path.join(sessionDir, ".duo-inflight");
         if (fs.existsSync(duoMarkerPath)) {
+          dirHasInflight = true;
           const duoStat = fs.statSync(duoMarkerPath);
           const duoMtime = duoStat.mtimeMs;
           if (duoMtime > bestMtime || (duoMtime === bestMtime && 2 > bestPrio)) {
@@ -270,6 +277,7 @@ export class OrchestraWatcher extends EventEmitter {
         // Check for .brain-inflight (priority 1, lower than duo)
         const brainMarkerPath = path.join(sessionDir, ".brain-inflight");
         if (fs.existsSync(brainMarkerPath)) {
+          dirHasInflight = true;
           const brainStat = fs.statSync(brainMarkerPath);
           const brainMtime = brainStat.mtimeMs;
           if (bestPrio < 1 && (brainMtime > bestMtime || bestPrio < 0)) {
@@ -297,6 +305,8 @@ export class OrchestraWatcher extends EventEmitter {
             bestSessionDirBasename = entry;
           }
         }
+
+        if (dirHasInflight) matchedSessionCount++;
       }
 
       // Multi-concurrent: if 2+ matched session dirs have inflight markers, render count
