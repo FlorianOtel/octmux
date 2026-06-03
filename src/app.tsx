@@ -88,6 +88,7 @@ export function App(props: AppProps) {
   const lastCtrlCRef = useRef<number>(0);
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionIDRef = useRef(sessionID);
+  const watcherRef = useRef<InstanceType<typeof OrchestraWatcher> | null>(null);
 
   // Stage 4.5.3: SSE health tracking and reconciliation
   const [sseHealth, setSseHealth] = useState<"ok" | "reconnecting" | "silent">("ok");
@@ -329,11 +330,22 @@ export function App(props: AppProps) {
   // One-shot: set up orchestra badge watcher. Must be declared BEFORE any effect that
   // references orchestraBadge (TDZ guard per feedback-react-effect-tdz.md).
   useEffect(() => {
-    const watcher = new OrchestraWatcher(process.cwd());
+    const watcher = new OrchestraWatcher(props.client);
+    watcherRef.current = watcher;
     watcher.on("changed", setOrchestraBadge);
     watcher.start();
-    return () => watcher.dispose();
+    watcher.setOcSessionID(sessionID);
+    return () => {
+      watcher.dispose();
+      watcherRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- props.client is module-level singleton; watcher initialises once
   }, []);
+
+  // Update watcher with new session ID when it changes
+  useEffect(() => {
+    watcherRef.current?.setOcSessionID(sessionID);
+  }, [sessionID]);
 
   // One-shot: discover opencode commands at startup
   useEffect(() => {

@@ -1,5 +1,6 @@
 import { Text } from "ink";
 import { formatTokens, contextLabel } from "../utils/formatters.ts";
+import type { OrchestraBadge } from "../orchestra-watch.ts";
 
 export type StatusLineProps = {
   modelLabel: string;           // already prettified — "Sonnet 4.6 (1M context)"
@@ -8,7 +9,7 @@ export type StatusLineProps = {
   gitBranch: string;            // "" if not in git repo
   isCompacting?: boolean;
   runningCost: number;
-  orchestraBadge?: { mode: "brain" | "duo"; title: string; stage?: string | null } | null;
+  orchestraBadge?: OrchestraBadge;
   sseHealth?: "ok" | "reconnecting" | "silent";
 };
 
@@ -79,10 +80,11 @@ export function StatusLine({
       <Text color={barColor}>{bar}</Text>
       {` ${percentage}% ${usedStr}/${ctxStr} | Σ$${runningCost.toFixed(2)} | ◆ ${projectName}${gitSuffix}`}
       {orchestraBadge && (
-        <Text color="#d3869b">{` | ♪ ${orchestraBadge.mode === "duo" ? "plan" : "brain"} ${orchestraBadge.title}`}</Text>
-      )}
-      {orchestraBadge?.stage && (
-        <Text color="#d79921">{`  ▶ ${orchestraBadge.stage}`}</Text>
+        <Text color="#d3869b">
+          {` | ♪ orchestra -> ${orchestraBadge.title} -> ${orchestraBadge.mode}`}
+          {orchestraBadge.subagent ? ` -> ${orchestraBadge.subagent}` : ""}
+          {(orchestraBadge.parserWarnings?.length ?? 0) > 0 ? " !" : ""}
+        </Text>
       )}
       {sseHealthBadge}
       {isCompacting && <Text color="yellow"> · compacting…</Text>}
