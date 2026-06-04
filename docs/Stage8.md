@@ -3,7 +3,7 @@ title: "Stage 8 — Live cost display (OC SDK) + orchestra inflight badge"
 created_at: 2026-05-29--08-27
 created_by: Claude Code (Claude Haiku 4.5)
 updated_by: Claude Code (Claude Opus 4.7 — 1M context)
-updated_at: 2026-06-04--22-32
+updated_at: 2026-06-04--22-50
 context: >
   octmux's status bar shows live `Σ$X.XX` cost (from OC SDK `AssistantMessage.cost`,
   summed over parent session + one-level children) and an orchestra inflight badge
@@ -25,6 +25,12 @@ context: >
 ---
 
 ## Implementation log
+
+### 2026-06-04--22-50 — Stage 8.1.5.1 — Env-gated diagnostic logging for subagent detection
+**Implemented by:** Claude Code (Claude Opus 4.7 — 1M context) — 2026-06-04--22-50
+**Commit(s):** `7d56570` (src), docs commit pending
+
+Stage 8.1.5's structural switch to `session.created` filtering did not, in the operator's third smoke test (`ses_16b7557baffexfczQC3JUN6j1P`), produce planner / actor / reviewer rows. Two parallel Explore investigations independently confirmed the design pieces are sound — the OC daemon's `/global/event` endpoint streams all `GlobalBus` events with no server-side filter (`packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts:36-67`); the EventV2 bridge forwards every `events.publish(...)` to the global bus (`packages/opencode/src/event-v2-bridge.ts:37-46`); the child `session.created` is published at `packages/opencode/src/session/session.ts:577`; octmux's payload wrapper shape matches the SDK's `GlobalEvent = { directory; payload: Event }`; the watcher `useEffect` runs before the SSE consumer; and `sessionIDRef.current` is stable through Task dispatch. The code is consistent with the daemon, yet rows don't appear. This stage ships ONLY env-gated diagnostic logging — five `console.error` shim sites that fire when `OCTMUX_DEBUG_SSE=1` is set. Default off → zero behaviour change for normal use. The 48 unit-test assertions continue to pass (the gate is never set in test paths). Sites cover (1) the SSE wrapper shape + per-event payload type and directory in `src/app.tsx`; (2) every `filterEvent` event-type entry in `src/events.ts`; (3) the `session.created` branch with full `info.parentID` / `info.agent` / `info.model` / harness sessionID / match outcome in `src/events.ts`; (4) `notifySubagentStarted` entry with badge-presence and queue length in `src/orchestra-watch.ts`; (5) the `_updateBadge` drain with pending and subagent counts in `src/orchestra-watch.ts`. Operator evidence pass: `OCTMUX_DEBUG_SSE=1 dist/octmux 2>/tmp/octmux-debug.log`, run `/brain "noop"`, wait ~10-30 s, `Ctrl+C` and `/brain-abandon`, exit. Diagnose with: `grep 'SSE wrapper keys' /tmp/octmux-debug.log` (wrapper shape); `grep -oE 'filterEvent type=\S+' /tmp/octmux-debug.log | sort | uniq -c | sort -rn` (every event type observed); `grep 'session.created id=' /tmp/octmux-debug.log` (per-event filter decision); `grep 'notifySubagentStarted' /tmp/octmux-debug.log` (watcher entry); `grep '_updateBadge drain' /tmp/octmux-debug.log` (drain outcome). No structural code change. No StatusLine change. No removal of Stage 8.1.5's dead-code purge. The targeted fix is a separate Stage 8.1.5.2, scoped from the evidence pass.
 
 ### 2026-06-04--22-32 — Stage 8.1.5 — Switch subagent detection to `session.created` + display model
 **Implemented by:** Claude Code (Claude Opus 4.7 — 1M context) — 2026-06-04--22-32
