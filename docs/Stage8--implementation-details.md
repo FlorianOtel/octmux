@@ -2,8 +2,8 @@
 title: "Stage 8 — octmux consumer-side contract: cost path, badge mechanics, fragility analysis"
 created_at: 2026-06-03--16-50
 created_by: Claude Code (Claude Opus 4.7 1M context)
-updated_by: Claude Code (Claude Haiku 4.5 — Actor via /brain)
-updated_at: 2026-06-03--23-28
+updated_by: Claude Code (Claude Opus 4.7 — 1M context)
+updated_at: 2026-06-04--18-40
 context: >
   Consumer-side implementation reference for the cost display + orchestra badge in octmux.
   Mirrors the structure of oconona's docs/Stage7.5--implementation-details.md (the provider
@@ -123,6 +123,8 @@ Live subagent detection operates via OpenCode SSE `message.part.updated` events 
 3. **Lifecycle end:** On `message.part.removed` for a subtask part, emit `{ kind: "subagent-ended", partID }` and remove from set. On `session.idle`, flush all remaining detected parts via `subagent-ended` events.
 4. **Watcher notification:** `src/app.tsx` applies these events to `OrchestraWatcher` via `notifySubtaskStarted(partID, agent, description)`, `notifySubtaskEnded(partID)`, and `notifyAllSubtasksEnded()`.
 
+**Stage 8.1.4 fix — queue-and-drain race:** Early versions of `notifySubtaskStarted` would return without queueing if `this.badge === null` at the moment the SubtaskPart event arrived. This caused a race condition where SSE-driven SubtaskPart events could arrive and be silently dropped before the directory-scan-driven badge construction (asynchronous) completed and produced a non-null badge object. The fix (Stage 8.1.4) introduces a `_pendingSubtaskQueue: Array<...>` that buffers pending notifications whenever the badge is null. These pending items are drained into `badge.subagents[]` inside `_updateBadge` the moment a non-null badge materializes, guaranteeing no loss of early-arriving SubtaskPart events. The `matchedSessionCount` invariant from Stage 8.2.1 is preserved — `scan()` body unchanged; the queue drain happens entirely within the watcher's own methods.
+
 ### Model labels
 
 Agent names (planner, actor, etc.) are resolved to friendly model labels via:
@@ -185,17 +187,17 @@ Inline segment in the main status line: `♪ orchestra -> <title>` plus ` !` suf
 ### Mode row (only when `orchestraBadge !== null`)
 
 Rendered below main status row via IIFE:
-- **Waiting** (subagents detected): `○ {mode} {parentModelLabel}` (● circle is dim/grey)
-- **Idle** (no subagents): `● {mode} {parentModelLabel}` (● circle is bright green)
+- **Waiting** (subagents detected): rotating/frozen glyph from `SPINNER_GLYPHS` + `{mode} {parentModelLabel}` (glyph dims when frozen/inactive)
+- **Idle** (no subagents): rotating/frozen glyph + `{mode} {parentModelLabel}` (glyph rotates while activity recent)
 
-Color: purple `#d3869b` for text; `#b8bb26` (bright green) for `●` when idle, dim when waiting.
+Color: purple `#d3869b` for text; `#1dde00` (bright green) for rotating glyph, same colour when frozen (freeze is the activity signal, not a colour change).
 
 ### Subagent rows
 
 For each detected subagent (max 5 rows shown):
-- `● {agent} {modelLabel} {description_truncated}`
+- rotating/frozen glyph from `SPINNER_GLYPHS` + `{agent} {modelLabel} {description_truncated}`
 
-Color: purple `#d3869b` for text; bright green `#b8bb26` for `●`.
+Color: purple `#d3869b` for text; `#1dde00` (bright green) for glyph (rotating or frozen; see Activity indicator subsection).
 
 If `subagents.length > 5`, add overflow row:
 - `+{N} more` in dim purple
@@ -204,9 +206,25 @@ If `subagents.length > 5`, add overflow row:
 
 When `orchestraBadge === null`, no mode/subagent/overflow rows render. Layout functionally identical to pre-Stage-8.1.1 (only main status row visible).
 
+### Activity indicator (Stage 8.1.4)
+
+Each subagent row (and the mode row for the parent/brain session) displays a glyph indicator that rotates or freezes based on recent activity. The design detects inactivity via a single binary threshold: if no activity has been observed within the last 120 seconds, the glyph halts and serves as a wedge signal.
+
+**Glyph set:** `SPINNER_GLYPHS = ['◐', '◓', '◑', '◒']` (same circle-quadrant family as the parent CC role indicators `◒ tools` / `◓ generating`). Advance is keyed off app-level `spinnerFrame` state incremented every 250 ms by a `useEffect` `setInterval`.
+
+**Colour:** `ACTIVE_GREEN = '#1dde00'` (bright green, uniform for both rotating and frozen states; no tint shift on freeze).
+
+**Parent (brain) row:** `lastActivityAt` is bumped by a new `notifyParentActivity(ts)` method called from `applyReplEvents` in `src/app.tsx` whenever an SSE `block-start` or `block-delta` event arrives with parent role `text`, `thinking`, `tool-call`, or `tool-result`. The update is a direct mutation on the badge object plus an emit, bypassing the `JSON.stringify` diff; React's same-reference bailout prevents a per-event re-render.
+
+**Subagent rows:** `lastActivityAt` would be bumped by D-poll infra (`_startSubagentPoll`) at 5-second intervals against `client.session.messages({ path: { id: childSessionID } })`. **Currently dormant**: the OpenCode SDK's `SubtaskPart` carries no child session ID field (the existing `part.sessionID` is the parent OC session ID); verified against `node_modules/@opencode-ai/sdk/dist/gen/types.gen.d.ts` and v8.1.4 testing. Subagent rows therefore begin spinning on `notifySubtaskStarted` dispatch and freeze after ~120 s of inactivity until `notifySubtaskEnded` removes the row. D-poll infrastructure is in place (`_subagentPollers: Map<partID, timeout>`) and will activate automatically if/when the SDK exposes a child session ID in `SubtaskPart`.
+
+**Freeze threshold:** `ACTIVITY_FREEZE_MS = 120_000`. Render condition: `now - lastActivityAt <= ACTIVITY_FREEZE_MS` selects a rotating glyph; otherwise selects `SPINNER_GLYPHS[0] = ◐` (the default frozen frame).
+
+**Row lifecycle:** Appears on `notifySubtaskStarted`, spinner rotates while `now - lastActivityAt ≤ 120s`, halts on `◐` thereafter, row drops on `notifySubtaskEnded` (either `message.part.removed` SSE event OR `session.idle` force-flush) or pipeline cleanup. No new timeout-based row drop; the 120-s freeze is a visual signal only.
+
 ### File:line reference
 
-`src/components/StatusLine.tsx:80–150` — downward-stack layout with mode row, subagent rows, overflow counter.
+`src/components/StatusLine.tsx:80–150` — downward-stack layout with mode row, subagent rows, overflow counter, glyph rendering and spinner advance.
 
 ---
 
