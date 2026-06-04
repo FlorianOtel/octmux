@@ -2,8 +2,8 @@
 title: "Cost Telemetry Investigation — Orchestra Session 20260601T220451Z-126209"
 created_at: 2026-06-02--08-21
 created_by: "Claude Code (Claude Opus 4.7 — 1M context) via /brain pipeline (Actor: Claude Haiku 4.5)"
-updated_by: "Claude Code (Claude Haiku 4.5) via /brain pipeline (Actor)"
-updated_at: 2026-06-04--09-00
+updated_by: "Claude Code (Claude Opus 4.7 — 1M context)"
+updated_at: 2026-06-04--17-20
 context: >
   The operator ran a /brain orchestra session from octmux (session dir
   /home/florian/.config/opencode/orchestra/sessions/20260601T220451Z-126209/)
@@ -205,4 +205,20 @@ Sum of direct children: ~$0.545. Parent + children total = $4.56 + $0.545 = $5.1
 | 1 (tokens_input=40) | Session semantics; rounding artifact | None — expected | — |
 | 2 (ctx 0%) | `refreshTokenUsage` using zero-token tool frames | Backwards-scan for non-zero `used` | 3 |
 | 3 ($0.355 delta) | Post-cleanup brain activity after telemetry snapshot | None — expected by design | — |
-| 4 (attribution NULL) | OC daemon v0.0.0-fix/* regression in Task handler | Sidecar fallback in orchestra-dir + telemetry reader | 4, 5 |
+| 4 (attribution NULL) | OC daemon v0.0.0-fix/* regression in Task handler | Sidecar fallback in orchestra-dir + telemetry reader (later superseded — see §v8.1.3) | 4, 5 |
+
+---
+
+## §v8.1.3 — Upstream resolution; v8.1.2 sidecar reverted
+
+The Issue 4 root cause — the OC daemon Task-tool handler not populating `agent`/`model` on child sessions — was traced upstream to commit **`ddc30cd15`** (`feat(core): add session metadata support (#23068)`, 2026-05-30 21:58 UTC). That refactor made `agent` and `model` explicit inputs to `Session.create()` / `createNext()`, but the only call site that creates Task-tool child sessions — `packages/opencode/src/tool/task.ts` — was never updated to pass them. The model value was already derived for the prompt invocation but sat below the `sessions.create()` call; agent (`next.name`) was simply never threaded.
+
+**Upstream fix** (FlorianOtel/opencode fork commit **`98a4907c9`** on branch `dev`, to be PR'd to `sst/opencode:dev`): hoist the `MessageV2.get()` fetch + model derivation above `sessions.create()`, then pass `agent: next.name` and `model` (in `Session.Model`'s `{ id, providerID }` shape) to the create input. Regression Tests A/B/C added to `packages/opencode/test/tool/task.test.ts`: post-create child session row has populated `agent` and `model` from DB-source alone.
+
+**Verification on this machine** (2026-06-04 14:57 UTC daemon restart): post-deploy child session `ses_16cdc3cc3ffeerg5gJ9P03yZvl` has `agent=explore, model={"id":"deepseek-v4-flash","providerID":"sohoai"}` populated natively in `opencode.db`. The mechanism documented in oconona's §Per-tier breakdown via parent_id is restored to its pre-`ddc30cd15` behaviour.
+
+**Downstream cleanup** (oconona commits **`3b4511c`** code, **`e9e1e19`** docs): the v8.1.2 `subagents.jsonl` sidecar (writer in `commands/brain.md`, reader in `scripts/telemetry-summarize.py`) is reverted. Telemetry attribution flows through OC DB columns alone; no orchestra-dir sidecar is involved. The defensive `agent: row["agent"] or ""` default in `scripts/oc-db.py` line 378 stays (still better than the original misleading `"brain"` default for the case where the daemon doesn't populate).
+
+**Standalone handoff brief for the upstream PR**: `~/Gin-AI/tmp/opencode-fix-session-metadata.md` (blame, synthetic project-path-independent reproduction, fix diff, PR-ready commit message + body).
+
+**Risk to track**: if the OC daemon is ever rebuilt from canonical `sst/opencode` (before the PR lands), the regression returns. Attribution will be immediately visible in `telemetry.json.subagents[*].agent` (empty strings instead of role names); the v8.1.2 sidecar pattern can be restored from oconona git history at commit `382dd4f` if needed.
