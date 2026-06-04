@@ -309,7 +309,16 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
   if (event.type === "session.deleted") {
     const e = event as EventSessionDeleted;
     const childID = e.properties.info.id;
+    if (process.env.OCTMUX_DEBUG_SSE === "1") {
+      console.error(
+        "[octmux-debug] session.deleted sessionID=" + childID +
+        " isTrackedChild=" + String(trackedChildSessions.has(childID))
+      );
+    }
     if (trackedChildSessions.has(childID)) {
+      if (process.env.OCTMUX_DEBUG_SSE === "1") {
+        console.error("[octmux-debug] emitting subagent-ended (via session.deleted) for sessionID=" + childID);
+      }
       trackedChildSessions.delete(childID);
       return { kind: "subagent-ended", sessionID: childID };
     }
@@ -337,9 +346,19 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
   if (event.type === "session.idle") {
     const e = event as EventSessionIdle;
     const idleID = e.properties.sessionID;
+    if (process.env.OCTMUX_DEBUG_SSE === "1") {
+      console.error(
+        "[octmux-debug] session.idle sessionID=" + idleID +
+        " isTrackedChild=" + String(trackedChildSessions.has(idleID)) +
+        " isHarnessParent=" + String(idleID === sessionID)
+      );
+    }
 
     // A tracked child going idle ends its row.
     if (trackedChildSessions.has(idleID)) {
+      if (process.env.OCTMUX_DEBUG_SSE === "1") {
+        console.error("[octmux-debug] emitting subagent-ended (via session.idle) for sessionID=" + idleID);
+      }
       trackedChildSessions.delete(idleID);
       return { kind: "subagent-ended", sessionID: idleID };
     }
