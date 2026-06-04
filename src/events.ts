@@ -121,6 +121,9 @@ export function hasOpenStreamingPart(): boolean {
 // Filter a raw SDK GlobalEvent payload to one the REPL cares about.
 // Returns null, a single ReplEvent, or an array of ReplEvents for events with side effects.
 export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEvent[] | null {
+  if (process.env.OCTMUX_DEBUG_SSE === "1") {
+    console.error("[octmux-debug] filterEvent type=" + (event as any).type);
+  }
   // Track user message IDs so we can skip their text parts below.
   if (event.type === "message.updated") {
     const info = (event as EventMessageUpdated).properties.info;
@@ -278,6 +281,16 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       agent?: string;
       model?: { id: string; providerID: string; variant?: string };
     };
+    if (process.env.OCTMUX_DEBUG_SSE === "1") {
+      console.error(
+        "[octmux-debug] session.created id=" + info.id +
+        " parentID=" + (info.parentID ?? "<undefined>") +
+        " agent=" + (info.agent ?? "<undefined>") +
+        " model=" + (info.model ? info.model.providerID + "/" + info.model.id : "<undefined>") +
+        " harness=" + sessionID +
+        " match=" + String(info.parentID === sessionID)
+      );
+    }
     if (info.parentID === sessionID && !trackedChildSessions.has(info.id)) {
       trackedChildSessions.add(info.id);
       const modelStr = info.model

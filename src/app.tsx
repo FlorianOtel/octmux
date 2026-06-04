@@ -690,6 +690,19 @@ export function App(props: AppProps) {
         try {
           for await (const globalEvent of stream) {
             if (cancelled) break;
+            if (process.env.OCTMUX_DEBUG_SSE === "1") {
+              const wrapperKeys = Object.keys(globalEvent as object).join(",");
+              if (!(globalThis as any).__octmuxDebugWrapperLogged) {
+                (globalThis as any).__octmuxDebugWrapperLogged = true;
+                console.error("[octmux-debug] SSE wrapper keys=" + wrapperKeys);
+              }
+              const pl = (globalEvent as any).payload;
+              console.error(
+                "[octmux-debug] payload type=" + (pl?.type ?? "<undefined>") +
+                " directory=" + ((globalEvent as any).directory ?? "<undefined>") +
+                " harness=" + sessionIDRef.current
+              );
+            }
             lastSseEventTimeRef.current = Date.now();
             setSseHealth("ok");
             backoff = 1000;

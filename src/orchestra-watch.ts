@@ -360,6 +360,15 @@ export class OrchestraWatcher extends EventEmitter {
    * `_updateBadge` produces a non-null badge.
    */
   notifySubagentStarted(sessionID: string, agent: string, model: string, description?: string): void {
+    if (process.env.OCTMUX_DEBUG_SSE === "1") {
+      console.error(
+        "[octmux-debug] notifySubagentStarted sessionID=" + sessionID +
+        " agent=" + agent +
+        " model=" + model +
+        " badgePresent=" + String(this.badge !== null) +
+        " queueLen=" + this._pendingSubagentQueue.length
+      );
+    }
     if (!this.badge) {
       this._pendingSubagentQueue.push({ sessionID, agent, model, description });
       return;
@@ -430,6 +439,14 @@ export class OrchestraWatcher extends EventEmitter {
     }
 
     if (newBadge !== null && this._pendingSubagentQueue.length > 0) {
+      const pendingLenBefore = this._pendingSubagentQueue.length;
+      const subagentsLenBefore = newBadge.subagents.length;
+      if (process.env.OCTMUX_DEBUG_SSE === "1") {
+        console.error(
+          "[octmux-debug] _updateBadge drain pendingLen=" + pendingLenBefore +
+          " badgeSubagentsBefore=" + subagentsLenBefore
+        );
+      }
       const queue = this._pendingSubagentQueue.splice(0);
       for (const item of queue) {
         if (newBadge.subagents.some(s => s.sessionID === item.sessionID)) continue;
@@ -441,6 +458,9 @@ export class OrchestraWatcher extends EventEmitter {
           description: item.description,
           lastActivityAt: Date.now(),
         });
+      }
+      if (process.env.OCTMUX_DEBUG_SSE === "1") {
+        console.error("[octmux-debug] _updateBadge drain done badgeSubagentsAfter=" + newBadge.subagents.length);
       }
 
       this.emit("changed", newBadge);
