@@ -562,7 +562,7 @@ export function App(props: AppProps) {
           setIsGenerating(false);
           setLastSubmitted("");
           setProcTimes({ thinking: null, tools: null, generating: null });
-          watcherRef.current?.notifyAllSubtasksEnded();
+          watcherRef.current?.notifyAllSubagentsEnded();
           refreshTokenUsage(sessionIDRef.current);
         }
         else if (ev.kind === "session-compacting") {
@@ -637,10 +637,13 @@ export function App(props: AppProps) {
           })();
         }
         else if (ev.kind === "subagent-detected") {
-          watcherRef.current?.notifySubtaskStarted(ev.partID, ev.agent, ev.description, ev.sessionID);
+          watcherRef.current?.notifySubagentStarted(ev.sessionID, ev.agent, ev.model, ev.description);
         }
         else if (ev.kind === "subagent-ended") {
-          watcherRef.current?.notifySubtaskEnded(ev.partID);
+          watcherRef.current?.notifySubagentEnded(ev.sessionID);
+        }
+        else if (ev.kind === "subagent-activity") {
+          watcherRef.current?.notifySubagentActivity(ev.sessionID, ev.ts);
         }
       } catch (err) {
         renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);

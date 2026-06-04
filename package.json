@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "bun run src/index.tsx",
     "build": "bun build src/index.tsx --target bun --outfile dist/octmux.js",
-    "compile": "bun build src/index.tsx --compile --target bun-linux-x64 --outfile dist/octmux"
+    "compile": "bun build src/index.tsx --compile --target bun-linux-x64 --outfile dist/octmux",
+    "test": "bun test src/"
   },
   "dependencies": {
     "@opencode-ai/sdk": "file:/home/florian/.config/opencode/node_modules/@opencode-ai/sdk",

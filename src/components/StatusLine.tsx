@@ -123,16 +123,16 @@ export function StatusLine({
       {orchestraBadge && orchestraBadge.subagents.slice(0, 5).map((subagent) => {
         const agentIsActive = isRecentlyActive(subagent.lastActivityAt);
         const spinnerGlyph = SPINNER_GLYPHS[agentIsActive ? spinnerFrame % 4 : 0];
-        const parts = [
-          subagent.agent,
-          subagent.modelLabel || "",
-          subagent.description ? (subagent.description.length > 30 ? subagent.description.slice(0, 30) + "…" : subagent.description) : "",
-        ].filter(Boolean);
+        const descText = subagent.description
+          ? (subagent.description.length > 30 ? subagent.description.slice(0, 30) + "…" : subagent.description)
+          : "";
 
         return (
-          <Text key={subagent.partID}>
+          <Text key={subagent.sessionID}>
             <Text color={ACTIVE_GREEN}>{spinnerGlyph} </Text>
-            <Text color="#d3869b">{parts.join(" ")}</Text>
+            <Text color="#d3869b">{subagent.agent}</Text>
+            {subagent.model ? <Text dimColor> [{subagent.model}]</Text> : null}
+            {descText ? <Text color="#d3869b">{" " + descText}</Text> : null}
           </Text>
         );
       })}

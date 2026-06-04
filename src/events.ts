@@ -9,6 +9,8 @@ import type {
   EventPermissionUpdated,
   EventSessionUpdated,
   EventSessionCompacted,
+  EventSessionCreated,
+  EventSessionDeleted,
 } from "@opencode-ai/sdk";
 import type { Role } from "./blocks.ts";
 
@@ -31,8 +33,9 @@ export type ReplEvent =
   | { kind: "session-compacting"; sessionID: string; compacting: boolean }
   | { kind: "session-compacted"; sessionID: string }
   | { kind: "message-completed"; messageID: string }
-  | { kind: "subagent-detected"; partID: string; agent: string; description?: string; sessionID?: string }
-  | { kind: "subagent-ended"; partID: string };
+  | { kind: "subagent-detected"; sessionID: string; agent: string; model: string; description?: string }
+  | { kind: "subagent-ended"; sessionID: string }
+  | { kind: "subagent-activity"; sessionID: string; ts: number };
 
 // Track user message IDs so we don't echo the user's own input back to them.
 // opencode fires message.part.updated for user messages too — we skip them.
@@ -55,10 +58,10 @@ const detectedQuestionToolCallIDs = new Set<string>();
 // session switch via resetEventState().
 const completedAssistantMessageIDs = new Set<string>();
 
-// Tracks subtask partIDs for which we've detected and emitted subagent-detected.
-// Prevents re-fire on repeated message.part.updated events for the same subtask.
-// Cleared on session switch via resetEventState().
-const detectedSubtaskPartIDs = new Set<string>();
+// Tracks child session IDs for sessions whose parentID matches the harness session.
+// Populated on session.created; cleared on session.deleted / session.idle for the
+// child, or session switch.
+const trackedChildSessions = new Set<string>();
 
 // Reset event tracking state on session switch.
 export function resetEventState(): void {
@@ -67,7 +70,7 @@ export function resetEventState(): void {
   seenPartIDs.clear();
   detectedQuestionToolCallIDs.clear();
   completedAssistantMessageIDs.clear();
-  detectedSubtaskPartIDs.clear();
+  trackedChildSessions.clear();
 }
 
 /**
@@ -90,15 +93,7 @@ export function synthesizeSessionIdleEvents(): ReplEvent[] {
   }
   openParts.clear();
   seenPartIDs.clear();
-
-  // Flush all detected subtasks via subagent-ended events
-  const subtaskEndEvents: ReplEvent[] = [];
-  for (const partID of detectedSubtaskPartIDs) {
-    subtaskEndEvents.push({ kind: "subagent-ended", partID });
-  }
-  detectedSubtaskPartIDs.clear();
-
-  return [...subtaskEndEvents, { kind: "session-idle" }, ...closeEvents];
+  return [{ kind: "session-idle" }, ...closeEvents];
 }
 
 /**
@@ -266,27 +261,56 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       return null;
     }
 
-    // --- subtask parts ---
-    if (part.type === "subtask") {
-      if (part.sessionID === sessionID && !detectedSubtaskPartIDs.has(part.id)) {
-        detectedSubtaskPartIDs.add(part.id);
-        return {
-          kind: "subagent-detected",
-          partID: part.id,
-          agent: part.agent,
-          description: part.description || undefined,
-          sessionID: undefined,
-        };
-      }
-      return null;
-    }
+    return null;
+  }
 
+  // Subagent dispatch is signalled by `session.created` whose `info.parentID`
+  // matches the harness session. Track the child sessionID so subsequent
+  // lifecycle events (idle / deleted / updated) can be routed to per-row
+  // signals. `info.agent` and `info.model` are populated by the locally-built
+  // OC daemon (FlorianOtel/opencode@98a4907c9, Stage 8.1.3) — the published
+  // SDK Session type lags behind these additions, hence the `as any` access.
+  if (event.type === "session.created") {
+    const e = event as EventSessionCreated;
+    const info = e.properties.info as unknown as {
+      id: string;
+      parentID?: string;
+      agent?: string;
+      model?: { id: string; providerID: string; variant?: string };
+    };
+    if (info.parentID === sessionID && !trackedChildSessions.has(info.id)) {
+      trackedChildSessions.add(info.id);
+      const modelStr = info.model
+        ? `${info.model.providerID}/${info.model.id}`
+        : "";
+      return {
+        kind: "subagent-detected",
+        sessionID: info.id,
+        agent: info.agent ?? "",
+        model: modelStr,
+      };
+    }
+    return null;
+  }
+
+  if (event.type === "session.deleted") {
+    const e = event as EventSessionDeleted;
+    const childID = e.properties.info.id;
+    if (trackedChildSessions.has(childID)) {
+      trackedChildSessions.delete(childID);
+      return { kind: "subagent-ended", sessionID: childID };
+    }
     return null;
   }
 
   if (event.type === "session.updated") {
     const e = event as EventSessionUpdated;
-    if (e.properties.info.id !== sessionID) return null;
+    const updatedID = e.properties.info.id;
+    // Per-row activity for tracked children — drives the spinner-vs-frozen signal.
+    if (trackedChildSessions.has(updatedID)) {
+      return { kind: "subagent-activity", sessionID: updatedID, ts: Date.now() };
+    }
+    if (updatedID !== sessionID) return null;
     const compacting = typeof e.properties.info.time.compacting === "number";
     return { kind: "session-compacting", sessionID, compacting };
   }
@@ -299,7 +323,15 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
 
   if (event.type === "session.idle") {
     const e = event as EventSessionIdle;
-    if (e.properties.sessionID !== sessionID) return null;
+    const idleID = e.properties.sessionID;
+
+    // A tracked child going idle ends its row.
+    if (trackedChildSessions.has(idleID)) {
+      trackedChildSessions.delete(idleID);
+      return { kind: "subagent-ended", sessionID: idleID };
+    }
+
+    if (idleID !== sessionID) return null;
 
     // Close any still-open blocks (text/reasoning parts that didn't get explicit end events).
     const closeEvents: ReplEvent[] = [];
@@ -308,15 +340,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     }
     openParts.clear();
     seenPartIDs.clear();
-
-    // Emit subagent-ended for all detected subtasks
-    const subtaskEndEvents: ReplEvent[] = [];
-    for (const partID of detectedSubtaskPartIDs) {
-      subtaskEndEvents.push({ kind: "subagent-ended", partID });
-    }
-    detectedSubtaskPartIDs.clear();
-
-    return [...subtaskEndEvents, { kind: "session-idle" }, ...closeEvents];
+    return [{ kind: "session-idle" }, ...closeEvents];
   }
 
   if (event.type === "session.error") {
@@ -345,10 +369,6 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       openParts.delete(partId);
     }
     seenPartIDs.delete(partId);
-    if (detectedSubtaskPartIDs.has(partId)) {
-      detectedSubtaskPartIDs.delete(partId);
-      events.push({ kind: "subagent-ended", partID: partId });
-    }
     return events;
   }
 
