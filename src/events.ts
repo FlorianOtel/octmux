@@ -31,7 +31,7 @@ export type ReplEvent =
   | { kind: "session-compacting"; sessionID: string; compacting: boolean }
   | { kind: "session-compacted"; sessionID: string }
   | { kind: "message-completed"; messageID: string }
-  | { kind: "subagent-detected"; partID: string; agent: string; description?: string }
+  | { kind: "subagent-detected"; partID: string; agent: string; description?: string; sessionID?: string }
   | { kind: "subagent-ended"; partID: string };
 
 // Track user message IDs so we don't echo the user's own input back to them.
@@ -275,6 +275,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
           partID: part.id,
           agent: part.agent,
           description: part.description || undefined,
+          sessionID: undefined,
         };
       }
       return null;

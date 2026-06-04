@@ -8,7 +8,16 @@ export type OrchestraBadge = {
   title: string;
   parentModelRaw?: string;
   parentModelLabel?: string;
-  subagents: Array<{ partID: string; agent: string; description?: string; modelRaw?: string; modelLabel?: string }>;
+  lastActivityAt: number;
+  subagents: Array<{
+    partID: string;
+    agent: string;
+    description?: string;
+    modelRaw?: string;
+    modelLabel?: string;
+    lastActivityAt: number;
+    sessionID?: string;
+  }>;
   parserWarnings?: Array<{ code: string; message: string }>;
 } | null;
 
@@ -28,6 +37,8 @@ export class OrchestraWatcher extends EventEmitter {
   private agentModelMap: Map<string, string> = new Map();       // agent name → "provider/modelId"
   private modelFriendlyMap: Map<string, string> = new Map();    // "provider/modelId" → friendly name
   private harnessOcSessionModel: { providerID: string; id: string } | null = null;
+  private _pendingSubtaskQueue: Array<{ partID: string; agent: string; description?: string; sessionID?: string }> = [];
+  private _subagentPollers: Map<string, ReturnType<typeof setInterval>> = new Map();
 
   constructor(client: Client) {
     super();
@@ -299,6 +310,7 @@ export class OrchestraWatcher extends EventEmitter {
               bestBadge = {
                 mode: "duo",
                 title: truncated,
+                lastActivityAt: Date.now(),
                 subagents: [],
                 parentModelRaw: this.harnessOcSessionModel
                   ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
@@ -346,6 +358,7 @@ export class OrchestraWatcher extends EventEmitter {
             bestBadge = {
               mode: "brain",
               title: truncated,
+              lastActivityAt: Date.now(),
               subagents: [],
               parentModelRaw: this.harnessOcSessionModel
                 ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
@@ -378,9 +391,14 @@ export class OrchestraWatcher extends EventEmitter {
 
   /**
    * Notify of a detected subtask (subagent started).
+   * If badge is null, queue the subtask for drain; otherwise add directly and start D-poll.
    */
-  notifySubtaskStarted(partID: string, agent: string, description?: string): void {
-    if (!this.badge) return;
+  notifySubtaskStarted(partID: string, agent: string, description?: string, sessionID?: string): void {
+    if (!this.badge) {
+      // Queue for drain when badge becomes available
+      this._pendingSubtaskQueue.push({ partID, agent, description, sessionID });
+      return;
+    }
 
     // Dedup by partID
     if (this.badge.subagents.some(s => s.partID === partID)) return;
@@ -395,7 +413,14 @@ export class OrchestraWatcher extends EventEmitter {
       description,
       modelRaw,
       modelLabel,
+      lastActivityAt: Date.now(),
+      sessionID,
     });
+
+    // Start D-poll for this subagent
+    if (sessionID) {
+      this._startSubagentPoll(partID, sessionID);
+    }
 
     this._updateBadge({ ...this.badge });
   }
@@ -404,6 +429,9 @@ export class OrchestraWatcher extends EventEmitter {
    * Notify of a subtask end.
    */
   notifySubtaskEnded(partID: string): void {
+    // Stop D-poll for this subagent
+    this._stopSubagentPoll(partID);
+
     if (!this.badge) return;
 
     this.badge.subagents = this.badge.subagents.filter(s => s.partID !== partID);
@@ -414,6 +442,11 @@ export class OrchestraWatcher extends EventEmitter {
    * Notify all subtasks ended (session-idle or explicit flush).
    */
   notifyAllSubtasksEnded(): void {
+    // Stop all D-polls
+    for (const partID of this._subagentPollers.keys()) {
+      this._stopSubagentPoll(partID);
+    }
+
     if (!this.badge) return;
 
     this.badge.subagents = [];
@@ -437,12 +470,119 @@ export class OrchestraWatcher extends EventEmitter {
 
   /**
    * Internal: update badge and emit if changed.
+   * After setting badge, drain any pending subtasks from the queue.
    */
   private _updateBadge(newBadge: OrchestraBadge): void {
     const changed = JSON.stringify(this.badge) !== JSON.stringify(newBadge);
     if (changed) {
       this.badge = newBadge;
       this.emit("changed", newBadge);
+    }
+
+    // Drain queue if badge is now set
+    if (newBadge !== null && this._pendingSubtaskQueue.length > 0) {
+      const queue = this._pendingSubtaskQueue.splice(0);
+      for (const item of queue) {
+        // Dedup by partID
+        if (newBadge.subagents.some(s => s.partID === item.partID)) continue;
+
+        // Lookup model from agentModelMap
+        const modelRaw = this.agentModelMap.get(item.agent);
+        const modelLabel = this.formatModelLabel(modelRaw);
+
+        newBadge.subagents.push({
+          partID: item.partID,
+          agent: item.agent,
+          description: item.description,
+          modelRaw,
+          modelLabel,
+          lastActivityAt: Date.now(),
+          sessionID: item.sessionID,
+        });
+
+        // Start D-poll for this subagent
+        if (item.sessionID) {
+          this._startSubagentPoll(item.partID, item.sessionID);
+        }
+      }
+
+      // Emit once after drain
+      this.emit("changed", newBadge);
+    }
+  }
+
+  /**
+   * Add a parent activity timestamp (without re-serializing the whole badge).
+   * Mutates badge.lastActivityAt directly and emits "changed".
+   */
+  notifyParentActivity(ts: number): void {
+    if (this.badge) {
+      this.badge.lastActivityAt = ts;
+      this.emit("changed", this.badge);
+    }
+  }
+
+  /**
+   * Start a 5-second poll loop for a subagent's session.
+   * Polls the session's messages and bumps activity on update.
+   */
+  private _startSubagentPoll(partID: string, sessionID: string): void {
+    // Skip if sessionID is empty
+    if (!sessionID) return;
+
+    // Skip if already polling
+    if (this._subagentPollers.has(partID)) return;
+
+    let previousLatestTime: number | null = null;
+
+    const timer = setInterval(async () => {
+      try {
+        const resp = await this.client.session.messages({ path: { id: sessionID } });
+        const messages = resp.data ?? [];
+
+        // Find max message time (prefer updated > created)
+        let maxTime: number | null = null;
+        for (const msg of messages) {
+          const time = (msg as any).time?.updated ?? (msg as any).time?.created;
+          if (time && (!maxTime || time > maxTime)) {
+            maxTime = time;
+          }
+        }
+
+        // If time advanced, bump activity
+        if (maxTime !== null && (previousLatestTime === null || maxTime > previousLatestTime)) {
+          previousLatestTime = maxTime;
+          this._bumpSubagentActivity(partID);
+        }
+      } catch {
+        // Silently skip on poll errors
+      }
+    }, 5000);
+
+    this._subagentPollers.set(partID, timer);
+  }
+
+  /**
+   * Update a subagent's lastActivityAt and emit changed.
+   */
+  private _bumpSubagentActivity(partID: string): void {
+    if (!this.badge) return;
+
+    const subagent = this.badge.subagents.find(s => s.partID === partID);
+    if (subagent) {
+      subagent.lastActivityAt = Date.now();
+      this.emit("changed", this.badge);
+    }
+  }
+
+  /**
+   * Stop and remove a D-poll timer for a subagent.
+   */
+  private _stopSubagentPoll(partID: string): void {
+    const timer = this._subagentPollers.get(partID);
+    if (timer) {
+      clearInterval(timer);
+      this._subagentPollers.delete(partID);
     }
   }
 
@@ -458,5 +598,10 @@ export class OrchestraWatcher extends EventEmitter {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
     }
+    // Clear all subagent pollers
+    for (const timer of this._subagentPollers.values()) {
+      clearInterval(timer);
+    }
+    this._subagentPollers.clear();
   }
 }

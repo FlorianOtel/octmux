@@ -75,6 +75,7 @@ export function App(props: AppProps) {
   const [permMode, setPermMode] = useState<"ask" | "allow" | "deny">("ask");
   const [runningCost, setRunningCost] = useState<number>(0);
   const [orchestraBadge, setOrchestraBadge] = useState<OrchestraBadge>(null);
+  const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [gateStates, setGateStates] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(TOGGLES_CONFIG.bindings.map(b => [b.gate, b.default]))
   );
@@ -347,6 +348,12 @@ export function App(props: AppProps) {
     watcherRef.current?.setOcSessionID(sessionID);
   }, [sessionID]);
 
+  // Spinner tick: advance frame every 250 ms
+  useEffect(() => {
+    const handle = setInterval(() => setSpinnerFrame(f => (f + 1) % 4), 250);
+    return () => clearInterval(handle);
+  }, []);
+
   // One-shot: discover opencode commands at startup
   useEffect(() => {
     (async () => {
@@ -526,12 +533,22 @@ export function App(props: AppProps) {
       try {
         if (ev.kind === "block-start") {
           renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName });
+          // Notify parent activity on parent session blocks (text, thinking, tool-call, tool-result)
+          if (ev.role === "text" || ev.role === "thinking" || ev.role === "tool-call" || ev.role === "tool-result") {
+            watcherRef.current?.notifyParentActivity(Date.now());
+          }
           if (ev.role === "thinking")
             setProcTimes(p => p.thinking === null ? { ...p, thinking: Date.now() } : p);
           else if (ev.role === "tool-call" || ev.role === "tool-result")
             setProcTimes(p => p.tools === null ? { ...p, tools: Date.now() } : p);
         }
-        else if (ev.kind === "block-delta")  renderer.appendToBlock(ev.partID, ev.text);
+        else if (ev.kind === "block-delta") {
+          renderer.appendToBlock(ev.partID, ev.text);
+          // Notify parent activity on parent session delta (text, thinking, tool-call, tool-result)
+          if (ev.role === "text" || ev.role === "thinking" || ev.role === "tool-call" || ev.role === "tool-result") {
+            watcherRef.current?.notifyParentActivity(Date.now());
+          }
+        }
         else if (ev.kind === "block-end") {
           renderer.endBlock(ev.partID, ev.status);
           if (ev.role === "thinking") setProcTimes(p => ({ ...p, thinking: null }));
@@ -620,7 +637,7 @@ export function App(props: AppProps) {
           })();
         }
         else if (ev.kind === "subagent-detected") {
-          watcherRef.current?.notifySubtaskStarted(ev.partID, ev.agent, ev.description);
+          watcherRef.current?.notifySubtaskStarted(ev.partID, ev.agent, ev.description, ev.sessionID);
         }
         else if (ev.kind === "subagent-ended") {
           watcherRef.current?.notifySubtaskEnded(ev.partID);
@@ -1188,6 +1205,7 @@ export function App(props: AppProps) {
           runningCost={runningCost}
           orchestraBadge={orchestraBadge}
           sseHealth={sseHealth}
+          spinnerFrame={spinnerFrame}
         />
         <PermissionStatusLine permMode={permMode} />
         <ToggleStatusLine bindings={TOGGLES_CONFIG.bindings} gateStates={gateStates} />

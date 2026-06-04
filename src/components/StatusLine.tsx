@@ -2,6 +2,18 @@ import { Text, Box } from "ink";
 import { formatTokens, contextLabel } from "../utils/formatters.ts";
 import type { OrchestraBadge } from "../orchestra-watch.ts";
 
+const SPINNER_GLYPHS = ['◐', '◓', '◑', '◒'] as const;
+const ACTIVITY_FREEZE_MS = 120_000;
+const ACTIVE_GREEN = '#1dde00';
+
+/**
+ * Helper: determine if lastActivityAt is within the active window.
+ * Defaults to active (true) if lastActivityAt is undefined (backward compat).
+ */
+function isRecentlyActive(lastActivityAt: number | undefined): boolean {
+  return lastActivityAt === undefined ? true : (Date.now() - lastActivityAt) <= ACTIVITY_FREEZE_MS;
+}
+
 export type StatusLineProps = {
   modelLabel: string;           // already prettified — "Sonnet 4.6 (1M context)"
   tokenUsage: { used: number; contextWindow: number } | null;
@@ -11,6 +23,7 @@ export type StatusLineProps = {
   runningCost: number;
   orchestraBadge?: OrchestraBadge;
   sseHealth?: "ok" | "reconnecting" | "silent";
+  spinnerFrame: number;
 };
 
 /**
@@ -26,6 +39,7 @@ export function StatusLine({
   runningCost,
   orchestraBadge,
   sseHealth,
+  spinnerFrame,
 }: StatusLineProps) {
   // Compute bar fill
   let filledCount = 0;
@@ -93,23 +107,22 @@ export function StatusLine({
 
       {/* Mode row (only when orchestraBadge is not null) */}
       {orchestraBadge && (() => {
-        const isWaiting = orchestraBadge.subagents.length > 0;
+        const brainIsActive = isRecentlyActive(orchestraBadge.lastActivityAt);
         const modeText = `${orchestraBadge.mode}${orchestraBadge.parentModelLabel ? " " + orchestraBadge.parentModelLabel : ""}`;
+        const spinnerGlyph = SPINNER_GLYPHS[brainIsActive ? spinnerFrame % 4 : 0];
 
-        if (isWaiting) {
-          return <Text color="#d3869b" dimColor>{`○ ${modeText}`}</Text>;
-        } else {
-          return (
-            <Text>
-              <Text color="#b8bb26">● </Text>
-              <Text color="#d3869b">{modeText}</Text>
-            </Text>
-          );
-        }
+        return (
+          <Text>
+            <Text color={ACTIVE_GREEN}>{spinnerGlyph} </Text>
+            <Text color="#d3869b">{modeText}</Text>
+          </Text>
+        );
       })()}
 
       {/* Subagent rows (max 5, oldest first) */}
       {orchestraBadge && orchestraBadge.subagents.slice(0, 5).map((subagent) => {
+        const agentIsActive = isRecentlyActive(subagent.lastActivityAt);
+        const spinnerGlyph = SPINNER_GLYPHS[agentIsActive ? spinnerFrame % 4 : 0];
         const parts = [
           subagent.agent,
           subagent.modelLabel || "",
@@ -118,7 +131,7 @@ export function StatusLine({
 
         return (
           <Text key={subagent.partID}>
-            <Text color="#b8bb26">● </Text>
+            <Text color={ACTIVE_GREEN}>{spinnerGlyph} </Text>
             <Text color="#d3869b">{parts.join(" ")}</Text>
           </Text>
         );
