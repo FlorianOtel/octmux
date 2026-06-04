@@ -424,28 +424,47 @@ export function App(props: AppProps) {
     try {
       const messagesResp = await props.client.session.messages({ path: { id: sid } });
       const messages = messagesResp.data ?? [];
-      // Find latest assistant message
-      let latestAssistant: typeof messages[number] | null = null;
+      // Find latest assistant message and its index
+      let latestIdx = -1;
       for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i].info.role === "assistant") {
-          latestAssistant = messages[i];
+          latestIdx = i;
           break;
         }
       }
-      if (latestAssistant) {
-        const msg = latestAssistant.info;
+      if (latestIdx >= 0) {
+        const msg = messages[latestIdx].info;
         if (msg.role === "assistant") {
           const tokens = msg.tokens;
           // Guard: non-Anthropic providers may not populate tokens
           if (tokens) {
-            const used = tokens.input
+            let used = tokens.input
               + (tokens.cache?.read ?? 0)
               + (tokens.cache?.write ?? 0);
+
+            // If latest assistant message has zero tokens (e.g., intermediate tool-call frame),
+            // scan backwards for the most recent non-zero assistant message to use its token count.
+            // This preserves the latest-message contract while handling empty intermediate frames.
+            if (used === 0) {
+              for (let j = latestIdx - 1; j >= 0; j--) {
+                if (messages[j].info.role !== "assistant") continue;
+                const fallback = messages[j].info;
+                const ft = fallback.tokens;
+                if (!ft) continue;
+                const fallbackUsed = ft.input + (ft.cache?.read ?? 0) + (ft.cache?.write ?? 0);
+                if (fallbackUsed > 0) {
+                  used = fallbackUsed;
+                  break;
+                }
+              }
+            }
+
             const ctxWindow = await getContextWindow(
               props.client,
               msg.providerID,
               msg.modelID,
             );
+            // Always use latest message's model, even if tokens fell back to an earlier message
             setActiveModel({ providerID: msg.providerID, modelID: msg.modelID });
             setTokenUsage({ used, contextWindow: ctxWindow });
           }
