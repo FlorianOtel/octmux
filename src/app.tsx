@@ -562,7 +562,6 @@ export function App(props: AppProps) {
           setIsGenerating(false);
           setLastSubmitted("");
           setProcTimes({ thinking: null, tools: null, generating: null });
-          watcherRef.current?.notifyAllSubagentsEnded();
           refreshTokenUsage(sessionIDRef.current);
         }
         else if (ev.kind === "session-compacting") {

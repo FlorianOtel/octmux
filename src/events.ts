@@ -59,9 +59,20 @@ const detectedQuestionToolCallIDs = new Set<string>();
 const completedAssistantMessageIDs = new Set<string>();
 
 // Tracks child session IDs for sessions whose parentID matches the harness session.
-// Populated on session.created; cleared on session.deleted / session.idle for the
-// child, or session switch.
+// Populated on session.created; cleared on session.deleted or when the paired
+// parent Task tool transitions to completed/error.
 const trackedChildSessions = new Set<string>();
+
+// Task-tool partIDs first observed in pending/running state, not yet paired with
+// a child session. JS Sets iterate in insertion order — FIFO-paired on the next
+// session.created with matching parentID.
+const openTaskPartIDs = new Set<string>();
+
+// Paired Task-tool partID → child sessionID. Drained on Task tool completed/error
+// to emit subagent-ended for the precise lifetime of one subagent dispatch.
+// This is OC's protocol-precise "subagent task done" signal; session.idle is just
+// "session paused awaiting input/turn" and fires repeatedly during a single task.
+const taskToChild = new Map<string, string>();
 
 // Reset event tracking state on session switch.
 export function resetEventState(): void {
@@ -71,6 +82,8 @@ export function resetEventState(): void {
   detectedQuestionToolCallIDs.clear();
   completedAssistantMessageIDs.clear();
   trackedChildSessions.clear();
+  openTaskPartIDs.clear();
+  taskToChild.clear();
 }
 
 /**
@@ -214,6 +227,12 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       // First time (pending state): open tool-call block.
       if (state.status === "pending" && !openParts.has(toolPart.id)) {
         openParts.set(toolPart.id, "tool-call");
+        if (toolPart.tool === "task") {
+          openTaskPartIDs.add(toolPart.id);
+          if (process.env.OCTMUX_DEBUG_SSE === "1") {
+            console.error("[octmux-debug] task tool pending partID=" + toolPart.id);
+          }
+        }
         return { kind: "block-start", partID: toolPart.id, role: "tool-call", toolName: toolPart.tool };
       }
 
@@ -251,6 +270,23 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
             { kind: "block-end",   partID: resultPartID, role: "tool-result", status: "ok" },
           );
         }
+        // Task tool finished → end the paired subagent's row. This is the
+        // protocol-precise "subagent task done" signal (vs. session.idle which
+        // is just "session paused awaiting input/turn").
+        if (toolPart.tool === "task") {
+          const pairedChildID = taskToChild.get(toolPart.id);
+          if (pairedChildID) {
+            if (process.env.OCTMUX_DEBUG_SSE === "1") {
+              console.error("[octmux-debug] task tool completed, ending subagent partID=" + toolPart.id + " childID=" + pairedChildID);
+            }
+            taskToChild.delete(toolPart.id);
+            trackedChildSessions.delete(pairedChildID);
+            events.push({ kind: "subagent-ended", sessionID: pairedChildID });
+          } else if (openTaskPartIDs.has(toolPart.id)) {
+            // Task finished before a session.created paired it (race, or no child created).
+            openTaskPartIDs.delete(toolPart.id);
+          }
+        }
         return events;
       }
 
@@ -258,7 +294,23 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       if (state.status === "error" && openParts.get(toolPart.id) === "tool-call") {
         openParts.delete(toolPart.id);
         detectedQuestionToolCallIDs.delete(toolPart.id);
-        return { kind: "block-end", partID: toolPart.id, role: "tool-call", status: "error" };
+        const events: ReplEvent[] = [
+          { kind: "block-end", partID: toolPart.id, role: "tool-call", status: "error" },
+        ];
+        if (toolPart.tool === "task") {
+          const pairedChildID = taskToChild.get(toolPart.id);
+          if (pairedChildID) {
+            if (process.env.OCTMUX_DEBUG_SSE === "1") {
+              console.error("[octmux-debug] task tool errored, ending subagent partID=" + toolPart.id + " childID=" + pairedChildID);
+            }
+            taskToChild.delete(toolPart.id);
+            trackedChildSessions.delete(pairedChildID);
+            events.push({ kind: "subagent-ended", sessionID: pairedChildID });
+          } else if (openTaskPartIDs.has(toolPart.id)) {
+            openTaskPartIDs.delete(toolPart.id);
+          }
+        }
+        return events;
       }
 
       return null;
@@ -293,6 +345,18 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     }
     if (info.parentID === sessionID && !trackedChildSessions.has(info.id)) {
       trackedChildSessions.add(info.id);
+      // Pair with the oldest open (pending/running) Task tool partID. JS Sets
+      // iterate in insertion order, so .values().next().value returns the FIFO
+      // head. If empty, the row will only end on session.deleted or badge → null
+      // (fallback path; unusual for normal /brain flow).
+      const openPartID = openTaskPartIDs.values().next().value;
+      if (openPartID) {
+        taskToChild.set(openPartID, info.id);
+        openTaskPartIDs.delete(openPartID);
+        if (process.env.OCTMUX_DEBUG_SSE === "1") {
+          console.error("[octmux-debug] session.created paired with task partID=" + openPartID + " childID=" + info.id);
+        }
+      }
       const modelStr = info.model
         ? `${info.model.providerID}/${info.model.id}`
         : "";
@@ -354,13 +418,14 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       );
     }
 
-    // A tracked child going idle ends its row.
+    // OC fires session.idle every time a session pauses awaiting input/turn.
+    // For subagent sessions this fires repeatedly within a single dispatched task
+    // (between LLM turns / tool calls). Row removal is driven instead by the
+    // parent's Task tool transitioning to state=completed/error (see the tool
+    // branch above). Stage 8.1.4 spinner-freeze (120s) provides the
+    // inactivity-recent visual cue meanwhile.
     if (trackedChildSessions.has(idleID)) {
-      if (process.env.OCTMUX_DEBUG_SSE === "1") {
-        console.error("[octmux-debug] emitting subagent-ended (via session.idle) for sessionID=" + idleID);
-      }
-      trackedChildSessions.delete(idleID);
-      return { kind: "subagent-ended", sessionID: idleID };
+      return null;
     }
 
     if (idleID !== sessionID) return null;

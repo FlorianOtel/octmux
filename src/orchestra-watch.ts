@@ -275,7 +275,10 @@ export class OrchestraWatcher extends EventEmitter {
                 mode: "duo",
                 title: truncated,
                 lastActivityAt: Date.now(),
-                subagents: [],
+                // Preserve subagents across re-scans: scan() runs every 5s (poll)
+                // and on fs.watch fires; without preservation, freshly-added rows
+                // would be wiped before becoming visible.
+                subagents: this.badge?.subagents ?? [],
                 parentModelRaw: this.harnessOcSessionModel
                   ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
                   : undefined,
@@ -323,7 +326,8 @@ export class OrchestraWatcher extends EventEmitter {
               mode: "brain",
               title: truncated,
               lastActivityAt: Date.now(),
-              subagents: [],
+              // Preserve subagents across re-scans (see duo branch comment).
+              subagents: this.badge?.subagents ?? [],
               parentModelRaw: this.harnessOcSessionModel
                 ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
                 : undefined,
@@ -385,9 +389,10 @@ export class OrchestraWatcher extends EventEmitter {
       lastActivityAt: Date.now(),
     });
 
-    // Direct emit — `_updateBadge`'s JSON.stringify diff cannot detect
-    // in-place subagents[] mutations after a shallow spread (the array
-    // reference is shared). Mirror the `notifyParentActivity` pattern.
+    // New top-level reference so React's setOrchestraBadge sees a different
+    // object and re-renders immediately. The subagents array reference is
+    // shared (with the recent push), so StatusLine reads the latest state.
+    this.badge = {...this.badge};
     this.emit("changed", this.badge);
   }
 
@@ -399,6 +404,7 @@ export class OrchestraWatcher extends EventEmitter {
     if (!this.badge) return;
 
     this.badge.subagents = this.badge.subagents.filter(s => s.sessionID !== sessionID);
+    this.badge = {...this.badge};
     this.emit("changed", this.badge);
   }
 
@@ -409,6 +415,7 @@ export class OrchestraWatcher extends EventEmitter {
     if (!this.badge) return;
 
     this.badge.subagents = [];
+    this.badge = {...this.badge};
     this.emit("changed", this.badge);
   }
 
@@ -463,7 +470,10 @@ export class OrchestraWatcher extends EventEmitter {
         console.error("[octmux-debug] _updateBadge drain done badgeSubagentsAfter=" + newBadge.subagents.length);
       }
 
-      this.emit("changed", newBadge);
+      // New top-level reference for React re-render (drain shares the same
+      // newBadge object — `this.badge` is set to it earlier in this method).
+      this.badge = {...newBadge};
+      this.emit("changed", this.badge);
     }
   }
 
@@ -474,6 +484,7 @@ export class OrchestraWatcher extends EventEmitter {
   notifyParentActivity(ts: number): void {
     if (this.badge) {
       this.badge.lastActivityAt = ts;
+      this.badge = {...this.badge};
       this.emit("changed", this.badge);
     }
   }
@@ -488,6 +499,7 @@ export class OrchestraWatcher extends EventEmitter {
     const subagent = this.badge.subagents.find(s => s.sessionID === sessionID);
     if (subagent) {
       subagent.lastActivityAt = ts;
+      this.badge = {...this.badge};
       this.emit("changed", this.badge);
     }
   }

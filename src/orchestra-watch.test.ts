@@ -203,3 +203,50 @@ describe("OrchestraWatcher.notifyParentActivity (unchanged from Stage 8.1.4, reg
     expect(changed).toBe(1);
   });
 });
+
+describe("OrchestraWatcher emit identity (React same-reference bailout defeat)", () => {
+  // React's setState bails out when newValue is Object.is to the current value.
+  // The watcher mutates this.badge in place; without a new top-level reference
+  // on each emit, setOrchestraBadge would bail and React would not re-render
+  // until an unrelated state change (e.g. spinner tick). Each notify* method
+  // must emit a DIFFERENT object reference than the previous emit.
+  test("notifySubagentStarted emits a new badge object reference (not Object.is to previous)", () => {
+    const w = freshWatcher();
+    setBadge(w, makeBadge());
+    const beforeRef = getBadge(w);
+    w.notifySubagentStarted("ses_child", "planner", "sohoai/minimax-m3");
+    const afterRef = getBadge(w);
+    expect(Object.is(beforeRef, afterRef)).toBe(false);
+  });
+
+  test("notifySubagentActivity emits a new badge object reference", () => {
+    const w = freshWatcher();
+    setBadge(w, makeBadge({
+      subagents: [{ sessionID: "ses_a", agent: "planner", model: "m1", lastActivityAt: 100 }],
+    }));
+    const beforeRef = getBadge(w);
+    w.notifySubagentActivity("ses_a", 999);
+    const afterRef = getBadge(w);
+    expect(Object.is(beforeRef, afterRef)).toBe(false);
+  });
+
+  test("notifyParentActivity emits a new badge object reference", () => {
+    const w = freshWatcher();
+    setBadge(w, makeBadge());
+    const beforeRef = getBadge(w);
+    w.notifyParentActivity(999);
+    const afterRef = getBadge(w);
+    expect(Object.is(beforeRef, afterRef)).toBe(false);
+  });
+
+  test("notifySubagentEnded emits a new badge object reference", () => {
+    const w = freshWatcher();
+    setBadge(w, makeBadge({
+      subagents: [{ sessionID: "ses_a", agent: "planner", model: "m1", lastActivityAt: 100 }],
+    }));
+    const beforeRef = getBadge(w);
+    w.notifySubagentEnded("ses_a");
+    const afterRef = getBadge(w);
+    expect(Object.is(beforeRef, afterRef)).toBe(false);
+  });
+});

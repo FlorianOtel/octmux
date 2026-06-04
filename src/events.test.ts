@@ -109,13 +109,16 @@ describe("filterEvent — lifecycle end signals for tracked children", () => {
     } as any, PARENT_SID);
   }
 
-  test("session.idle for tracked child returns subagent-ended", () => {
+  test("session.idle for tracked child returns null (NOT subagent-ended)", () => {
+    // OC fires session.idle on every turn pause within a subagent's life.
+    // Row removal is driven by the parent's Task tool transitioning to
+    // completed/error (see Task-tool tracking tests below).
     trackChild();
     const out = filterEvent({
       type: "session.idle",
       properties: { sessionID: CHILD_SID },
     } as any, PARENT_SID);
-    expect(out).toEqual({ kind: "subagent-ended", sessionID: CHILD_SID });
+    expect(out).toBeNull();
   });
 
   test("session.idle for the parent (harness) session does NOT match the subagent-end branch", () => {
@@ -156,14 +159,119 @@ describe("filterEvent — lifecycle end signals for tracked children", () => {
     expect(out).toBeNull();
   });
 
-  test("after subagent-ended via session.idle, a subsequent session.created for the same id re-tracks (no stale dedup)", () => {
+  test("after subagent-ended via session.deleted, a subsequent session.created for the same id re-tracks (no stale dedup)", () => {
     trackChild();
-    filterEvent({ type: "session.idle", properties: { sessionID: CHILD_SID } } as any, PARENT_SID);
+    filterEvent({
+      type: "session.deleted",
+      properties: { info: sessionInfo({ id: CHILD_SID }) },
+    } as any, PARENT_SID);
     const re = filterEvent({
       type: "session.created",
       properties: { info: sessionInfo({ id: CHILD_SID, parentID: PARENT_SID, agent: "planner", model: { providerID: "sohoai", id: "minimax-m3" } }) },
     } as any, PARENT_SID);
     expect(re).not.toBeNull();
+  });
+});
+
+// Helpers for Task-tool tracking tests
+function taskPart(partID: string, status: "pending" | "running" | "completed" | "error", output?: string) {
+  return {
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id: partID,
+        sessionID: PARENT_SID,
+        messageID: "msg_1",
+        type: "tool",
+        tool: "task",
+        callID: "call_" + partID,
+        state: { status, output },
+      },
+    },
+  } as any;
+}
+
+describe("filterEvent — Task tool tracking (protocol-precise end signal)", () => {
+  test("Task tool state=pending registers partID in openTaskPartIDs (returns block-start tool-call)", () => {
+    const out = filterEvent(taskPart("prt_task_a", "pending"), PARENT_SID);
+    expect(out).not.toBeNull();
+    expect((out as any).kind).toBe("block-start");
+    expect((out as any).role).toBe("tool-call");
+    expect((out as any).toolName).toBe("task");
+  });
+
+  test("session.created arriving after a pending Task tool is paired with that partID", () => {
+    filterEvent(taskPart("prt_task_a", "pending"), PARENT_SID);
+    const created = filterEvent({
+      type: "session.created",
+      properties: {
+        info: sessionInfo({
+          id: CHILD_SID,
+          parentID: PARENT_SID,
+          agent: "planner",
+          model: { providerID: "sohoai", id: "minimax-m3" },
+        }),
+      },
+    } as any, PARENT_SID);
+    expect(created).not.toBeNull();
+    expect((created as any).kind).toBe("subagent-detected");
+    // Now complete the task — should emit subagent-ended for the paired child
+    const completed = filterEvent(taskPart("prt_task_a", "completed", "result"), PARENT_SID);
+    expect(Array.isArray(completed)).toBe(true);
+    expect((completed as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === CHILD_SID)).toBe(true);
+  });
+
+  test("Task tool state=completed for an UNPAIRED partID just cleans up (no subagent-ended)", () => {
+    filterEvent(taskPart("prt_task_orphan", "pending"), PARENT_SID);
+    // No session.created arrives → never paired
+    const completed = filterEvent(taskPart("prt_task_orphan", "completed", ""), PARENT_SID);
+    expect(Array.isArray(completed)).toBe(true);
+    expect((completed as any[]).every(e => e.kind !== "subagent-ended")).toBe(true);
+  });
+
+  test("Task tool state=error for paired partID emits subagent-ended", () => {
+    filterEvent(taskPart("prt_task_b", "pending"), PARENT_SID);
+    filterEvent({
+      type: "session.created",
+      properties: { info: sessionInfo({ id: "ses_child_b", parentID: PARENT_SID }) },
+    } as any, PARENT_SID);
+    const errored = filterEvent(taskPart("prt_task_b", "error"), PARENT_SID);
+    expect(Array.isArray(errored)).toBe(true);
+    expect((errored as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === "ses_child_b")).toBe(true);
+  });
+
+  test("FIFO pairing: two pending tasks then two session.created — oldest task pairs with first session", () => {
+    filterEvent(taskPart("prt_task_1", "pending"), PARENT_SID);
+    filterEvent(taskPart("prt_task_2", "pending"), PARENT_SID);
+    filterEvent({
+      type: "session.created",
+      properties: { info: sessionInfo({ id: "ses_child_1", parentID: PARENT_SID }) },
+    } as any, PARENT_SID);
+    filterEvent({
+      type: "session.created",
+      properties: { info: sessionInfo({ id: "ses_child_2", parentID: PARENT_SID }) },
+    } as any, PARENT_SID);
+    // Complete task_1 — should end ses_child_1 (oldest pairing)
+    const out1 = filterEvent(taskPart("prt_task_1", "completed", ""), PARENT_SID);
+    expect((out1 as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === "ses_child_1")).toBe(true);
+    // Complete task_2 — should end ses_child_2
+    const out2 = filterEvent(taskPart("prt_task_2", "completed", ""), PARENT_SID);
+    expect((out2 as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === "ses_child_2")).toBe(true);
+  });
+
+  test("session.created with no preceding Task tool still emits subagent-detected (unpaired; ends via badge → null)", () => {
+    const out = filterEvent({
+      type: "session.created",
+      properties: {
+        info: sessionInfo({ id: "ses_unpaired", parentID: PARENT_SID, agent: "planner", model: { providerID: "sohoai", id: "minimax-m3" } }),
+      },
+    } as any, PARENT_SID);
+    expect(out).toEqual({
+      kind: "subagent-detected",
+      sessionID: "ses_unpaired",
+      agent: "planner",
+      model: "sohoai/minimax-m3",
+    });
   });
 });
 
