@@ -3,7 +3,7 @@ title: "Stage 8 — octmux consumer-side contract: cost path, badge mechanics, f
 created_at: 2026-06-03--16-50
 created_by: Claude Code (Claude Opus 4.7 1M context)
 updated_by: Claude Code (Claude Opus 4.7 — 1M context)
-updated_at: 2026-06-04--22-32
+updated_at: 2026-06-05--00-53
 context: >
   Consumer-side implementation reference for the cost display + orchestra badge in octmux.
   Mirrors the structure of oconona's docs/Stage7.5--implementation-details.md (the provider
@@ -105,50 +105,78 @@ This prevents `fs.watch` callbacks from blocking on an HTTP roundtrip while pres
 
 ---
 
-## Subagent role detection (`session.created` global-event filter)
+## Subagent role detection (`session.created` filter + Task-tool lifecycle)
 
 ### What octmux reads
 
 Live subagent detection operates on the OpenCode **global event stream** (`client.global.event({})`, opened once at `src/index.tsx:257`), filtering `session.created` events whose payload `info.parentID` matches the harness OC session ID. The child Session payload carries:
-- `info.id: string` — the child OC session ID; the lifecycle key used throughout octmux for this subagent.
-- `info.parentID: string` — the harness session ID; equality with `sessionID` is the filter predicate.
-- `info.agent: string` — the dispatched subagent role (e.g. `planner`, `actor`, `actor-heavy`, `reviewer`).
-- `info.model: { providerID: string; id: string; variant?: string }` — the resolved model; rendered as `${providerID}/${id}`.
+- `info.id: string` — child OC session ID; the lifecycle key used throughout octmux.
+- `info.parentID: string` — harness session ID; equality with `sessionID` is the filter predicate.
+- `info.agent: string` — dispatched subagent role (e.g. `planner`, `actor`, `actor-heavy`, `reviewer`).
+- `info.model: { providerID: string; id: string; variant?: string }` — resolved model; rendered as `${providerID}/${id}`.
 
-The `info.agent` and `info.model` fields are populated by the locally-built OC daemon (FlorianOtel/opencode@98a4907c9, Stage 8.1.3). The published SDK Session type lags behind these additions; octmux accesses them through a typed `as unknown as { ... }` cast at the `session.created` branch.
+`info.agent` and `info.model` are populated by the locally-built OC daemon since the upstream Stage 8.1.3 fix (FlorianOtel/opencode@98a4907c9). The published SDK `Session` type lags behind these additions; octmux accesses them through a typed `as unknown as { ... }` cast at the `session.created` branch.
 
 ### Detection mechanism
 
-1. **Event stream:** `src/events.ts:filterEvent` processes the `session.created` event. When `info.parentID === sessionID` and the child ID is not already tracked, the function emits `{ kind: "subagent-detected", sessionID: info.id, agent: info.agent ?? "", model: ${providerID}/${id} | "" }` and adds `info.id` to module-level `trackedChildSessions: Set<string>`.
-2. **Lifecycle end:** A `session.deleted` event for a tracked child ID emits `{ kind: "subagent-ended", sessionID }`; the parent-session `session.idle` handler routes tracked-child `sessionID`s the same way (separate from the existing parent-flush branch). Either path removes the ID from `trackedChildSessions`.
-3. **Per-row activity:** A `session.updated` event for a tracked child ID emits `{ kind: "subagent-activity", sessionID, ts: Date.now() }`, which drives the spinner-vs-frozen state on the corresponding row (see §Activity indicator).
-4. **Watcher notification:** `src/app.tsx` routes `subagent-detected → notifySubagentStarted(sessionID, agent, model, description?)`, `subagent-ended → notifySubagentEnded(sessionID)`, `subagent-activity → notifySubagentActivity(sessionID, ts)`, and the parent-session `session-idle → notifyAllSubagentsEnded()`.
+1. **`session.created` (row appears).** `src/events.ts:filterEvent` matches `event.type === "session.created"` AND `info.parentID === sessionID` AND `!trackedChildSessions.has(info.id)`. Adds `info.id` to module-level `trackedChildSessions: Set<string>`. Emits `{ kind: "subagent-detected", sessionID: info.id, agent: info.agent ?? "", model: "${providerID}/${id}" | "" }`. The watcher's `notifySubagentStarted(sessionID, agent, model, description?)` pushes a fresh `{sessionID, agent, model, description?, lastActivityAt: Date.now()}` into `this.badge.subagents[]`.
 
-**Race safety (queue-and-drain):** When a `session.created` event arrives before the directory-scan-driven badge construction has produced a non-null badge, `notifySubagentStarted` buffers the call in `_pendingSubagentQueue: Array<{ sessionID, agent, model, description? }>` and returns. The next non-null `_updateBadge(newBadge)` drains the queue into `newBadge.subagents[]` (deduping by `sessionID`) before emitting `"changed"`. The Stage 8.2.1 `matchedSessionCount` invariant is preserved — `scan()` is unchanged.
+2. **Task-tool tracking (lifecycle end signal).** The row's protocol-precise end signal is the brain's Task tool transitioning to `state.status === "completed"` or `"error"` — NOT the child's `session.idle` (which OC fires on every turn pause within a subagent's life). Two module-level structures in `events.ts` implement the pairing:
+   - `openTaskPartIDs: Set<string>` — Task-tool partIDs first observed in `pending`/`running` state, awaiting pair. JS `Set`s iterate in insertion order, so `.values().next().value` returns the FIFO head.
+   - `taskToChild: Map<string, string>` — paired Task-tool partID → child sessionID.
 
-**Direct-emit invariant:** `notifySubagentStarted`, `notifySubagentEnded`, and `notifyAllSubagentsEnded` emit `"changed"` directly on `this.badge` rather than routing through `_updateBadge`. After in-place mutation of `badge.subagents[]` plus a shallow spread, `_updateBadge`'s `JSON.stringify` diff sees identical content (the array reference is shared) and would suppress the emit. Direct emit is the only reliable path; `notifyParentActivity` and `notifySubagentActivity` follow the same pattern.
+   Flow inside the existing `message.part.updated` `part.type === "tool"` branch (gated by `toolPart.tool === "task"` — the daemon's registered tool name, verified at `~/Gin-AI/projects/opencode/packages/opencode/src/tool/task.ts:24`):
+   - State first seen as `pending`: `openTaskPartIDs.add(toolPart.id)`.
+   - On `session.created` for a child of the harness, the oldest open partID is moved from `openTaskPartIDs` to `taskToChild` (pair recorded).
+   - State transitions to `completed` (or `error`): if `taskToChild.has(toolPart.id)`, the paired `childID` is removed from `trackedChildSessions`, the entry is deleted from `taskToChild`, and `{ kind: "subagent-ended", sessionID: childID }` is appended to the tool-result/error event array. A task that ends before a `session.created` pairs with it (no child created) just cleans up `openTaskPartIDs`.
+
+3. **Per-row activity (spinner-vs-frozen).** A `session.updated` event for a tracked child ID emits `{ kind: "subagent-activity", sessionID, ts: Date.now() }`. The watcher's `notifySubagentActivity(sessionID, ts)` bumps the matching row's `lastActivityAt` (see §Activity indicator).
+
+4. **Child `session.idle` is NOT an end signal.** OC fires `session.idle` on every turn pause within a subagent's life. The tracked-child branch in the `session.idle` handler returns `null` deliberately — row removal is owned by the Task-tool tracking above. The Stage 8.1.4 spinner-freeze threshold (120 s of inactivity) provides the inactivity-recent visual cue meanwhile.
+
+5. **`session.deleted` is a fallback end signal.** Rarely fires under normal /brain flow but serves as a safety net for explicit session deletion: tracked-child match emits `subagent-ended` and cleans `trackedChildSessions` + `taskToChild`.
+
+6. **Watcher notification routing.** `src/app.tsx` routes ReplEvents: `subagent-detected → notifySubagentStarted`; `subagent-ended → notifySubagentEnded`; `subagent-activity → notifySubagentActivity`.
+
+### Render-side invariants in `orchestra-watch.ts`
+
+**`scan()` preserves existing subagents across re-runs.** The `bestBadge` literals in both brain and duo branches build with `subagents: this.badge?.subagents ?? []` rather than `[]`. `scan()` runs every 5 s (fallback poll) and on every `fs.watch` fire (oconona writing/touching files in the orchestra-sessions directory). Without preservation, `_updateBadge`'s `JSON.stringify` diff would see the fresh-empty-array vs the previously-mutated one, replace `this.badge` with the empty version, and silently destroy any subagent rows that `notifySubagentStarted` had just pushed.
+
+**Every emit produces a new top-level reference.** Five `notify*` methods and the `_updateBadge` drain path execute `this.badge = {...this.badge}` (or `newBadge = {...newBadge}`) immediately before `this.emit("changed", ...)`. The wiring at `src/app.tsx:336` is `watcher.on("changed", setOrchestraBadge)`; React's `setOrchestraBadge` does `Object.is(newValue, currentState)` and bails out of re-rendering when they match. In-place mutation of `badge.subagents` does not change the badge's top-level reference, so without the shallow clone the push/filter/lastActivityAt-bump becomes visible only at the next unrelated re-render (the 250 ms `spinnerFrame` tick). The clone makes each emit immediately observable to React. The `subagents` array reference is shared between the clone and the previous badge (the mutation has already been applied), so `StatusLine` reads the latest state.
+
+**Queue-and-drain for race safety.** When a `session.created` event arrives before the directory-scan-driven badge construction has produced a non-null badge, `notifySubagentStarted` buffers the call in `_pendingSubagentQueue: Array<{sessionID, agent, model, description?}>` and returns. The next non-null `_updateBadge(newBadge)` drains the queue into `newBadge.subagents[]` (deduping by `sessionID`) before emitting `"changed"`. Stage 8.2.1 `matchedSessionCount` invariant unchanged.
 
 ### Subagent row payload
 
-Each entry in `OrchestraBadge.subagents[]` carries:
-- `sessionID: string` — child OC session ID (lifecycle + activity key)
-- `agent: string` — dispatched role name
-- `model: string` — `${providerID}/${id}` (empty string when the daemon omitted the field)
-- `description?: string` — optional, currently always undefined (the `session.created` payload has no description equivalent)
-- `lastActivityAt: number` — millisecond timestamp; bumped by `notifySubagentActivity`
+Each entry in `OrchestraBadge.subagents[]`:
+- `sessionID: string` — child OC session ID (identity, lifecycle, activity key)
+- `agent: string` — dispatched role name (`planner`, `actor`, `actor-heavy`, `reviewer`, …)
+- `model: string` — `${providerID}/${id}` (empty string when the daemon omitted `info.model`)
+- `description?: string` — reserved; currently always undefined (`session.created` carries no description)
+- `lastActivityAt: number` — ms timestamp; bumped by `notifySubagentActivity`
 
 ### Parent (harness) row model label
 
-`OrchestraBadge.parentModelRaw` / `parentModelLabel` are populated from `harnessOcSessionModel`, resolved by `resolveHarnessSessionID()` via the OC HTTP API (`GET /session`). The friendly-name lookup uses `~/.config/opencode/opencode.json` `provider.<P>.models.<M>.name`; format is `[provider/friendly]` (brackets included). The `modelFriendlyMap` is loaded once in `OrchestraWatcher.start()`.
+`OrchestraBadge.parentModelRaw` / `parentModelLabel` are populated from `harnessOcSessionModel`, resolved by `resolveHarnessSessionID()` via the OC HTTP API (`GET /session`). The friendly-name lookup uses `~/.config/opencode/opencode.json` `provider.<P>.models.<M>.name`; format is `[provider/friendly]` (brackets included). `modelFriendlyMap` is loaded once in `OrchestraWatcher.start()`.
 
-Subagent rows do not consult the friendly-name map: the `info.model` carried by `session.created` is rendered as-is in `[${providerID}/${id}]` form. This is what the operator sees on screen (e.g. `[sohoai/minimax-m3]`).
+Subagent rows do not consult the friendly-name map: the `info.model` from `session.created` is rendered as-is in `[${providerID}/${id}]` form on screen (e.g. `[sohoai/minimax-m3]`).
+
+### Diagnostic logging
+
+Env-gated `console.error` shims at seven sites fire when `OCTMUX_DEBUG_SSE=1`:
+- `src/app.tsx` SSE for-await loop: one-shot wrapper-key dump + per-event `payload type=… directory=… harness=…`.
+- `src/events.ts`: `filterEvent type=…` entry; `session.created id=… parentID=… agent=… model=… harness=… match=…`; `session.idle sessionID=… isTrackedChild=… isHarnessParent=…`; `session.deleted sessionID=… isTrackedChild=…`; `task tool pending partID=…`; `session.created paired with task partID=… childID=…`; `task tool completed/errored, ending subagent partID=… childID=…`.
+- `src/orchestra-watch.ts`: `notifySubagentStarted sessionID=… agent=… model=… badgePresent=… queueLen=…`; `_updateBadge drain pendingLen=… badgeSubagentsBefore=…` / `…drain done badgeSubagentsAfter=…`.
+
+Default off → zero behaviour change. Evidence-pass recipe: `OCTMUX_DEBUG_SSE=1 dist/octmux 2>/tmp/octmux-debug.log`, run `/brain "<task>"`, exit, grep for the lifecycle markers. Regression check: `grep -c 'emitting subagent-ended (via session.idle)' /tmp/octmux-debug.log` must be 0.
 
 ### File:line reference
 
-- `src/index.tsx:257` — `client.global.event({})` opens the global event stream; `eventStream` is passed to `<App>`
-- `src/events.ts` — `session.created` / `session.deleted` / `session.updated` / `session.idle` branches and `trackedChildSessions` state
-- `src/orchestra-watch.ts` — `notifySubagentStarted`, `notifySubagentEnded`, `notifyAllSubagentsEnded`, `notifySubagentActivity` public API; `_pendingSubagentQueue` + drain in `_updateBadge`; `loadModelFriendlyNames()`, `formatModelLabel()` for the parent row
-- `src/app.tsx` — `subagent-detected` / `subagent-ended` / `subagent-activity` / `session-idle` event handlers
+- `src/index.tsx:257` — `client.global.event({})` opens the global event stream; `eventStream.stream` is passed to `<App>`.
+- `src/events.ts` — `trackedChildSessions`, `openTaskPartIDs`, `taskToChild` module state; `session.created`/`session.deleted`/`session.updated`/`session.idle` branches; `message.part.updated` tool branch with Task-tool tracking; `resetEventState()` clears all three structures.
+- `src/orchestra-watch.ts` — `notifySubagentStarted`/`Ended`/`AllEnded`/`Activity` + `notifyParentActivity` public API with the new-reference emit invariant; `scan()` with `subagents` preservation in both brain and duo branches; `_pendingSubagentQueue` + drain in `_updateBadge`; `loadModelFriendlyNames()` + `formatModelLabel()` for the parent row.
+- `src/app.tsx` — `subagent-detected` / `subagent-ended` / `subagent-activity` / `session-idle` event handlers; watcher mount useEffect at line 333 (declared before SSE useEffect at line 684 for non-null `watcherRef.current` on first event); `watcher.on("changed", setOrchestraBadge)` at line 336.
+- `src/components/StatusLine.tsx` — subagent row render with `<spinner glyph> <agent> [<model>]`, model in `dimColor`.
 
 ---
 
@@ -219,11 +247,11 @@ Each subagent row, and the mode row for the parent (harness) session, displays a
 
 **Parent (harness) row:** `lastActivityAt` is bumped by `OrchestraWatcher.notifyParentActivity(ts)`, called from `applyReplEvents` in `src/app.tsx` whenever an SSE `block-start` or `block-delta` event arrives with parent role `text`, `thinking`, `tool-call`, or `tool-result`. The update is a direct mutation on `this.badge.lastActivityAt` plus an emit; React's same-reference bailout suppresses a re-render storm under the parent's chunked streaming.
 
-**Subagent rows:** `lastActivityAt` is bumped by `OrchestraWatcher.notifySubagentActivity(sessionID, ts)`, called from `applyReplEvents` when a `subagent-activity` ReplEvent arrives. That event is emitted by `filterEvent` on every global-stream `session.updated` whose `info.id` is in `trackedChildSessions`. Direct mutation + emit; React same-reference bailout applies.
+**Subagent rows:** `lastActivityAt` is bumped by `OrchestraWatcher.notifySubagentActivity(sessionID, ts)`, called from `applyReplEvents` when a `subagent-activity` ReplEvent arrives. That event is emitted by `filterEvent` on every global-stream `session.updated` whose `info.id` is in `trackedChildSessions`. After the in-place mutation the watcher replaces `this.badge` with a shallow clone so the emit produces a new top-level reference and React re-renders.
 
 **Freeze threshold:** `ACTIVITY_FREEZE_MS = 120_000`. Render condition: `now - lastActivityAt <= ACTIVITY_FREEZE_MS` selects the rotating glyph; otherwise the frame is held at `SPINNER_GLYPHS[0] = '◐'`.
 
-**Row lifecycle:** A row appears on `notifySubagentStarted` (or on queue drain inside `_updateBadge` when the badge transitions from null to non-null with pending notifications). The spinner rotates while activity is recent and freezes at `◐` thereafter. The row drops on `notifySubagentEnded` (triggered by `session.idle` or `session.deleted` for the tracked child sessionID) or on `notifyAllSubagentsEnded` (triggered by the parent's own `session.idle`).
+**Row lifecycle:** A row appears on `notifySubagentStarted` (or on queue drain inside `_updateBadge` when the badge transitions from null to non-null with pending notifications). The spinner rotates while activity is recent and freezes at `◐` thereafter. The row drops on `notifySubagentEnded`, triggered by the brain's Task tool transitioning to `state.status === "completed"` or `"error"` (the paired-task signal in `events.ts`; see §Subagent role detection / Detection mechanism) or, as a fallback safety net, by `session.deleted` for the tracked child sessionID. `session.idle` for a tracked child is NOT a row-end signal (OC fires it on every turn pause within a subagent's task).
 
 ### File:line reference
 
