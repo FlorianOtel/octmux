@@ -2,8 +2,8 @@
 title: "Stage 8 — octmux consumer-side contract: cost path, badge mechanics, fragility analysis"
 created_at: 2026-06-03--16-50
 created_by: Claude Code (Claude Opus 4.7 1M context)
-updated_by: Claude Code (Claude Opus 4.7 — 1M context)
-updated_at: 2026-06-05--00-53
+updated_by: Claude Code (Claude Sonnet 4.6 — 1M context)
+updated_at: 2026-06-05--09-37
 context: >
   Consumer-side implementation reference for the cost display + orchestra badge in octmux.
   Mirrors the structure of oconona's docs/Stage7.5--implementation-details.md (the provider
@@ -21,7 +21,7 @@ context: >
 
 This document is the **authoritative consumer-side reference** for octmux's integration with the oconona orchestra. It is the symmetric counterpart to `oconona/docs/Stage7.5--implementation-details.md` (the provider spec): same contract, opposite end. Where oconona documents what it *writes*, this doc documents what octmux *reads*, *renders*, and *infers*. The contract surface is identical; the two docs must stay in sync.
 
-The cost display (`Σ$`) and orchestra badge (`♪ orchestra -> …`) shipped in stages 8.0, 8.1, 8.2, and 8.2.1. See `docs/Stage8.md` for the implementation changelog.
+The cost display (`Σ$`) and orchestra badge (now `♪ orchestra full/light - <title>`; pre-v8.1.5: `♪ orchestra -> …`) shipped in stages 8.0, 8.1, 8.2, and 8.2.1. See `docs/Stage8.md` for the implementation changelog.
 
 The following are **out of scope** for this document:
 - `/brain` / `/duo` skill internals — owned by oconona.
@@ -75,9 +75,9 @@ The following are **out of scope** for this document:
 3. For each subdir:
    - Read `.oc-session-id` sidecar (UUID, single line). Skip if missing/empty or doesn't match the resolved harness session ID.
    - 24h mtime stale guard on the inflight marker file (not the directory).
-4. Determine mode from marker filename:
-   - `.duo-inflight` → mode `duo`, title from marker content (first 30 chars).
-   - `.brain-inflight` → mode `brain`, title from global `ORCHESTRA_TITLE=` in `~/.config/opencode/orchestra/state.env`.
+4. Determine badge text from marker filename:
+   - `.duo-inflight` → title from marker content (first 48 chars; stored value embeds mode prefix, e.g. `orchestra light - <title>`).
+   - `.brain-inflight` → title from global `ORCHESTRA_TITLE=` in `~/.config/opencode/orchestra/state.env` (first 48 chars; stored value embeds mode prefix, e.g. `orchestra full - <title>`). Fallback default if `state.env` unavailable: `orchestra full - brain`.
 5. Read per-session `telemetry.json` at `${sessionDir}/telemetry.json`:
    - Extract `parser_warnings: Array<{code, message}>`. Guard: `Array.isArray(...) ? ... : []`.
    - Present only for completed segments; absent during live session.
@@ -212,30 +212,11 @@ The badge renders as a downward-growing stack of rows (flex column) when an orch
 
 ### Main status row (always present)
 
-Inline segment in the main status line: `♪ orchestra -> <title>` plus ` !` suffix if `parser_warnings.length > 0`. The mode and subagent status are no longer inline; they appear as separate rows below (see next sections).
-
-### Mode row (only when `orchestraBadge !== null`)
-
-Rendered below main status row via IIFE:
-- **Waiting** (subagents detected): rotating/frozen glyph from `SPINNER_GLYPHS` + `{mode} {parentModelLabel}` (glyph dims when frozen/inactive)
-- **Idle** (no subagents): rotating/frozen glyph + `{mode} {parentModelLabel}` (glyph rotates while activity recent)
-
-Color: purple `#d3869b` for text; `#1dde00` (bright green) for rotating glyph, same colour when frozen (freeze is the activity signal, not a colour change).
-
-### Subagent rows
-
-For each detected subagent (max 5 rows shown):
-- rotating/frozen glyph from `SPINNER_GLYPHS` + agent name + bracketed model + optional description.
-- Format example: `◐ planner [sohoai/minimax-m3]`.
-
-Color: glyph in `#1dde00` (bright green); agent name in purple `#d3869b`; `[provider/model]` segment rendered with Ink `dimColor` (terminal-default dim).
-
-If `subagents.length > 5`, add overflow row:
-- `+{N} more` in dim purple
+Inline segment in the main status line: `♪ orchestra light - <title>` (duo) or `♪ orchestra full - <title>` (brain) plus ` !` suffix if `parser_warnings.length > 0`. The mode prefix is embedded in the stored title value; no separate mode or subagent rows are rendered.
 
 ### Idle state
 
-When `orchestraBadge === null`, no mode/subagent/overflow rows render. Layout functionally identical to pre-Stage-8.1.1 (only main status row visible).
+When `orchestraBadge === null`, no badge renders.
 
 ### Activity indicator
 

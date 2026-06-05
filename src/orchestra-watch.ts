@@ -269,8 +269,9 @@ export class OrchestraWatcher extends EventEmitter {
           const duoMtime = duoStat.mtimeMs;
           if (duoMtime > bestMtime || (duoMtime === bestMtime && 2 > bestPrio)) {
             try {
+              // Stored value embeds mode prefix ("orchestra light - <title>"); pass through verbatim.
               const title = fs.readFileSync(duoMarkerPath, "utf-8").trim();
-              const truncated = title.slice(0, 30);
+              const truncated = title.slice(0, 48);
               bestBadge = {
                 mode: "duo",
                 title: truncated,
@@ -304,12 +305,13 @@ export class OrchestraWatcher extends EventEmitter {
           const brainStat = fs.statSync(brainMarkerPath);
           const brainMtime = brainStat.mtimeMs;
           if (bestPrio < 1 && (brainMtime > bestMtime || bestPrio < 0)) {
+            // Stored value embeds mode prefix ("orchestra full - <title>"); pass through verbatim.
             // Read ORCHESTRA_TITLE from ~/.config/opencode/orchestra/state.env
             const stateEnvPath = path.join(
               process.env.HOME || "/root",
               ".config/opencode/orchestra/state.env"
             );
-            let title = "brain";
+            let title = "orchestra full - brain";
             try {
               if (fs.existsSync(stateEnvPath)) {
                 const content = fs.readFileSync(stateEnvPath, "utf-8");
@@ -321,7 +323,7 @@ export class OrchestraWatcher extends EventEmitter {
             } catch {
               // Ignore read errors; use default
             }
-            const truncated = title.slice(0, 30);
+            const truncated = title.slice(0, 48);
             bestBadge = {
               mode: "brain",
               title: truncated,
@@ -348,7 +350,7 @@ export class OrchestraWatcher extends EventEmitter {
 
       // Multi-concurrent: if 2+ matched session dirs have inflight markers, render count
       if (matchedSessionCount > 1 && bestBadge) {
-        bestBadge = { ...bestBadge, title: `#${matchedSessionCount}` };
+        bestBadge = { ...bestBadge, title: `orchestra light - #${matchedSessionCount}` };
       }
     } catch {
       // Silently ignore scan errors
