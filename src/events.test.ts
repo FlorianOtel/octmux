@@ -314,3 +314,95 @@ describe("filterEvent — session.updated activity routing", () => {
     expect(out).toBeNull();
   });
 });
+
+describe("filterEvent — Task/session.created ordering: session.created BEFORE pending", () => {
+  test("session.created arrives first (no pending part yet) → emits subagent-detected; then task tool pending → tryPair() runs; then task tool completed → emits subagent-ended for the child", () => {
+    // Child arrives first
+    const detected = filterEvent({
+      type: "session.created",
+      properties: { info: sessionInfo({ id: CHILD_SID, parentID: PARENT_SID, agent: "planner", model: { providerID: "sohoai", id: "minimax-m3" } }) },
+    } as any, PARENT_SID);
+    expect(detected).not.toBeNull();
+    expect((detected as any).kind).toBe("subagent-detected");
+
+    // Task part pending arrives next
+    const pending = filterEvent(taskPart("prt_task_a", "pending"), PARENT_SID);
+    expect(pending).not.toBeNull();
+    expect((pending as any).kind).toBe("block-start");
+
+    // Task completes → should emit subagent-ended for the child
+    const completed = filterEvent(taskPart("prt_task_a", "completed", "result"), PARENT_SID);
+    expect(Array.isArray(completed)).toBe(true);
+    expect((completed as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === CHILD_SID)).toBe(true);
+  });
+
+  test("session.created arrives first, then task tool pending, then task tool errors → still emits subagent-ended", () => {
+    // Child arrives first
+    filterEvent({
+      type: "session.created",
+      properties: { info: sessionInfo({ id: CHILD_SID, parentID: PARENT_SID, agent: "planner", model: { providerID: "sohoai", id: "minimax-m3" } }) },
+    } as any, PARENT_SID);
+
+    // Task part pending
+    filterEvent(taskPart("prt_task_b", "pending"), PARENT_SID);
+
+    // Task errors
+    const errored = filterEvent(taskPart("prt_task_b", "error"), PARENT_SID);
+    expect(Array.isArray(errored)).toBe(true);
+    expect((errored as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === CHILD_SID)).toBe(true);
+  });
+});
+
+describe("filterEvent — parallel multi-task dispatch out-of-order", () => {
+  test("two session.created both arrive before any pending parts → both added to unpairedChildren; then two task tool pending arrive → tryPair() pairs FIFO; then both complete → each emits subagent-ended for its paired child", () => {
+    // Both children arrive before any pending parts
+    filterEvent({
+      type: "session.created",
+      properties: { info: sessionInfo({ id: "ses_child_a", parentID: PARENT_SID, agent: "planner", model: { providerID: "sohoai", id: "minimax-m3" } }) },
+    } as any, PARENT_SID);
+    filterEvent({
+      type: "session.created",
+      properties: { info: sessionInfo({ id: "ses_child_b", parentID: PARENT_SID, agent: "planner", model: { providerID: "sohoai", id: "minimax-m3" } }) },
+    } as any, PARENT_SID);
+
+    // Two pending parts arrive
+    filterEvent(taskPart("prt_task_1", "pending"), PARENT_SID);
+    filterEvent(taskPart("prt_task_2", "pending"), PARENT_SID);
+
+    // Complete task_1 — should end ses_child_a (oldest pairing)
+    const out1 = filterEvent(taskPart("prt_task_1", "completed", ""), PARENT_SID);
+    expect((out1 as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === "ses_child_a")).toBe(true);
+
+    // Complete task_2 — should end ses_child_b
+    const out2 = filterEvent(taskPart("prt_task_2", "completed", ""), PARENT_SID);
+    expect((out2 as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === "ses_child_b")).toBe(true);
+  });
+
+  test("interleaved: session.created child_1, then pending part_1 (immediate pair), then session.created child_2, then pending part_2 (immediate pair) → verify FIFO preserved and both complete correctly", () => {
+    // Child_1 arrives
+    filterEvent({
+      type: "session.created",
+      properties: { info: sessionInfo({ id: "ses_child_x", parentID: PARENT_SID, agent: "planner", model: { providerID: "sohoai", id: "minimax-m3" } }) },
+    } as any, PARENT_SID);
+
+    // Part_1 pending — should pair with child_1 immediately
+    filterEvent(taskPart("prt_task_x", "pending"), PARENT_SID);
+
+    // Child_2 arrives
+    filterEvent({
+      type: "session.created",
+      properties: { info: sessionInfo({ id: "ses_child_y", parentID: PARENT_SID, agent: "planner", model: { providerID: "sohoai", id: "minimax-m3" } }) },
+    } as any, PARENT_SID);
+
+    // Part_2 pending — should pair with child_2 immediately
+    filterEvent(taskPart("prt_task_y", "pending"), PARENT_SID);
+
+    // Complete task_x — should end child_x
+    const out_x = filterEvent(taskPart("prt_task_x", "completed", ""), PARENT_SID);
+    expect((out_x as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === "ses_child_x")).toBe(true);
+
+    // Complete task_y — should end child_y
+    const out_y = filterEvent(taskPart("prt_task_y", "completed", ""), PARENT_SID);
+    expect((out_y as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === "ses_child_y")).toBe(true);
+  });
+});

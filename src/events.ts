@@ -74,6 +74,12 @@ const openTaskPartIDs = new Set<string>();
 // "session paused awaiting input/turn" and fires repeatedly during a single task.
 const taskToChild = new Map<string, string>();
 
+// Child session IDs that arrived via session.created before any Task tool
+// part was pending — they could not be paired at detection time. When the next
+// task part goes pending, tryPair() drains this set first (FIFO within the
+// insertion-ordered Set).
+const unpairedChildren = new Set<string>();
+
 // Reset event tracking state on session switch.
 export function resetEventState(): void {
   userMessageIDs.clear();
@@ -84,6 +90,31 @@ export function resetEventState(): void {
   trackedChildSessions.clear();
   openTaskPartIDs.clear();
   taskToChild.clear();
+  unpairedChildren.clear();
+}
+
+// Attempt to pair pending task parts with unmatched children.
+// Called whenever either unpairedChildren or openTaskPartIDs gains a new entry.
+// Both Sets iterate in insertion order (JS spec), so pairing is FIFO:
+// the oldest pending part pairs with the oldest unpaired child.
+function tryPair(): void {
+  const childIter = unpairedChildren.values();
+  const partIter  = openTaskPartIDs.values();
+  while (true) {
+    const childStep = childIter.next();
+    const partStep  = partIter.next();
+    if (childStep.done || partStep.done) break;
+    const childID = childStep.value;
+    const partID  = partStep.value;
+    taskToChild.set(partID, childID);
+    openTaskPartIDs.delete(partID);
+    unpairedChildren.delete(childID);
+    if (process.env.OCTMUX_DEBUG_SSE === "1") {
+      console.error(
+        "[octmux-debug] tryPair paired taskPartID=" + partID + " childID=" + childID
+      );
+    }
+  }
 }
 
 /**
@@ -260,6 +291,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
           if (process.env.OCTMUX_DEBUG_SSE === "1") {
             console.error("[octmux-debug] task tool pending partID=" + toolPart.id);
           }
+          tryPair(); // ← new: pair immediately if an unpairedChild is already waiting
         }
         return { kind: "block-start", partID: toolPart.id, role: "tool-call", toolName: toolPart.tool };
       }
@@ -373,18 +405,15 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     }
     if (info.parentID === sessionID && !trackedChildSessions.has(info.id)) {
       trackedChildSessions.add(info.id);
-      // Pair with the oldest open (pending/running) Task tool partID. JS Sets
-      // iterate in insertion order, so .values().next().value returns the FIFO
-      // head. If empty, the row will only end on session.deleted or badge → null
-      // (fallback path; unusual for normal /brain flow).
-      const openPartID = openTaskPartIDs.values().next().value;
-      if (openPartID) {
-        taskToChild.set(openPartID, info.id);
-        openTaskPartIDs.delete(openPartID);
-        if (process.env.OCTMUX_DEBUG_SSE === "1") {
-          console.error("[octmux-debug] session.created paired with task partID=" + openPartID + " childID=" + info.id);
-        }
+      // Park this child in unpairedChildren, then let tryPair() do both sides.
+      unpairedChildren.add(info.id);
+      if (process.env.OCTMUX_DEBUG_SSE === "1") {
+        console.error(
+          "[octmux-debug] session.created child added to unpairedChildren childID=" + info.id +
+          " openTaskPartIDsSize=" + openTaskPartIDs.size
+        );
       }
+      tryPair();
       const modelStr = info.model
         ? `${info.model.providerID}/${info.model.id}`
         : "";

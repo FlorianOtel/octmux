@@ -555,7 +555,17 @@ export function App(props: AppProps) {
           else if (ev.role === "tool-result" || (ev.role === "tool-call" && ev.status === "error"))
             setProcTimes(p => ({ ...p, tools: null }));
         }
-        else if (ev.kind === "error")        { renderer.commitError(ev.message); setIsGenerating(false); }
+        else if (ev.kind === "error") {
+          // Append operator guidance so the user knows the next action to take.
+          // Brain timeouts may be transient; we don't auto-abandon — that's
+          // the operator's decision.
+          renderer.commitError(ev.message + " — run /brain-abandon to clean up the session");
+          setIsGenerating(false);
+          // Clear any orphaned subagent rows that may have been left open if the
+          // brain session errored mid-pipeline (e.g. provider timeout during Phase 2).
+          // notifyAllSubagentsEnded is a safe no-op when badge.subagents is empty.
+          watcherRef.current?.notifyAllSubagentsEnded();
+        }
         else if (ev.kind === "generating")   setIsGenerating(true);
         else if (ev.kind === "session-idle") {
           renderer.commitTurnEnd();

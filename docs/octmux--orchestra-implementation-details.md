@@ -2,8 +2,8 @@
 title: "Stage 8 — octmux consumer-side contract: cost path, badge mechanics, fragility analysis"
 created_at: 2026-06-03--16-50
 created_by: Claude Code (Claude Opus 4.7 1M context)
-updated_by: Actor (sohoai/qwen3-4b-q6) — orchestra full Stage 8.3
-updated_at: 2026-06-05--13-48
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-06-05--23-05
 context: >
   Consumer-side implementation reference for the cost display + orchestra badge in octmux.
   Mirrors the structure of oconona's docs/Stage7.5--implementation-details.md (the provider
@@ -123,13 +123,15 @@ Live subagent detection operates on the OpenCode **global event stream** (`clien
 
 1. **`session.created` (row appears).** `src/events.ts:filterEvent` matches `event.type === "session.created"` AND `info.parentID === sessionID` AND `!trackedChildSessions.has(info.id)`. Adds `info.id` to module-level `trackedChildSessions: Set<string>`. Emits `{ kind: "subagent-detected", sessionID: info.id, agent: info.agent ?? "", model: "${providerID}/${id}" | "" }`. The watcher's `notifySubagentStarted(sessionID, agent, model, description?)` pushes a fresh `{sessionID, agent, model, description?, lastActivityAt: Date.now()}` into `this.badge.subagents[]`.
 
-2. **Task-tool tracking (lifecycle end signal).** The row's protocol-precise end signal is the brain's Task tool transitioning to `state.status === "completed"` or `"error"` — NOT the child's `session.idle` (which OC fires on every turn pause within a subagent's life). Two module-level structures in `events.ts` implement the pairing:
-   - `openTaskPartIDs: Set<string>` — Task-tool partIDs first observed in `pending`/`running` state, awaiting pair. JS `Set`s iterate in insertion order, so `.values().next().value` returns the FIFO head.
+2. **Task-tool tracking (lifecycle end signal).** The row's protocol-precise end signal is the brain's Task tool transitioning to `state.status === "completed"` or `"error"` — NOT the child's `session.idle` (which OC fires on every turn pause within a subagent's life). Three module-level structures in `events.ts` implement the pairing:
+   - `openTaskPartIDs: Set<string>` — Task-tool partIDs first observed in `pending`/`running` state, awaiting pair. JS `Set`s iterate in insertion order.
+   - `unpairedChildren: Set<string>` — child session IDs that arrived via `session.created` before any pending Task part (could not be paired at detection time). JS `Set`s maintain insertion order for FIFO pairing.
    - `taskToChild: Map<string, string>` — paired Task-tool partID → child sessionID.
+   - `tryPair(): void` — helper function that FIFO-drains both `unpairedChildren` and `openTaskPartIDs` in lock-step, pairing oldest-pending-part with oldest-unpaired-child. Called from both `session.created` (when a child arrives) and `message.part.updated(pending)` (when a part arrives). Ensures symmetric pairing regardless of event order.
 
    Flow inside the existing `message.part.updated` `part.type === "tool"` branch (gated by `toolPart.tool === "task"` — the daemon's registered tool name, verified at `~/Gin-AI/projects/opencode/packages/opencode/src/tool/task.ts:24`):
-   - State first seen as `pending`: `openTaskPartIDs.add(toolPart.id)`.
-   - On `session.created` for a child of the harness, the oldest open partID is moved from `openTaskPartIDs` to `taskToChild` (pair recorded).
+   - State first seen as `pending`: `openTaskPartIDs.add(toolPart.id)`, then call `tryPair()` to pair with any waiting unpairedChildren.
+   - On `session.created` for a child of the harness: add `info.id` to `unpairedChildren`, then call `tryPair()` to pair with any waiting openTaskPartIDs. The pairing is symmetric: whichever event arrives second (`pending` or `session.created`), `tryPair()` will match them if both conditions are met.
    - State transitions to `completed` (or `error`): if `taskToChild.has(toolPart.id)`, the paired `childID` is removed from `trackedChildSessions`, the entry is deleted from `taskToChild`, and `{ kind: "subagent-ended", sessionID: childID }` is appended to the tool-result/error event array. A task that ends before a `session.created` pairs with it (no child created) just cleans up `openTaskPartIDs`.
 
 3. **Per-row activity (spinner-vs-frozen).** A `session.updated` event for a tracked child ID emits `{ kind: "subagent-activity", sessionID, ts: Date.now() }`. The watcher's `notifySubagentActivity(sessionID, ts)` bumps the matching row's `lastActivityAt` (see §Activity indicator).
@@ -165,9 +167,9 @@ Subagent rows do not consult the friendly-name map: the `info.model` from `sessi
 
 ### Diagnostic logging
 
-Env-gated `console.error` shims at seven sites fire when `OCTMUX_DEBUG_SSE=1`:
+Env-gated `console.error` shims fire when `OCTMUX_DEBUG_SSE=1`:
 - `src/app.tsx` SSE for-await loop: one-shot wrapper-key dump + per-event `payload type=… directory=… harness=…`.
-- `src/events.ts`: `filterEvent type=…` entry; `session.created id=… parentID=… agent=… model=… harness=… match=…`; `session.idle sessionID=… isTrackedChild=… isHarnessParent=…`; `session.deleted sessionID=… isTrackedChild=…`; `task tool pending partID=…`; `session.created paired with task partID=… childID=…`; `task tool completed/errored, ending subagent partID=… childID=…`.
+- `src/events.ts`: `filterEvent type=…` entry; `session.created id=… parentID=… agent=… model=… harness=… match=…`; `session.created child added to unpairedChildren childID=… openTaskPartIDsSize=…`; `tryPair paired taskPartID=… childID=…`; `session.idle sessionID=… isTrackedChild=… isHarnessParent=…`; `session.deleted sessionID=… isTrackedChild=…`; `task tool pending partID=…`; `task tool completed/errored, ending subagent partID=… childID=…`.
 - `src/orchestra-watch.ts`: `notifySubagentStarted sessionID=… agent=… model=… badgePresent=… queueLen=…`; `_updateBadge drain pendingLen=… badgeSubagentsBefore=…` / `…drain done badgeSubagentsAfter=…`.
 
 Default off → zero behaviour change. Evidence-pass recipe: `OCTMUX_DEBUG_SSE=1 dist/octmux 2>/tmp/octmux-debug.log`, run `/brain "<task>"`, exit, grep for the lifecycle markers. Regression check: `grep -c 'emitting subagent-ended (via session.idle)' /tmp/octmux-debug.log` must be 0.

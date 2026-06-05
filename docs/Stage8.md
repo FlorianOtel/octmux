@@ -3,7 +3,7 @@ title: "Stage 8 — Live cost display (OC SDK) + orchestra inflight badge"
 created_at: 2026-05-29--08-27
 created_by: Claude Code (Claude Haiku 4.5)
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-05--12-16
+updated_at: 2026-06-05--23-05
 context: >
   octmux's status bar shows live `Σ$X.XX` cost (from OC SDK `AssistantMessage.cost`,
   summed over parent session + one-level children) and an orchestra inflight badge
@@ -31,6 +31,22 @@ context: >
 **Commit(s):** `f12db50c197808ec69a8e7f920c9579e2f501707`
 
 Aligned octmux documentation with the oconona v8.2.0 contract addition (new `researcher` / `researcher-deep` Phase 0 subagent tiers, new `researcher_dispatches` telemetry field). All v8.2.0 additions are ADDITIVE and forward-compatible at runtime — `info.agent` is an opaque `string` end-to-end in src/, so new tier names flow through unchanged; `researcher_dispatches` is a telemetry.json field octmux never reads. Three concrete doc changes: (a) back-propagated the prior `docs/Stage8--implementation-details.md` → `docs/octmux--orchestra-implementation-details.md` rename across three inbound references in `docs/Stage8.md` (lines 14, 21, 83); (b) updated `docs/octmux--orchestra-implementation-details.md` to enumerate `researcher`, `researcher-deep` in the `info.agent` and `subagents[]` examples (lines 116, 154), added `researcher_dispatches` to the explicit "does NOT read" list (line 192), and extended the test-matrix `/brain` lifecycle entry (line 379) to acknowledge Phase 0 dispatches; (c) updated frontmatter `updated_by` / `updated_at` and appended a v8.2.0 acknowledgement to the context block. Stage 8.1.5 lifecycle prose in this file also gained a one-clause Phase 0 Researcher acknowledgement. No `src/` changes, no `bun build`, no binary commit. Sole purpose is documentary alignment with the provider contract.
+
+### 2026-06-05--23-05 — Stage 8.1.5.2 — Symmetric Task/session.created pairing + brain session.error defensive cleanup
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-05--23-05
+**Commit(s):** `<hash>`
+
+**Bug**: Stage 8.1.5 introduced asymmetric pairing: `session.created` arrived and immediately paired with the oldest pending Task part. This worked for Anthropic-streamed brains (which emit `message.part.updated(pending)` BEFORE `session.created`), but failed silently for non-Anthropic providers like `sohoai/deepseek-v4-pro` where `session.created` arrives FIRST — the child would sit in `trackedChildSessions` but never be paired to a Task part, and rows would freeze at 120s inactivity instead of ending when the task completed. SQL forensics showed all 6 Task parts in a deepseek session reached `completed` in opencode.db, yet their paired subagent rows remained frozen — the silent miss.
+
+**Fix**: Introduced symmetric pairing via two-way `tryPair()` helper (`src/events.ts` lines 90-115). New module-level `unpairedChildren: Set<string>` holds children arriving before any pending parts. Both `session.created` and `message.part.updated(pending)` now call `tryPair()`, which FIFO-drains both sets in lock-step, pairing oldest-pending-part with oldest-unpaired-child. The invariant is: a child either sits in `unpairedChildren` (waiting for a part) or in `taskToChild` (paired and active) — never falls through to a stale unpaired row.
+
+**App-side defensive cleanup**: `src/app.tsx` error handler now calls `watcherRef.current?.notifyAllSubagentsEnded()` on any `session.error` event (line 558-568). This is a safe no-op when `badge.subagents` is empty, but catches the case where a brain session fails mid-pipeline (e.g. provider timeout during Phase 2 Researcher, or malformed response from a new provider tier) — orphaned rows are cleared and the user is prompted to run `/brain-abandon` for explicit cleanup.
+
+**Test coverage** (`src/events.test.ts`): two new `describe` blocks added at lines 319–411:
+- **§Task/session.created ordering: session.created BEFORE pending**: Test 1 verifies child arrives before pending part, then part completes → subagent-ended fires correctly. Test 2 verifies the same path with task transition to `error` instead.
+- **§Parallel multi-task dispatch out-of-order**: Test 1 both children arrive before any parts → all 4 combinations queued → parts arrive → FIFO pairing verified → both complete correctly. Test 2 interleaved arrivals (child_1, part_1 immediate pair, child_2, part_2 immediate pair) verifies FIFO ordering is preserved even with interleaving. All 24 assertions green.
+
+**Cross-reference**: This is a point-release of Stage 8.1.5 per `feedback-version-numbering` (anchor bug fixes against the implementing stage; do NOT inflate to a new top-level number). Stage 8.1.5 introduced the Task pairing logic; Stage 8.1.5.1 added diagnostic logging; this entry is Stage 8.1.5.2 (race fix).
 
 ### 2026-06-05--12-16 — Stage 8.2 — Subagent-activity coverage for child-session message.part.delta + message.part.updated
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-05--12-16
