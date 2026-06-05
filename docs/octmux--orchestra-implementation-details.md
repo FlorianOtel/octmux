@@ -2,8 +2,8 @@
 title: "Stage 8 — octmux consumer-side contract: cost path, badge mechanics, fragility analysis"
 created_at: 2026-06-03--16-50
 created_by: Claude Code (Claude Opus 4.7 1M context)
-updated_by: Claude Code (Claude Sonnet 4.6 — 1M context)
-updated_at: 2026-06-05--10-15
+updated_by: Actor (sohoai/qwen3-4b-q6) — orchestra full Stage 8.3
+updated_at: 2026-06-05--13-48
 context: >
   Consumer-side implementation reference for the cost display + orchestra badge in octmux.
   Mirrors the structure of oconona's docs/Stage7.5--implementation-details.md (the provider
@@ -13,6 +13,7 @@ context: >
   fragility/race analysis covering interrupted sessions, double-counting, session tracking
   consistency, and other edge cases discovered during Stage 8.0–8.2.1 development.
   Companion to docs/Stage8.md (which retains the changelog + cross-pointer).
+  Updated 2026-06-05 to acknowledge oconona v8.2.0 additions (researcher / researcher-deep tiers, researcher_dispatches telemetry field). All v8.2.0 additions are ADDITIVE and require no octmux source change; this doc records the documentary alignment.
 ---
 
 # Stage 8 — octmux consumer-side contract: cost path, badge mechanics, fragility analysis
@@ -21,7 +22,7 @@ context: >
 
 This document is the **authoritative consumer-side reference** for octmux's integration with the oconona orchestra. It is the symmetric counterpart to `oconona/docs/Stage7.5--implementation-details.md` (the provider spec): same contract, opposite end. Where oconona documents what it *writes*, this doc documents what octmux *reads*, *renders*, and *infers*. The contract surface is identical; the two docs must stay in sync.
 
-The cost display (`Σ$`) and orchestra badge (now `♪ orchestra full/light - <title>`; pre-v8.1.5: `♪ orchestra -> …`) shipped in stages 8.0, 8.1, 8.2, and 8.2.1. See `docs/Stage8.md` for the implementation changelog.
+The cost display (`Σ$`) and orchestra badge (now `♪ orchestra full/light - <title>`; pre-v8.1.5: `♪ orchestra -> …`; v8.1.6: title embedded in inflight file content, rendered passthrough as `♪ ${orchestraBadge.title}`) shipped in stages 8.0, 8.1, 8.2, and 8.2.1. See `docs/Stage8.md` for the implementation changelog.
 
 The following are **out of scope** for this document:
 - `/brain` / `/duo` skill internals — owned by oconona.
@@ -113,7 +114,7 @@ This prevents `fs.watch` callbacks from blocking on an HTTP roundtrip while pres
 Live subagent detection operates on the OpenCode **global event stream** (`client.global.event({})`, opened once at `src/index.tsx:257`), filtering `session.created` events whose payload `info.parentID` matches the harness OC session ID. The child Session payload carries:
 - `info.id: string` — child OC session ID; the lifecycle key used throughout octmux.
 - `info.parentID: string` — harness session ID; equality with `sessionID` is the filter predicate.
-- `info.agent: string` — dispatched subagent role (e.g. `planner`, `actor`, `actor-heavy`, `reviewer`).
+- `info.agent: string` — dispatched subagent role (e.g. `planner`, `actor`, `actor-heavy`, `reviewer`, `researcher`, `researcher-deep`).
 - `info.model: { providerID: string; id: string; variant?: string }` — resolved model; rendered as `${providerID}/${id}`.
 
 `info.agent` and `info.model` are populated by the locally-built OC daemon since the upstream Stage 8.1.3 fix (FlorianOtel/opencode@98a4907c9). The published SDK `Session` type lags behind these additions; octmux accesses them through a typed `as unknown as { ... }` cast at the `session.created` branch.
@@ -151,7 +152,7 @@ Live subagent detection operates on the OpenCode **global event stream** (`clien
 
 Each entry in `OrchestraBadge.subagents[]`:
 - `sessionID: string` — child OC session ID (identity, lifecycle, activity key)
-- `agent: string` — dispatched role name (`planner`, `actor`, `actor-heavy`, `reviewer`, …)
+- `agent: string` — dispatched role name (`planner`, `actor`, `actor-heavy`, `reviewer`, `researcher`, `researcher-deep`)
 - `model: string` — `${providerID}/${id}` (empty string when the daemon omitted `info.model`)
 - `description?: string` — reserved; currently always undefined (`session.created` carries no description)
 - `lastActivityAt: number` — ms timestamp; bumped by `notifySubagentActivity`
@@ -189,7 +190,7 @@ Default off → zero behaviour change. Evidence-pass recipe: `OCTMUX_DEBUG_SSE=1
 
 - `parser_warnings: Array<{code: string; message: string}>` — surfaced as a ` !` indicator after the badge.
 
-octmux does NOT read `parent_delta`, `parent_total`, `parent_snapshot_*`, `started_at_oc_ms`, `ended_at_oc_ms`, `subagents`, `totals`, `cost_usd_estimate`, or any other v7.5 field for live state. Those fields exist for reporting and forensics (oconona's `session-report.py` consumes them).
+octmux does NOT read `parent_delta`, `parent_total`, `parent_snapshot_*`, `started_at_oc_ms`, `ended_at_oc_ms`, `subagents`, `totals`, `cost_usd_estimate`, `researcher_dispatches`, or any other v7.5+ field for live state. Those fields exist for reporting and forensics (oconona's `session-report.py` consumes them).
 
 ### When read
 
@@ -213,7 +214,7 @@ The badge renders as a downward-growing stack of rows (flex column) when an orch
 
 ### Main status row (always present)
 
-Inline segment in the main status line: `♪ orchestra light - <title>` (duo) or `♪ orchestra full - <title>` (brain) plus ` !` suffix if `parser_warnings.length > 0`. The mode prefix is embedded in the stored title value; no separate mode or subagent rows are rendered.
+Inline segment in the main status line: `♪ orchestra light - <title>` (duo) or `♪ orchestra full - <title>` (brain) plus ` !` suffix if `parser_warnings.length > 0`. The mode prefix is embedded in the stored title value; StatusLine renders passthrough as `♪ ${orchestraBadge.title}` without additional wrapper prefix; no separate mode or subagent rows are rendered.
 
 ### Idle state
 
@@ -376,7 +377,7 @@ The matrix below enumerates the failure modes discovered during Stage 8.0–8.2.
 When validating Stage 8 changes (refactors, OC version bumps, oconona contract changes), exercise at minimum:
 
 1. **Clean `/duo` lifecycle**: start → subagent dispatch → cleanup. Badge appears + transitions + disappears.
-2. **Clean `/brain` lifecycle**: start → planner → actor → reviewer → cleanup. Badge transitions through all roles.
+2. **Clean `/brain` lifecycle**: start → (optional Phase 0 researcher / researcher-deep dispatches; oconona v8.2.0+) → planner → actor → reviewer → cleanup. Badge transitions through all roles.
 3. **`/brain-abandon` mid-pipeline**: badge clears within 5s; no stale marker.
 4. **Two sequential `/brain` runs in one octmux session**: title is correct on each (not `#2`). This is the Stage 8.2.1 regression test.
 5. **OC daemon kill mid-`/brain`**: SSE drops; badge stays for ≤24h or until next Stop event clears it.

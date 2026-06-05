@@ -11,20 +11,26 @@ context: >
   `/duo` session is active. This file is the changelog + known-limitations + oconona
   feedback. The full consumer-side contract (cost path, badge mechanics, provider→
   consumer reads table, fragility analysis, recommended test matrix) lives in
-  `docs/Stage8--implementation-details.md` and mirrors the structure of oconona's
+  `docs/octmux--orchestra-implementation-details.md` and mirrors the structure of oconona's
   `docs/Stage7.5--implementation-details.md` (provider spec). The two
   implementation-details docs must stay in sync.
 ---
 
 ## See also
 
-- **`docs/Stage8--implementation-details.md`** — consumer-side contract: what octmux reads, how the watcher works, badge rendering rules, fragility/race analysis, recommended test matrix. Mirrors oconona's `docs/Stage7.5--implementation-details.md` (provider spec).
+- **`docs/octmux--orchestra-implementation-details.md`** — consumer-side contract: what octmux reads, how the watcher works, badge rendering rules, fragility/race analysis, recommended test matrix. Mirrors oconona's `docs/Stage7.5--implementation-details.md` (provider spec).
 - **`oconona/docs/Stage7.5--implementation-details.md`** — provider-side contract (authoritative for the sidecar layout, badge format spec, telemetry.json schema).
 - **`oconona/docs/Stage7.md`** — oconona roadmap (v7.5 is the contract version this consumer reads).
 
 ---
 
 ## Implementation log
+
+### 2026-06-05--13-48 — Stage 8.3 — Documentary alignment with oconona v8.2.0 (researcher tiers)
+**Implemented by:** Actor (sohoai/qwen3-4b-q6) — 2026-06-05--13-48
+**Commit(s):** `f12db50c197808ec69a8e7f920c9579e2f501707`
+
+Aligned octmux documentation with the oconona v8.2.0 contract addition (new `researcher` / `researcher-deep` Phase 0 subagent tiers, new `researcher_dispatches` telemetry field). All v8.2.0 additions are ADDITIVE and forward-compatible at runtime — `info.agent` is an opaque `string` end-to-end in src/, so new tier names flow through unchanged; `researcher_dispatches` is a telemetry.json field octmux never reads. Three concrete doc changes: (a) back-propagated the prior `docs/Stage8--implementation-details.md` → `docs/octmux--orchestra-implementation-details.md` rename across three inbound references in `docs/Stage8.md` (lines 14, 21, 83); (b) updated `docs/octmux--orchestra-implementation-details.md` to enumerate `researcher`, `researcher-deep` in the `info.agent` and `subagents[]` examples (lines 116, 154), added `researcher_dispatches` to the explicit "does NOT read" list (line 192), and extended the test-matrix `/brain` lifecycle entry (line 379) to acknowledge Phase 0 dispatches; (c) updated frontmatter `updated_by` / `updated_at` and appended a v8.2.0 acknowledgement to the context block. Stage 8.1.5 lifecycle prose in this file also gained a one-clause Phase 0 Researcher acknowledgement. No `src/` changes, no `bun build`, no binary commit. Sole purpose is documentary alignment with the provider contract.
 
 ### 2026-06-05--12-16 — Stage 8.2 — Subagent-activity coverage for child-session message.part.delta + message.part.updated
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-05--12-16
@@ -44,7 +50,7 @@ Extended subagent-activity event coverage to child-session `message.part.delta` 
 **Implemented by:** Claude Code (Claude Opus 4.7 — 1M context) — 2026-06-05--00-53
 **Commit(s):** `f54bb86` (src — detection + lifecycle + tests), this doc commit
 
-Subagent rows now appear simultaneously with the brain's "dispatching planner / actor / reviewer" output line and end at the precise moment the parent's Task tool returns the subagent's final output. Operator-verified end-to-end on OC session `ses_16b325134ffe8IwQ5GWulksPvi` (planner → actor → reviewer dispatch sequence; log evidence at `/tmp/octmux-debug.log`).
+Subagent rows now appear simultaneously with the brain's "dispatching planner / actor / reviewer" output line and end at the precise moment the parent's Task tool returns the subagent's final output. Operator-verified end-to-end on OC session `ses_16b325134ffe8IwQ5GWulksPvi` (planner → actor → reviewer dispatch sequence, preceded by one or more Phase 0 Researcher dispatches (oconona v8.2.0+; informational only); log evidence at `/tmp/octmux-debug.log`).
 
 **Detection** — `src/events.ts` filters the OC global event stream (`client.global.event({})`, opened at `src/index.tsx:257`). When `event.type === "session.created"` and `info.parentID === harness sessionID`, the child sessionID is added to `trackedChildSessions: Set<string>` and a `subagent-detected` ReplEvent is emitted with `sessionID`, `agent` (from `info.agent`), and `model` (formatted as `${info.model.providerID}/${info.model.id}`). `info.agent` and `info.model` are populated by the locally-built OC daemon since the upstream Stage 8.1.3 fix (FlorianOtel/opencode@98a4907c9).
 
@@ -80,7 +86,7 @@ Stage 8.1.4 fixes three coupled bugs in the v8.1.1 stacked-subagent-rows UX that
 
 **Note:** superseded by Stage 8.1.5 — the SubtaskPart-based detection described here was a misread of the OC protocol and never functioned in practice; see the Stage 8.1.5 entry for the working `session.created`-based mechanism. The downward-stack StatusLine layout and the OrchestraBadge widening to a `subagents[]` array are preserved.
 
-Replaced invocations.log-based subagent detection (which never fires on OC) with live SSE SubtaskPart event detection via `message.part.updated` where `part.type === "subtask"`. Redesigned OrchestraBadge from single-field `subagent?` to widened type carrying parent model labels and an array of live subagents, each with agent role, description, and model info. Redesigned StatusLine rendering from single inline badge to downward-growing stack: main status row, optional mode row (●/○ based on subagent liveness with parent model label), per-subagent rows (max 5 visible with overflow counter), all in correct colors. Model labels (agent.name, agent.model → provider/modelId → friendly name) sourced from agent frontmatter YAML and opencode.json, read once at watcher startup. Supersedes Stage 8.1. Full implementation details at `docs/Stage8--implementation-details.md` §Subagent role detection.
+Replaced invocations.log-based subagent detection (which never fires on OC) with live SSE SubtaskPart event detection via `message.part.updated` where `part.type === "subtask"`. Redesigned OrchestraBadge from single-field `subagent?` to widened type carrying parent model labels and an array of live subagents, each with agent role, description, and model info. Redesigned StatusLine rendering from single inline badge to downward-growing stack: main status row, optional mode row (●/○ based on subagent liveness with parent model label), per-subagent rows (max 5 visible with overflow counter), all in correct colors. Model labels (agent.name, agent.model → provider/modelId → friendly name) sourced from agent frontmatter YAML and opencode.json, read once at watcher startup. Supersedes Stage 8.1. Full implementation details at `docs/octmux--orchestra-implementation-details.md` §Subagent role detection.
 
 ### 2026-06-04--17-20 — Stage 8.1.3 — Upstream OpenCode fix + revert v8.1.2 sidecar
 **Implemented by:** Claude Code (Claude Opus 4.7 — 1M context) — 2026-06-04--17-20
