@@ -3,7 +3,7 @@ title: "Stage 8 — octmux consumer-side contract: cost path, badge mechanics, f
 created_at: 2026-06-03--16-50
 created_by: Claude Code (Claude Opus 4.7 1M context)
 updated_by: Claude Code (Claude Sonnet 4.6 — 1M context)
-updated_at: 2026-06-05--09-37
+updated_at: 2026-06-05--10-15
 context: >
   Consumer-side implementation reference for the cost display + orchestra badge in octmux.
   Mirrors the structure of oconona's docs/Stage7.5--implementation-details.md (the provider
@@ -75,9 +75,10 @@ The following are **out of scope** for this document:
 3. For each subdir:
    - Read `.oc-session-id` sidecar (UUID, single line). Skip if missing/empty or doesn't match the resolved harness session ID.
    - 24h mtime stale guard on the inflight marker file (not the directory).
-4. Determine badge text from marker filename:
-   - `.duo-inflight` → title from marker content (first 48 chars; stored value embeds mode prefix, e.g. `orchestra light - <title>`).
-   - `.brain-inflight` → title from global `ORCHESTRA_TITLE=` in `~/.config/opencode/orchestra/state.env` (first 48 chars; stored value embeds mode prefix, e.g. `orchestra full - <title>`). Fallback default if `state.env` unavailable: `orchestra full - brain`.
+4. Determine badge text from marker filename (v8.1.6: both read from inflight file content):
+   - `.duo-inflight` → title from marker content (first 48 chars). Example: `orchestra light - <title>`.
+   - `.brain-inflight` → title from marker content (first 48 chars). Example: `orchestra full - <title>`. Fallback if file is empty: `orchestra full - brain`.
+   - `state.env` (`ORCHESTRA_TITLE=`) is **no longer read** (deprecated v8.1.6; was brain-only).
 5. Read per-session `telemetry.json` at `${sessionDir}/telemetry.json`:
    - Extract `parser_warnings: Array<{code, message}>`. Guard: `Array.isArray(...) ? ... : []`.
    - Present only for completed segments; absent during live session.
@@ -250,8 +251,7 @@ Symmetric to oconona §What each consumer reads — this is the consumer-side vi
 | Child sessions | OC HTTP `GET /session/{id}/children` | OpenCode runtime | Σ$ cost (one level) |
 | Session list | OC HTTP `GET /session` (filtered by directory + parentID==null) | OpenCode runtime | Harness OC session ID resolution |
 | `.oc-session-id` | `~/.config/opencode/orchestra/sessions/*/` | oconona setup (v7.5) | Match key — filters which session dirs belong to this OC session |
-| `.brain-inflight` / `.duo-inflight` | `~/.config/opencode/orchestra/sessions/*/` | oconona setup + cleanup | Active-session signal — primary discovery, mode source, 24h stale guard |
-| `state.env` `ORCHESTRA_TITLE=` | `~/.config/opencode/orchestra/state.env` | oconona `/brain` setup | Brain title source (global; NOT per-session) |
+| `.brain-inflight` / `.duo-inflight` | `~/.config/opencode/orchestra/sessions/*/` | oconona setup + cleanup | Active-session signal — primary discovery, mode source, badge title (v8.1.5+: content = full badge text), 24h stale guard |
 | `session.created` global events | OC global event stream (`client.global.event({})`) | OpenCode runtime (`packages/opencode/src/session/session.ts:577`) | Live subagent detection — filtered by `info.parentID === harness sessionID`; `info.agent` + `info.model` supply the row label |
 | `session.updated` / `session.deleted` global events | OC global event stream | OpenCode runtime | Per-row activity (drives spinner) and end-of-row signal |
 | `opencode.json` model names | `~/.config/opencode/opencode.json` | oconona setup | Provider/modelId → friendly name mapping (parent harness row only) |
@@ -354,7 +354,7 @@ The matrix below enumerates the failure modes discovered during Stage 8.0–8.2.
 | C2 | NFS attribute cache lag (`fs.watch` misses events) | Badge update delayed up to 5s | 5s `setInterval` is the safety net | low |
 | C3 | Bun `process.cwd()` realpath vs oconona's bash `$PWD` (logical) divergence under symlinks | OC HTTP API `directory` filter may not match | `safeRealpath()` applied to both sides of the comparison; oconona also uses `realpath` in setup curl. Stage 4.5.5 directory-header fix addressed the related class of bugs | low (now) |
 | C5 | `setOcSessionID()` cache: same input → no re-resolve. If OC session was destroyed + recreated with the same UUID (unusual), cache is stale | Edge case unlikely in practice; OC session IDs are time-encoded UUIDs | None; would require manual `dispose()` + reinstantiate | low |
-| C6 | `ORCHESTRA_TITLE=` in `state.env` is global. Two concurrent `/brain` sessions in different projects on the same host would clobber the title | Operator sees the most-recently-set title for either project. Octmux's `.oc-session-id` filter prevents the wrong dir from being shown, but the title field on the right dir may be wrong | None on octmux side. Oconona could move ORCHESTRA_TITLE to per-session (currently global). Practical risk: low — most operators run one orchestra at a time | low |
+| C6 | ~~`ORCHESTRA_TITLE=` in `state.env` is global~~ | ~~Resolved in v8.1.6~~: both `/brain` and `/duo` now embed the badge title in their per-session inflight file content. `state.env` is no longer used for badge title sourcing; the global-clobber risk is eliminated. | — | resolved |
 
 ### 4. Other fragility
 

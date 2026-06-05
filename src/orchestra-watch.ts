@@ -306,24 +306,9 @@ export class OrchestraWatcher extends EventEmitter {
           const brainMtime = brainStat.mtimeMs;
           if (bestPrio < 1 && (brainMtime > bestMtime || bestPrio < 0)) {
             // Stored value embeds mode prefix ("orchestra full - <title>"); pass through verbatim.
-            // Read ORCHESTRA_TITLE from ~/.config/opencode/orchestra/state.env
-            const stateEnvPath = path.join(
-              process.env.HOME || "/root",
-              ".config/opencode/orchestra/state.env"
-            );
-            let title = "orchestra full - brain";
-            try {
-              if (fs.existsSync(stateEnvPath)) {
-                const content = fs.readFileSync(stateEnvPath, "utf-8");
-                const match = content.match(/^ORCHESTRA_TITLE=(.*)$/m);
-                if (match && match[1]) {
-                  title = match[1];
-                }
-              }
-            } catch {
-              // Ignore read errors; use default
-            }
-            const truncated = title.slice(0, 48);
+            // Read directly from .brain-inflight content (symmetric with duo reader).
+            const rawBrain = fs.readFileSync(brainMarkerPath, "utf-8").trim();
+            const truncated = (rawBrain || "orchestra full - brain").slice(0, 48);
             bestBadge = {
               mode: "brain",
               title: truncated,
