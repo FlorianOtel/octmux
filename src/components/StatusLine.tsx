@@ -97,7 +97,7 @@ export function StatusLine({
         {` ${percentage}% ${usedStr}/${ctxStr} | Σ$${runningCost.toFixed(2)} | ◆ ${projectName}${gitSuffix}`}
         {orchestraBadge && (
           <Text color="#d3869b">
-            {` | ♪ orchestra -> ${orchestraBadge.title}`}
+            {` | ♪ ${orchestraBadge.title}`}
             {(orchestraBadge.parserWarnings?.length ?? 0) > 0 ? " !" : ""}
           </Text>
         )}
