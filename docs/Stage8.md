@@ -3,7 +3,7 @@ title: "Stage 8 — Live cost display (OC SDK) + orchestra inflight badge"
 created_at: 2026-05-29--08-27
 created_by: Claude Code (Claude Haiku 4.5)
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-05--23-30
+updated_at: 2026-06-05--23-16
 context: >
   octmux's status bar shows live `Σ$X.XX` cost (from OC SDK `AssistantMessage.cost`,
   summed over parent session + one-level children) and an orchestra inflight badge
@@ -12,13 +12,13 @@ context: >
   feedback. The full consumer-side contract (cost path, badge mechanics, provider→
   consumer reads table, fragility analysis, recommended test matrix) lives in
   `docs/octmux--orchestra-implementation-details.md` and mirrors the structure of oconona's
-  `docs/Stage7.5--implementation-details.md` (provider spec). The two
+  `oconona/docs/oconona--provider-contract-details.md` (provider spec). The two
   implementation-details docs must stay in sync.
 ---
 
 ## See also
 
-- **`docs/octmux--orchestra-implementation-details.md`** — consumer-side contract: what octmux reads, how the watcher works, badge rendering rules, fragility/race analysis, recommended test matrix. Mirrors oconona's `docs/Stage7.5--implementation-details.md` (provider spec).
+- **`docs/octmux--orchestra-implementation-details.md`** — consumer-side contract: what octmux reads, how the watcher works, badge rendering rules, fragility/race analysis, recommended test matrix. Mirrors oconona's provider-side specification (see next bullet).
 - **`oconona/docs/oconona--provider-contract-details.md`** — provider-side contract (authoritative for the sidecar layout, badge format spec, telemetry.json schema).
 - **`oconona/docs/Stage7.md`** — oconona roadmap (v7.5 is the contract version this consumer reads).
 
