@@ -3,7 +3,7 @@ title: "Stage 8 — Live cost display (OC SDK) + orchestra inflight badge"
 created_at: 2026-05-29--08-27
 created_by: Claude Code (Claude Haiku 4.5)
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-05--23-05
+updated_at: 2026-06-05--23-30
 context: >
   octmux's status bar shows live `Σ$X.XX` cost (from OC SDK `AssistantMessage.cost`,
   summed over parent session + one-level children) and an orchestra inflight badge
@@ -19,7 +19,7 @@ context: >
 ## See also
 
 - **`docs/octmux--orchestra-implementation-details.md`** — consumer-side contract: what octmux reads, how the watcher works, badge rendering rules, fragility/race analysis, recommended test matrix. Mirrors oconona's `docs/Stage7.5--implementation-details.md` (provider spec).
-- **`oconona/docs/Stage7.5--implementation-details.md`** — provider-side contract (authoritative for the sidecar layout, badge format spec, telemetry.json schema).
+- **`oconona/docs/oconona--provider-contract-details.md`** — provider-side contract (authoritative for the sidecar layout, badge format spec, telemetry.json schema).
 - **`oconona/docs/Stage7.md`** — oconona roadmap (v7.5 is the contract version this consumer reads).
 
 ---
@@ -34,7 +34,7 @@ Aligned octmux documentation with the oconona v8.2.0 contract addition (new `res
 
 ### 2026-06-05--23-05 — Stage 8.1.5.2 — Symmetric Task/session.created pairing + brain session.error defensive cleanup
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-05--23-05
-**Commit(s):** `<hash>`
+**Commit(s):** `f84a319`
 
 **Bug**: Stage 8.1.5 introduced asymmetric pairing: `session.created` arrived and immediately paired with the oldest pending Task part. This worked for Anthropic-streamed brains (which emit `message.part.updated(pending)` BEFORE `session.created`), but failed silently for non-Anthropic providers like `sohoai/deepseek-v4-pro` where `session.created` arrives FIRST — the child would sit in `trackedChildSessions` but never be paired to a Task part, and rows would freeze at 120s inactivity instead of ending when the task completed. SQL forensics showed all 6 Task parts in a deepseek session reached `completed` in opencode.db, yet their paired subagent rows remained frozen — the silent miss.
 
@@ -152,7 +152,7 @@ Initial live cost display (Σ$ from OC SDK `AssistantMessage.cost`) + orchestra 
 
 ## Notes for oconona (v7.5 contract clarification)
 
-The Stage 8.2.1 fix exposes an under-documented invariant of the v7.5 contract that oconona's spec (`oconona/docs/Stage7.5--implementation-details.md`) should make explicit. **No oconona code change is required** — the contract is correct as designed; the gap is documentation.
+The Stage 8.2.1 fix exposes an under-documented invariant of the v7.5 contract that oconona's spec (`oconona/docs/oconona--provider-contract-details.md`) should make explicit. **No oconona code change is required** — the contract is correct as designed; the gap is documentation.
 
 ### The invariant
 
@@ -164,7 +164,7 @@ The `.oc-session-id` match key alone is **not sufficient** to identify "live" se
 
 ### Suggested oconona-side action (documentation only)
 
-Add an explicit subsection to `oconona/docs/Stage7.5--implementation-details.md` §Sidecar match key — something along these lines:
+Add an explicit subsection to `oconona/docs/oconona--provider-contract-details.md` §Sidecar match key — something along these lines:
 
 > **Note: `.oc-session-id` is shared across orchestra runs within a single OC session.** The match key identifies any session dir created during the harness's current OC session, not specifically the live one. Concurrency counts and live-session detection MUST additionally filter on inflight marker presence; the `.oc-session-id` match alone will return all historic dirs from this OC session. To detect "currently active" sessions specifically, intersect: `.oc-session-id matches harness OC session ID` AND `inflight marker present` AND `marker mtime < 24h`.
 

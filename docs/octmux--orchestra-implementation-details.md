@@ -3,7 +3,7 @@ title: "Stage 8 — octmux consumer-side contract: cost path, badge mechanics, f
 created_at: 2026-06-03--16-50
 created_by: Claude Code (Claude Opus 4.7 1M context)
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-05--23-05
+updated_at: 2026-06-05--23-30
 context: >
   Consumer-side implementation reference for the cost display + orchestra badge in octmux.
   Mirrors the structure of oconona's docs/Stage7.5--implementation-details.md (the provider
@@ -177,7 +177,7 @@ Default off → zero behaviour change. Evidence-pass recipe: `OCTMUX_DEBUG_SSE=1
 ### File:line reference
 
 - `src/index.tsx:257` — `client.global.event({})` opens the global event stream; `eventStream.stream` is passed to `<App>`.
-- `src/events.ts` — `trackedChildSessions`, `openTaskPartIDs`, `taskToChild` module state; `session.created`/`session.deleted`/`session.updated`/`session.idle` branches; `message.part.updated` tool branch with Task-tool tracking; `resetEventState()` clears all three structures.
+- `src/events.ts` — `trackedChildSessions`, `openTaskPartIDs`, `taskToChild`, `unpairedChildren` module state; `tryPair()` helper (lines 90-115) implements symmetric Task-tool/session.created pairing; `session.created`/`session.deleted`/`session.updated`/`session.idle` branches; `message.part.updated` tool branch with Task-tool tracking; `resetEventState()` clears all four structures.
 - `src/orchestra-watch.ts` — `notifySubagentStarted`/`Ended`/`AllEnded`/`Activity` + `notifyParentActivity` public API with the new-reference emit invariant; `scan()` with `subagents` preservation in both brain and duo branches; `_pendingSubagentQueue` + drain in `_updateBadge`; `loadModelFriendlyNames()` + `formatModelLabel()` for the parent row.
 - `src/app.tsx` — `subagent-detected` / `subagent-ended` / `subagent-activity` / `session-idle` event handlers; watcher mount useEffect at line 333 (declared before SSE useEffect at line 684 for non-null `watcherRef.current` on first event); `watcher.on("changed", setOrchestraBadge)` at line 336.
 - `src/components/StatusLine.tsx` — subagent row render with `<spinner glyph> <agent> [<model>]`, model in `dimColor`.
