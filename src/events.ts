@@ -161,21 +161,49 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     const e = event as unknown as {
       properties: { sessionID: string; messageID: string; partID: string; field: string; delta: string };
     };
-    if (e.properties.sessionID !== sessionID) return null;
-    if (!e.properties.delta) return null;
 
-    const role = openParts.get(e.properties.partID);
-    if (!role) return null; // part not yet tracked (user part or unknown type)
+    // Branch A: parent session — fall through to existing block-delta logic
+    if (e.properties.sessionID === sessionID) {
+      if (!e.properties.delta) return null;
 
-    const blockDelta: ReplEvent = { kind: "block-delta", partID: e.properties.partID, role, text: e.properties.delta };
-    return blockDelta;
+      const role = openParts.get(e.properties.partID);
+      if (!role) return null; // part not yet tracked (user part or unknown type)
+
+      const blockDelta: ReplEvent = { kind: "block-delta", partID: e.properties.partID, role, text: e.properties.delta };
+      return blockDelta;
+    }
+
+    // Branch B: tracked child session — emit subagent-activity and return immediately.
+    // Reasoning models emit message.part.delta at high frequency during inference.
+    // Each non-empty delta bump lets the spinner show activity. Throttling is
+    // intentionally deferred per RESEARCH.md § Risks—Activity storm.
+    if (trackedChildSessions.has(e.properties.sessionID) && e.properties.delta) {
+      return { kind: "subagent-activity", sessionID: e.properties.sessionID, ts: Date.now() };
+    }
+
+    // Branch C: everything else — drop
+    return null;
   }
 
   // message.part.updated: handles text, reasoning, and tool parts.
   if (event.type === "message.part.updated") {
     const e = event as EventMessagePartUpdated;
     const part = e.properties.part;
-    if (part.sessionID !== sessionID) return null;
+
+    // Branch A: parent session — fall through to existing per-type sub-handlers
+    if (part.sessionID !== sessionID) {
+      // Branch B: tracked child session — emit subagent-activity and return immediately.
+      // Tool-call updates (message.part.updated with tool-part payload) carry callID
+      // and state; any message activity from a tracked child counts as a spinner bump
+      // regardless of part type. Throttling is intentionally deferred per RESEARCH.md §
+      // Risks—Activity storm.
+      if (trackedChildSessions.has(part.sessionID)) {
+        return { kind: "subagent-activity", sessionID: part.sessionID, ts: Date.now() };
+      }
+
+      // Branch C: everything else — drop
+      return null;
+    }
 
     // --- text parts ---
     if (part.type === "text") {

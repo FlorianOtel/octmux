@@ -2,8 +2,8 @@
 title: "Stage 8 — Live cost display (OC SDK) + orchestra inflight badge"
 created_at: 2026-05-29--08-27
 created_by: Claude Code (Claude Haiku 4.5)
-updated_by: Claude Code (Claude Opus 4.7 — 1M context)
-updated_at: 2026-06-05--00-53
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-06-05--12-16
 context: >
   octmux's status bar shows live `Σ$X.XX` cost (from OC SDK `AssistantMessage.cost`,
   summed over parent session + one-level children) and an orchestra inflight badge
@@ -25,6 +25,20 @@ context: >
 ---
 
 ## Implementation log
+
+### 2026-06-05--12-16 — Stage 8.2 — Subagent-activity coverage for child-session message.part.delta + message.part.updated
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-05--12-16
+**Commit(s):** `<to-be-backfilled>`
+
+Extended subagent-activity event coverage to child-session `message.part.delta` and `message.part.updated` events. Previously, only parent-session activity and coarse `session.updated` events bumped the subagent spinner's activity timer, causing false-positive 120s freezes during reasoning-heavy workloads (e.g. long inference spans from minimax-m3). The fix routes delta and updated events arriving from `trackedChildSessions` directly to `subagent-activity` ReplEvent emissions, bypassing the parent-session logic paths.
+
+**Implementation details:**
+- `src/events.ts:166-186` (message.part.delta handler): replaced the single-line session filter with a three-branch gate: (a) parent session — falls through to existing `openParts` → `block-delta` logic (byte-equivalent); (b) tracked child session with non-empty delta — emits `{ kind: "subagent-activity", sessionID, ts }` and returns immediately without touching `openParts`; (c) everything else — drops.
+- `src/events.ts:194-206` (message.part.updated handler): added identical three-branch gate: (a) parent session (`part.sessionID === sessionID`) — falls through to per-type sub-handlers; (b) tracked child session — emits `subagent-activity` and returns immediately; (c) everything else — drops. This covers tool-call state updates and any future part types; each message activity from a tracked child counts as a spinner bump.
+- Code comments at both branches note that throttling is intentionally deferred per RESEARCH.md and that any non-empty activity bumps the spinner regardless of part type.
+- `ACTIVITY_FREEZE_MS = 120_000` threshold remains unchanged. With proper event coverage, 120s of true SSE silence now correctly signals a wedge rather than false-positive during normal long inference.
+
+**Design rationale:** Reasoning models emit `message.part.delta` at high frequency during inference. By routing these events to the spinner-activity timer instead of dropping them, the orchestru row correctly reflects genuine model activity rather than appearing frozen for 120+ seconds during legitimate thinking spans.
 
 ### 2026-06-05--00-53 — Stage 8.1.5 — Subagent rows: dispatch-time appearance + Task-tool lifecycle
 **Implemented by:** Claude Code (Claude Opus 4.7 — 1M context) — 2026-06-05--00-53
