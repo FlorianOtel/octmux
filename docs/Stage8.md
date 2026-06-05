@@ -28,7 +28,7 @@ context: >
 
 ### 2026-06-05--12-16 — Stage 8.2 — Subagent-activity coverage for child-session message.part.delta + message.part.updated
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-05--12-16
-**Commit(s):** `<to-be-backfilled>`
+**Commit(s):** `09a9204`
 
 Extended subagent-activity event coverage to child-session `message.part.delta` and `message.part.updated` events. Previously, only parent-session activity and coarse `session.updated` events bumped the subagent spinner's activity timer, causing false-positive 120s freezes during reasoning-heavy workloads (e.g. long inference spans from minimax-m3). The fix routes delta and updated events arriving from `trackedChildSessions` directly to `subagent-activity` ReplEvent emissions, bypassing the parent-session logic paths.
 
