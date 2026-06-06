@@ -1,4 +1,7 @@
 import { render } from "ink";
+// @ts-expect-error — reaching into Ink's internal instance map for the Ctrl-l repaint path.
+// Package exports field doesn't expose this, so use a relative path to the file directly.
+import inkInstancesMap from "../node_modules/ink/build/instances.js";
 import { execFileSync } from "node:child_process";
 import { readlinkSync } from "node:fs";
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
@@ -325,12 +328,31 @@ const appElement = (
   />
 );
 const inkInstance = render(appElement, { exitOnCtrlC: false });
-// Ink's onRender short-circuits when `output === this.lastOutput`. After clear()
-// the React tree is unchanged, so rerender() produces a byte-identical string and
-// nothing is written — the dynamic region stays blank until the next real state
-// change. Reset the private cache so the diff check passes and the repaint fires.
+// Ctrl-l repaint: bypass React entirely. inkInstance.rerender(appElement) goes
+// through React's updateContainer; when the root element is reference-equal
+// and no fibers have state changes, React skips the commit — so Ink's
+// resetAfterCommit (which would fire onRender) never runs.
+//
+// render() returns a wrapper { rerender, unmount, ..., clear } — the real Ink
+// instance with log / lastOutput / onRender lives in Ink's internal WeakMap
+// keyed by stdout. Reach in there to drive a paint directly:
+//   1. log.clear()       — wipe log-update's internal previousOutput + erase
+//                          the dynamic region on screen
+//   2. lastOutput = ""   — defeat Ink's onRender output-diff short-circuit
+//                          (otherwise output === lastOutput → no write)
+//   3. onRender()        — synchronously read the Yoga tree and re-emit to
+//                          stdout, no React commit required
+const inkRaw = (inkInstancesMap as WeakMap<NodeJS.WriteStream, {
+  log: ((s: string) => void) & { clear: () => void };
+  lastOutput: string;
+  onRender: () => void;
+}>).get(process.stdout);
 onRedraw = () => {
-  inkInstance.clear();
-  (inkInstance as unknown as { lastOutput: string }).lastOutput = "";
-  inkInstance.rerender(appElement);
+  if (!inkRaw) {
+    process.stderr.write("[octmux] Ctrl-l: Ink raw instance not in WeakMap (bundler did not dedupe instances.js)\n");
+    return;
+  }
+  inkRaw.log.clear();
+  inkRaw.lastOutput = "";
+  inkRaw.onRender();
 };
