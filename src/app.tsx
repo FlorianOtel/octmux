@@ -25,7 +25,7 @@ import { SessionPickerModal, type SessionPickerItem } from "./components/Session
 import { SlashCompletionOverlay } from "./components/SlashCompletionOverlay.tsx";
 import { ToggleStatusLine } from "./components/ToggleStatusLine.tsx";
 import { expandCommands } from "./command-registry.ts";
-import { fetchGitBranch, getContextWindow, getToolCallSupport, prettyModelName, contextLabel } from "./utils/formatters.ts";
+import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, prettyModelName, contextLabel } from "./utils/formatters.ts";
 
 const TOGGLES_CONFIG = loadTogglesConfig();
 
@@ -676,6 +676,12 @@ export function App(props: AppProps) {
         const sess = resp.data;
         if (sess?.model) {
           setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
+        } else {
+          // No model bound to session yet — seed from server config default
+          const defaultModel = await getDefaultModel(props.client);
+          if (defaultModel) {
+            setActiveModel(defaultModel);
+          }
         }
       } catch {
         // No model set on session yet; /model command will set activeModel
@@ -824,7 +830,15 @@ export function App(props: AppProps) {
     try {
       const resp = await props.client.session.get({ path: { id: newID } });
       const sess = resp.data;
-      if (sess?.model) setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
+      if (sess?.model) {
+        setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
+      } else {
+        // No model bound to session yet — seed from server config default
+        const defaultModel = await getDefaultModel(props.client);
+        if (defaultModel) {
+          setActiveModel(defaultModel);
+        }
+      }
       setSessionLabel(sess?.title || newID.slice(0, 8));
     } catch { /* leave activeModel as-is */ }
     renderer.commitSystemMessage(banner);

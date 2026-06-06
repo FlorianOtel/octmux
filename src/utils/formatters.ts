@@ -178,6 +178,35 @@ export async function getToolCallSupport(
 }
 
 /**
+ * Get the default model from the OC server config.
+ * Calls client.config.get(), reads config.model (e.g. "sohoai/glm-5.1"),
+ * and splits on the first "/" to extract providerID/modelID.
+ * Returns { providerID, modelID } | null. Swallows errors silently.
+ * If config.model has no "/" or is not set, returns null.
+ */
+export async function getDefaultModel(client: Client): Promise<{ providerID: string; modelID: string } | null> {
+  try {
+    const resp = await client.config.get();
+    const cfg = resp.data;
+    if (!cfg?.model) return null;
+
+    const model = cfg.model;
+    const slashIdx = model.indexOf("/");
+    if (slashIdx < 0) {
+      // No "/" — return null; this will fall back to session.model or last-resort ternary
+      return null;
+    }
+
+    const providerID = model.substring(0, slashIdx);
+    const modelID = model.substring(slashIdx + 1);
+    return { providerID, modelID };
+  } catch {
+    // Silently swallow errors
+    return null;
+  }
+}
+
+/**
  * Pretty-print a model ID.
  * "claude-sonnet-4-6" → "Sonnet 4.6"
  * Unknown IDs returned as-is.

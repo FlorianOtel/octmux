@@ -2,8 +2,8 @@
 title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Opus 4.7)
-updated_at: 2026-06-06--14-15
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-06-06--20-51
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -155,6 +155,46 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-06-06--20-51 — Stage 4.4.5: default-model + ctx-window display at startup
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-06--20-51
+**Commit(s):** `<pending>`
+
+**Context and motivation:**
+
+On a fresh `octmux` startup (before the first turn and before the OC server binds a model to the session), the status line displays the session ID as a placeholder for the model and `?` as the context-window denominator:
+
+```
+✦ ses_161c | ctx ░░░░░░░░░░░░░░░░░░░░ 0% 0K/? | Σ$0.00 | ◆ octmux | ⎇ main | SSE ok
+```
+
+This was confusing because the operator did not see the actual default model that would be used until the first turn completed. Desired output:
+
+```
+✦ glm-5.1 (200K context) | ctx ░░░░░░░░░░░░░░░░░░░░ 0% 0/200K | Σ$0.00 | ◆ octmux | ⎇ main | SSE ok
+```
+
+**Implementation:**
+
+Added `getDefaultModel(client)` helper to `src/utils/formatters.ts` that fetches the OC server's config default via `client.config.get()`, parses the `config.model` field (e.g. "sohoai/glm-5.1"), and returns `{ providerID, modelID } | null`. Errors are swallowed silently.
+
+Extended the startup one-shot effect at `src/app.tsx:672-689` with an `else` clause after the `sess?.model` check: if no model is bound to the session, it calls `getDefaultModel(props.client)` and seeds `activeModel` with the result. This triggers the existing activeModel-change effect at lines 377–383, which in turn drives context-window lookup and tokenUsage initialization.
+
+Applied the same fallback pattern in `switchSession` at `src/app.tsx:824-829` for consistency when the operator switches sessions.
+
+**Files changed:**
+
+- `src/utils/formatters.ts` — added `getDefaultModel` helper after `getToolCallSupport`, before `prettyModelName`
+- `src/app.tsx` — imported `getDefaultModel`; extended startup effect (line 679–684) with `else` branch calling `getDefaultModel`; extended switchSession (lines 827–832) with `else` branch
+- `dist/octmux` rebuilt (2026-06-06--20-51)
+
+**Constraints respected:**
+
+- Did not touch `StatusLine.tsx`, `prettyModelName`, `contextLabel`, or the activeModel-change effect
+- Did not add feature flags or speculative abstractions
+- Used defensive error handling (swallows errors silently), matching the style of `getContextWindow` and `getToolCallSupport`
+- Used `/home/florian/.bun/bin/bun` for rebuild
 
 ### 2026-06-02--14-43 — Stage 4.5.7: per-message cost refresh + ticker reset
 
