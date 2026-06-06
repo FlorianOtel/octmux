@@ -2,8 +2,8 @@
 title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Haiku 4.5 via /brain pipeline — Actor)
-updated_at: 2026-06-06--15-32
+updated_by: Claude Code (Claude Opus 4.7)
+updated_at: 2026-06-06--13-48
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -1167,15 +1167,15 @@ Reviewer flagged that the previous v4.7-hotfix subsection (commit `392d771`) rec
 ### 2026-06-06--13-09 — Stage 4.7.1: Ctrl-l repaint escape hatch
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-06--13-09
-**Commit(s):** `218a212`
+**Commit(s):** `218a212`, `<hash>`
 
 **What shipped:**
 
-Ctrl-l keybinding that calls `instance.clear()` + `instance.rerender()` to force a repaint of Ink's dynamic region (input area + status chrome). Wired as a new `onRedraw` callback prop following the existing `onToggleTools`/`onResync` convention, implemented via a stub-closure pattern to break the circular dependency between the `<App>` element and the Ink instance reference.
+Ctrl-l keybinding that forces a repaint of Ink's dynamic region (input area + status chrome). Wired as a new `onRedraw` callback prop following the existing `onToggleTools`/`onResync` convention, implemented via a stub-closure pattern to break the circular dependency between the `<App>` element and the Ink instance reference.
 
 **Architecture:**
 
-- **`src/index.tsx`** — Stub-closure pattern: declare a placeholder `let onRedraw: () => void = () => {}` before constructing the `<App>` element, then fill in the real implementation after `render()` returns. The `appElement` is captured in a variable and passed to both `render()` and the closure, satisfying Ink's element-identity requirement for re-rendering.
+- **`src/index.tsx`** — Stub-closure pattern: declare a placeholder `let onRedraw: () => void = () => {}` before constructing the `<App>` element, then fill in the real implementation after `render()` returns. The `appElement` is captured in a variable and passed to both `render()` and the closure, satisfying Ink's element-identity requirement for re-rendering. The redraw routine does three things in order: `inkInstance.clear()` (erases the dynamic region via log-update), reset `inkInstance.lastOutput = ""` (forces Ink's `output !== this.lastOutput` short-circuit to pass), then `inkInstance.rerender(appElement)` (drives the actual repaint).
 - **`src/components/PromptInput.tsx`** — Added `onRedraw?: () => void` prop; destructured in function signature; threaded into the `handleKey` callbacks object.
 - **`src/keybindings.ts`** — Added `onRedraw?: () => void` to the callbacks parameter type; inserted a new branch guarded by `key.ctrl && input === "l" && !key.shift` in the Ctrl-letter cluster, positioned after `onToggleThinking` and before `onResync` in the application-level callbacks group.
 - **`src/app.tsx`** — Added `onRedraw?: () => void` to `AppProps`; passed to `<PromptInput onRedraw={props.onRedraw} ... />` at line 1218.
@@ -1190,8 +1190,10 @@ Ctrl-l keybinding that calls `instance.clear()` + `instance.rerender()` to force
 
 The stub-closure trick is safe because `onRedraw()` is only invoked via user input after the render-return completes (no synchronous firing during setup). The callback wrapper `() => onRedraw()` is held by React as a stable reference; the real implementation is filled in afterward. Reusing the same `appElement` variable ensures Ink's reconciler sees an element-identity match on re-render, allowing incremental updates rather than a full recreation.
 
+The `lastOutput = ""` reset is the non-obvious part. Ink's `onRender` (in `node_modules/ink/build/ink.js`) keeps its own output cache — separate from log-update's `previousOutput` — and short-circuits with `if (output !== this.lastOutput) this.throttledLog(output)`. After `clear()`, the React tree's rendered string is byte-identical to what was painted before (no state or prop changed), so without resetting `lastOutput` the diff check fails, `throttledLog` is never called, and the just-cleared region stays blank until the next *real* state change triggers a different render. Resetting `lastOutput` to `""` makes the next computed output unconditionally `!==` the cache, so the repaint actually fires. Reaches into a private Ink field — stable in Ink 5.x and isolated to a single line; if Ink ever renames it, the only consequence is the silent-repaint regression returning.
+
 **Files modified:**
-- `src/index.tsx` — Ink instance capture and closure setup.
+- `src/index.tsx` — Ink instance capture, closure setup, `lastOutput` reset.
 - `src/components/PromptInput.tsx` — `onRedraw` prop addition and threading.
 - `src/keybindings.ts` — Ctrl-l dispatch branch.
 - `src/app.tsx` — `onRedraw` addition to `AppProps` and forwarding to PromptInput.

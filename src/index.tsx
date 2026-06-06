@@ -325,4 +325,12 @@ const appElement = (
   />
 );
 const inkInstance = render(appElement, { exitOnCtrlC: false });
-onRedraw = () => { inkInstance.clear(); inkInstance.rerender(appElement); };
+// Ink's onRender short-circuits when `output === this.lastOutput`. After clear()
+// the React tree is unchanged, so rerender() produces a byte-identical string and
+// nothing is written — the dynamic region stays blank until the next real state
+// change. Reset the private cache so the diff check passes and the repaint fires.
+onRedraw = () => {
+  inkInstance.clear();
+  (inkInstance as unknown as { lastOutput: string }).lastOutput = "";
+  inkInstance.rerender(appElement);
+};
