@@ -107,6 +107,7 @@ export function handleKey(
     onToggleTools?: () => void;
     onToggleThinking?: () => void;
     onResync?: () => void;
+    onRedraw?: () => void;
   } = {},
 ): number {
 
@@ -232,6 +233,8 @@ export function handleKey(
     callbacks.onToggleTools?.();    // Ctrl-t: toggle tools output gate
   } else if (key.ctrl && input === "T") {
     callbacks.onToggleThinking?.(); // Ctrl-T: toggle thinking output gate
+  } else if (key.ctrl && input === "l" && !key.shift) {
+    callbacks.onRedraw?.();         // Ctrl-L: redraw (Ink re-render escape hatch)
   } else if (key.ctrl && input === "r") {
     callbacks.onResync?.();         // Ctrl-R: manual full resync (Stage 4.5.3)
 

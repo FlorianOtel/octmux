@@ -3,7 +3,7 @@ title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-29--15-45
+updated_at: 2026-06-02--19-17
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -402,6 +402,38 @@ in the planner output.
 
 ## Implementation log (reverse chronological — newest at top)
 
+### 2026-06-02--19-17 — Stage 5.5 — slash autocomplete: sort candidates + dismiss on space
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-02--19-17
+**Commit(s):** `3283238`
+
+**Problem:** The slash-command completion overlay (Stage 5) had two UX issues when operators typed partial command names with common prefixes:
+
+1. **Tab completion unpredictability:** Commands like `/brain` and `/brain-abandon` both match the token `/brain`. When the operator typed `/brain` and pressed Tab to complete, the overlay picked whichever candidate came first in the `filtered` array — which was insertion order, not semantic. The longer `/brain-abandon` could be selected instead of the exact match `/brain`, forcing the operator to manually edit the buffer or use arrow keys to swap the order.
+2. **Space dismissal too strict:** The overlay dismissed when the operator typed a space *only* if `filtered.length === 1` AND `filtered[0] === token` (the exact match). If there were multiple candidates, the overlay stayed open even after the operator moved to typing arguments. This forced an extra Esc keystroke to dismiss.
+
+**Solution:** Applied two fixes in `src/app.tsx` inside `recompute()`:
+
+1. **Dismiss on any space:** Changed the condition from `if (firstLine.includes(" ") && filtered.length === 1 && filtered[0] === token)` to just `if (firstLine.includes(" "))`. Now the overlay closes immediately when the operator types a space anywhere on the line, regardless of how many candidates remain or whether one is an exact match. This is the correct UX — once the operator has typed past the command name to the arguments, they don't need the overlay anymore.
+2. **Sort candidates by exactness then alphabetically:** Added a `sorted` array that sorts `filtered` with a custom comparator:
+   - Exact token matches (e.g., `/brain` when token is `/brain`) sort to position 0.
+   - All other candidates sort alphabetically.
+   - This ensures `/brain` is always selected first on Tab, even if `/brain-abandon` is also in the list.
+
+**What changed:**
+- `src/app.tsx` lines 389–396: Replaced dismiss condition and added sorting logic before `setSlashCompletion()`.
+
+**Impact:**
+- **Tab key is now predictable:** Pressing Tab on `/brain` always completes to `/brain`, not `/brain-abandon`.
+- **Space dismissal is consistent:** Typing a space closes the overlay immediately, improving input flow and reducing modal dismissal friction.
+- **No breaking changes:** The overlay's keyboard shortcuts (Tab, Esc, arrows) and visual styling are unchanged.
+
+**Files modified:**
+- `src/app.tsx` (lines 389–396: dismiss condition + sorting logic)
+
+**Build:** Binary rebuild succeeds with zero TypeScript errors.
+
+---
+
 ### 2026-05-29--14-48 — Stage 5.4 — dynamic external command discovery
 **Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-29--14-48
 **Commit(s):** `d4050bc`
@@ -622,6 +654,39 @@ Cycle with **Shift-TAB**: `ask → allow → deny → ask`.
 - `src/components/PromptInput.tsx` (bold-cyan input highlighting)
 
 **Verified (pending operator):** This phase is awaiting operator smoke-testing of the live overlay, Help command, and input highlighting.
+
+---
+
+### 2026-05-31--00-00 — v5.5 hotfix — normalize .project-dir realpath in OrchestraWatcher
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-31--00-00
+**Commit(s):** `f7e5e3e`
+
+Follow-up to v5.5: `OrchestraWatcher.scan()` used strict string equality to match the `.project-dir` sidecar against `process.cwd()`. The mismatch: Bun's `process.cwd()` returns the **realpath** (via `getcwd()` syscall — resolves symlinks), but brain.md writes `$PWD` which bash tracks as the **logical/symlink path**. On NFS setups where `/home/florian/Gin-AI` → `/mnt/nfs/Florian/Gin-AI`, the two strings never matched — the orchestra badge never appeared even when a brain session was active in the correct project.
+
+Fix: read `storedDir` from the sidecar as before, then resolve it via `fs.realpathSync()` before the equality check. A `try/catch` fallback returns the raw value for stale/deleted paths.
+
+**`src/orchestra-watch.ts`:** Lines 134–138 — added `resolvedStoredDir` local variable; changed equality check to use it instead of `storedDir`.
+
+**Files modified:**
+- `src/orchestra-watch.ts`
+
+---
+
+### 2026-05-30--00-00 — v5.5 — pass process.cwd() as session directory on create
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-05-30--00-00
+**Commit(s):** `6a7bc65`
+
+Root cause: OC's systemd unit sets `WorkingDirectory=%h`, so the OC daemon always starts with `cwd = $HOME`. Every `client.session.create({})` call without an explicit `directory` inherited that daemon cwd — the operator's actual launch directory was silently discarded, causing relative-path misidentification in both orchestra (`/brain`, `/duo`) and native sessions.
+
+Fix: both `session.create()` call sites now pass `{ query: { directory: process.cwd() } }`. The SDK's `SessionCreateData.query.directory` field is the correct hook. `process.cwd()` in Bun captures the directory where `octmux` was invoked (via `getcwd()` — never changes without an explicit `chdir`).
+
+The `--fork` startup path (`client.session.fork()`) is unchanged — it inherits the parent session's directory, which is the correct semantic.
+
+**Files modified:**
+- `src/index.tsx` — startup default-create path (line 247)
+- `src/app.tsx` — `/new`/`/clear` in-session command handler (line 462)
 
 ---
 

@@ -48,6 +48,7 @@ type AppProps = {
   baseUrl: string;
   renderer: Renderer;
   cwd: string;
+  onRedraw?: () => void;
 };
 
 export function App(props: AppProps) {
@@ -1215,7 +1216,7 @@ export function App(props: AppProps) {
           </Text>
         )}
         <Rule title={sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={!!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} onHelp={triggerHelp} onToggleTools={() => toggleGate("tools-output")} onToggleThinking={() => toggleGate("thinking-output")} onResync={handleResync} />
+        <PromptInput editor={editor} disabled={!!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} onHelp={triggerHelp} onToggleTools={() => toggleGate("tools-output")} onToggleThinking={() => toggleGate("thinking-output")} onResync={handleResync} onRedraw={props.onRedraw} />
         <Rule width={w} />
         <StatusLine
           modelLabel={

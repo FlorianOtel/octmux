@@ -307,7 +307,11 @@ if (_pad > 0) process.stdout.write('\n'.repeat(_pad));
 // completion overlay cover them from the very first frame.
 loadExternalCommands();
 
-render(
+// Stub-closure pattern: define a placeholder onRedraw function, then fill it in
+// after render() returns. This breaks the circular dependency where <App> needs
+// onRedraw (which needs the Ink instance) and the Ink instance needs <App>.
+let onRedraw: () => void = () => {};
+const appElement = (
   <App
     client={client}
     sessionID={sessionID}
@@ -317,6 +321,8 @@ render(
     baseUrl={baseUrl}
     renderer={renderer}
     cwd={cwd}
-  />,
-  { exitOnCtrlC: false }
+    onRedraw={() => onRedraw()}
+  />
 );
+const inkInstance = render(appElement, { exitOnCtrlC: false });
+onRedraw = () => { inkInstance.clear(); inkInstance.rerender(appElement); };

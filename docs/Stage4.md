@@ -3,7 +3,7 @@ title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Haiku 4.5 via /brain pipeline — Actor)
-updated_at: 2026-06-02--14-43
+updated_at: 2026-06-06--13-09
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -1161,3 +1161,38 @@ Reviewer flagged that the previous v4.7-hotfix subsection (commit `392d771`) rec
 
 **Files modified:**
 - `docs/Stage4.md` — three timestamp strings; no body-text change to the v4.7 hotfix entry it documents.
+
+---
+
+### 2026-06-06--13-09 — Stage 4.7.1: Ctrl-l repaint escape hatch
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-06--13-09
+**Commit(s):** `<hash>`
+
+**What shipped:**
+
+Ctrl-l keybinding that calls `instance.clear()` + `instance.rerender()` to force a repaint of Ink's dynamic region (input area + status chrome). Wired as a new `onRedraw` callback prop following the existing `onToggleTools`/`onResync` convention, implemented via a stub-closure pattern to break the circular dependency between the `<App>` element and the Ink instance reference.
+
+**Architecture:**
+
+- **`src/index.tsx`** — Stub-closure pattern: declare a placeholder `let onRedraw: () => void = () => {}` before constructing the `<App>` element, then fill in the real implementation after `render()` returns. The `appElement` is captured in a variable and passed to both `render()` and the closure, satisfying Ink's element-identity requirement for re-rendering.
+- **`src/components/PromptInput.tsx`** — Added `onRedraw?: () => void` prop; destructured in function signature; threaded into the `handleKey` callbacks object.
+- **`src/keybindings.ts`** — Added `onRedraw?: () => void` to the callbacks parameter type; inserted a new branch guarded by `key.ctrl && input === "l" && !key.shift` in the Ctrl-letter cluster, positioned after `onToggleThinking` and before `onResync` in the application-level callbacks group.
+- **`src/app.tsx`** — Added `onRedraw?: () => void` to `AppProps`; passed to `<PromptInput onRedraw={props.onRedraw} ... />` at line 1218.
+
+**Scope:**
+
+- **Scope A (implemented):** Ctrl-l repaints the PromptInput + status chrome; static transcript above remains visually unchanged.
+- **Scope B (deferred):** Full-screen clear (`\x1bc` / `\x1b[2J\x1b[H`).
+- **Scope C (deferred):** Transcript re-rendering (requires `<Static>` refactor).
+
+**Design notes:**
+
+The stub-closure trick is safe because `onRedraw()` is only invoked via user input after the render-return completes (no synchronous firing during setup). The callback wrapper `() => onRedraw()` is held by React as a stable reference; the real implementation is filled in afterward. Reusing the same `appElement` variable ensures Ink's reconciler sees an element-identity match on re-render, allowing incremental updates rather than a full recreation.
+
+**Files modified:**
+- `src/index.tsx` — Ink instance capture and closure setup.
+- `src/components/PromptInput.tsx` — `onRedraw` prop addition and threading.
+- `src/keybindings.ts` — Ctrl-l dispatch branch.
+- `src/app.tsx` — `onRedraw` addition to `AppProps` and forwarding to PromptInput.
+- `docs/Stage4.md` — This entry.

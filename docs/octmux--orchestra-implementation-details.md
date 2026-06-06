@@ -6,7 +6,7 @@ updated_by: Claude Code (Claude Haiku 4.5)
 updated_at: 2026-06-05--23-30
 context: >
   Consumer-side implementation reference for the cost display + orchestra badge in octmux.
-  Mirrors the structure of oconona's docs/Stage7.5--implementation-details.md (the provider
+   Mirrors the structure of oconona's docs/oconona--provider-contract-details.md (the provider
   spec): the two docs describe the same provider↔consumer contract from opposite ends.
   Self-contained for a future octmux refactor that needs to revise the OrchestraWatcher
   or rendering paths against changes in oconona's v7.5+ contract. Includes a dedicated
@@ -20,7 +20,7 @@ context: >
 
 ## Status and scope
 
-This document is the **authoritative consumer-side reference** for octmux's integration with the oconona orchestra. It is the symmetric counterpart to `oconona/docs/Stage7.5--implementation-details.md` (the provider spec): same contract, opposite end. Where oconona documents what it *writes*, this doc documents what octmux *reads*, *renders*, and *infers*. The contract surface is identical; the two docs must stay in sync.
+This document is the **authoritative consumer-side reference** for octmux's integration with the oconona orchestra. It is the symmetric counterpart to `oconona/docs/oconona--provider-contract-details.md` (the provider spec): same contract, opposite end. Where oconona documents what it *writes*, this doc documents what octmux *reads*, *renders*, and *infers*. The contract surface is identical; the two docs must stay in sync.
 
 The cost display (`Σ$`) and orchestra badge (now `♪ orchestra full/light - <title>`; pre-v8.1.5: `♪ orchestra -> …`; v8.1.6: title embedded in inflight file content, rendered passthrough as `♪ ${orchestraBadge.title}`) shipped in stages 8.0, 8.1, 8.2, and 8.2.1. See `docs/Stage8.md` for the implementation changelog.
 
@@ -188,7 +188,7 @@ Default off → zero behaviour change. Evidence-pass recipe: `OCTMUX_DEBUG_SSE=1
 
 ### What octmux reads
 
-`${sessionDir}/telemetry.json` (per-session, NOT a global file). The schema is owned by oconona (see `oconona/docs/Stage7.5--implementation-details.md` §telemetry.json shape post-v7.5). octmux reads ONLY:
+`${sessionDir}/telemetry.json` (per-session, NOT a global file). The schema is owned by oconona (see `oconona/docs/oconona--provider-contract-details.md` §telemetry.json shape post-v7.5). octmux reads ONLY:
 
 - `parser_warnings: Array<{code: string; message: string}>` — surfaced as a ` !` indicator after the badge.
 
@@ -364,7 +364,7 @@ The matrix below enumerates the failure modes discovered during Stage 8.0–8.2.
 | # | Scenario | Behaviour | Mitigation | Severity |
 |---|---|---|---|---|
 | D1 | OC daemon down at octmux startup | `client.session.list()` throws → `harnessOcSessionID` stays null → badge never appears. Silent | octmux already fails on daemon-down in other paths (SSE, session.create); not a new failure mode. Could add an explicit operator-visible warning | low |
-| D2 | **Spec contradiction in oconona** about telemetry vs marker write order: `Stage7.md` invariant 4 says "telemetry.json written BEFORE marker removed"; `Stage7.5--implementation-details.md` invariant 6 says "marker removed BEFORE telemetry-summarize.sh invoked". The actual /brain skill follows Stage7.md ordering (telemetry first, marker after) | If the docs are inconsistent, future implementations might pick the wrong order. The Stage7.5 ordering would create a brief no-marker-no-telemetry window. octmux is robust either way (no-marker = no badge, no-telemetry = no warning indicator) | **Needs clarification on oconona side**: pick one invariant and align both docs. See `Notes for oconona` in `docs/Stage8.md` for the next round of feedback | med |
+| D2 | **Spec contradiction in oconona** about telemetry vs marker write order: `oconona--provider-contract-details.md` invariant 6 says "marker removed BEFORE telemetry-summarize.sh invoked". The actual `/brain` cleanup script (orchestra-cleanup.sh) runs summarizer first (Step 4), then removes marker (Step 6) — i.e. telemetry before marker, the opposite order | If the docs are inconsistent, future implementations might pick the wrong order. The provider-doc-prescribed order would create a brief no-marker-no-telemetry window. octmux is robust either way (no-marker = no badge, no-telemetry = no warning indicator) | **G1 — Documented below:** provider doc §Write-order invariant 6 contradicts implementation. Provider doc should be updated to match cleanup.sh ordering. | med |
 | D3 | Oconona's `telemetry-summarize.py` crashes after writing `.outcome` but before writing `telemetry.json` | Dir has `.outcome` + no telemetry + no (or stale) marker. Stop-hook orphan finalizer's "candidate condition" (per oconona Stage7.md §Cleanup machinery) catches this on next OC Stop event | Stop-hook orphan finalizer is the safety net | low |
 | D4 | Many accumulated session dirs (30-day retention × multiple/day) | Each 5s scan does fs.existsSync + fs.statSync + fs.readFileSync per dir matching `.oc-session-id`. 100+ syscalls per 5s in extreme cases | Not a perf killer at 5s cadence. Operator can manually `rm -rf` old dirs if motivated, or reduce `housekeeping.session_retention_days` in `~/.config/opencode/orchestra/oconona-config.yaml` | low |
 | D5 | `OrchestraWatcher.dispose()` doesn't cancel in-flight `resolveHarnessSessionID()` promise | If the component unmounts mid-resolve, the `.then()` callback fires on a disposed watcher. `scan()` no-ops (no listeners). Technically a memory leak (closure retains client + the watcher itself until promise resolves) but bounded by the HTTP call timeout | Use AbortController if this ever becomes a real concern | low |
@@ -394,7 +394,7 @@ The matrix above is also the foundation for any future E2E test recipe. Items 1�
 
 ## Cross-references
 
-- **Provider spec:** `oconona/docs/Stage7.5--implementation-details.md` — the symmetric counterpart written from the provider's side. The two documents must stay in sync.
+- **Provider spec:** `oconona/docs/oconona--provider-contract-details.md` — the symmetric counterpart written from the provider's side. The two documents must stay in sync.
 - **oconona roadmap:** `oconona/docs/Stage7.md` (v7.5 is the contract version this consumer reads).
 - **octmux changelog:** `docs/Stage8.md` — implementation log + known limitations + feedback to oconona.
 - **Auto-memory:** `feedback-orchestra-v75-contract.md` (in user's auto-memory) — quick reference for the v7.5 contract.

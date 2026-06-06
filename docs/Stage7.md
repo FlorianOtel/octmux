@@ -2,8 +2,8 @@
 title: "Stage 7 — Native opencode /rag command + discovery and forwarding"
 created_at: 2026-05-26--18-41
 created_by: Claude Code (Claude Haiku 4.5)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-26--22-30
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-06-02--21-23
 context: >
   Stage 6 shipped a broken client-side TypeScript `/rag` implementation that suffered
   from a hardcoded 0.45 score-filter strangling all hits and architectural mismatch
@@ -168,3 +168,17 @@ warning won't fire and the underlying model misbehavior recurs silently.
 - Manual test: invoke `/rag search test` against a `tool_call:false` model →
   yellow warning prints, dispatch proceeds. Switch to a `tool_call:true`
   model → no warning. Plain prompts → no warning regardless.
+
+---
+
+### 2026-06-02--21-23 — Stage 7.2: slash autocomplete UX fixes
+**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-06-02--21-23
+**Commit(s):** `274a1b4`
+
+Fixed three autocomplete UX bugs in `recompute()` (`src/app.tsx`):
+
+1. **TAB selected wrong command** — `/brain-abandon` was winning over `/brain` on TAB because `expandCommands()` returns external `.md` commands in filesystem inode order (not alphabetical). Fixed by sorting filtered candidates before passing to state: exact token match pinned first, then `localeCompare` alphabetical.
+
+2. **SPACE didn't dismiss the overlay** — the dismiss condition required exactly one candidate matching the token. For `/brain ` there are two candidates, so the overlay stayed open. Fixed by dismissing unconditionally on any space in the buffer.
+
+3. **Wrong item highlighted after `/brain<SPACE>`** — consequence of bug 2; resolved automatically.
