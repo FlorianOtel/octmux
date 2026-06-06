@@ -1167,7 +1167,7 @@ Reviewer flagged that the previous v4.7-hotfix subsection (commit `392d771`) rec
 ### 2026-06-06--13-09 — Stage 4.7.1: Ctrl-l repaint escape hatch
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-06--13-09
-**Commit(s):** `218a212`, `<hash>`
+**Commit(s):** `218a212`, `ceb83a7`
 
 **What shipped:**
 
