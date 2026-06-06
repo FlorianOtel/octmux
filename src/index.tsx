@@ -348,10 +348,7 @@ const inkRaw = (inkInstancesMap as WeakMap<NodeJS.WriteStream, {
   onRender: () => void;
 }>).get(process.stdout);
 onRedraw = () => {
-  if (!inkRaw) {
-    process.stderr.write("[octmux] Ctrl-l: Ink raw instance not in WeakMap (bundler did not dedupe instances.js)\n");
-    return;
-  }
+  if (!inkRaw) return;
   inkRaw.log.clear();
   inkRaw.lastOutput = "";
   inkRaw.onRender();
