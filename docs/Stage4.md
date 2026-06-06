@@ -159,7 +159,7 @@ When finishing a phase:
 ### 2026-06-06--20-51 — Stage 4.4.5: default-model + ctx-window display at startup
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-06--20-51
-**Commit(s):** `<pending>`
+**Commit(s):** `12df1c9`
 
 **Context and motivation:**
 
