@@ -3,7 +3,7 @@ title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Haiku 4.5 via /brain pipeline — Actor)
-updated_at: 2026-06-06--15-29
+updated_at: 2026-06-06--15-32
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -1166,7 +1166,7 @@ Reviewer flagged that the previous v4.7-hotfix subsection (commit `392d771`) rec
 
 ### 2026-06-06--13-09 — Stage 4.7.1: Ctrl-l repaint escape hatch
 
-**Implemented by:** Claude Code (Claude Opus 4.7) — 2026-06-06--13-09
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-06--13-09
 **Commit(s):** `218a212`
 
 **What shipped:**
