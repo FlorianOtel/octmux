@@ -88,6 +88,11 @@ export class LineEditor extends EventEmitter {
     // "changed" clears the visible buffer; "submit" only fires for non-empty input
     this.emit("changed");
     if (text.trim()) this.emit("submit", text);
+    // Reset navigation state AFTER emit — handleSubmit reads isViewingPending()
+    // during the synchronous event callback, so we reset only after it returns.
+    this.histIdx = -1;
+    this._draft = null;
+    this._viewingPending = false;
   }
 
   clearBuffer(): void {
@@ -261,6 +266,8 @@ export class LineEditor extends EventEmitter {
   // navigation — otherwise scrolling to a past "/command" entry would pop the
   // overlay and steal the arrow keys, trapping the user mid-scroll.
   isInHistoryNav(): boolean { return this.histIdx !== -1 || this._viewingPending; }
+
+  isViewingPending(): boolean { return this._viewingPending; }
 
   // Seed the history from an external source (e.g. replay synthesiser on resume).
   // Replaces any existing history.

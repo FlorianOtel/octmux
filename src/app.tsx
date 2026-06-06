@@ -1077,7 +1077,12 @@ export function App(props: AppProps) {
     // Default: send to OpenCode server
     // Queue for later if model is currently generating
     if (isGeneratingRef.current) {
-      setPendingQueue(prev => [...prev, text]);
+      if (editor.isViewingPending()) {
+        // User edited the queued message — replace queue instead of appending
+        setPendingQueue([text]);
+      } else {
+        setPendingQueue(prev => [...prev, text]);
+      }
       return;
     }
     editor.addToHistory(text);
