@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-02--19-17
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-06-06--13-38
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -700,6 +700,23 @@ Enable editing the input buffer while the model is streaming/thinking/calling to
 **`src/editor.ts`:** Added `_queueMode`, `_pendingEntry`, `_viewingPending` private fields. New methods: `setQueueMode()`, `addToHistory()`, `setPendingEntry()`. Modified `enterOnLastRow()` to skip history.push when in queue mode. Modified `histPrev()`/`histNext()` to show `_pendingEntry` as virtual entry between live draft and real history. `isInHistoryNav()` now includes `_viewingPending`.
 
 **`src/app.tsx`:** Added `pendingQueue` state + `pendingQueueRef`, `isGeneratingRef`, `handleSubmitRef` refs. Removed `isGenerating` from `PromptInput.disabled` prop (editing always allowed). Modified `handleSubmit` default path: if `isGeneratingRef.current`, push to queue and return; else call `editor.addToHistory(text)` before sending. Added two effects: one syncs `setQueueMode` + auto-submits on `session-idle`, one syncs `setPendingEntry` when queue changes. Added queue count indicator above input chrome.
+
+**Files modified:**
+- `src/editor.ts`
+- `src/app.tsx`
+
+---
+
+### 2026-06-06--13-38 — Stage 5 hotfix.1 — edit-queued-msg: replace queue instead of append
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-06--13-38
+**Commit(s):** `2dca3ec`
+
+Bug fix against the Stage 5 hotfix (a65f833). Pressing arrow-up while a message is queued loads it for editing (`_viewingPending = true`). Submitting the edited version was unconditionally appending to `pendingQueue` instead of replacing it, producing "2 messages queued" and concatenated arrow-up recall.
+
+**`src/editor.ts`:** Added `isViewingPending(): boolean` public accessor. Extended `enterOnLastRow()` to reset `histIdx`, `_draft`, and `_viewingPending` after the `emit("submit")` call — placed after the emit (not before) so `handleSubmit` can still read the flag during the synchronous event callback.
+
+**`src/app.tsx`:** In `handleSubmit`, the `isGeneratingRef.current` branch now checks `editor.isViewingPending()`: if true, `setPendingQueue([text])` (replace); otherwise `setPendingQueue(prev => [...prev, text])` (append). Genuinely new queued messages still accumulate correctly.
 
 **Files modified:**
 - `src/editor.ts`

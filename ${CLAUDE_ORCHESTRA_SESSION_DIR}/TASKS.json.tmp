@@ -1,0 +1,29 @@
+{
+  "plan_ref": "PLAN.md",
+  "tasks": [
+    {
+      "id": 1,
+      "desc": "Edit src/app.tsx — two changes to recompute()",
+      "status": "done",
+      "notes": "Change A: simplified dismiss condition from 3-part AND to just `if (firstLine.includes(\" \"))`. Change B: added sorting logic to place exact token match first, then alphabetical."
+    },
+    {
+      "id": 2,
+      "desc": "Rebuild binary",
+      "status": "done",
+      "notes": "Binary rebuild succeeded: [84ms] bundle 567 modules, [1.74s] compile dist/octmux"
+    },
+    {
+      "id": 3,
+      "desc": "Update docs",
+      "status": "done",
+      "notes": "Added Stage 5.5 implementation log entry to docs/Stage5.md with full problem/solution description. Updated frontmatter updated_by/updated_at. Updated project memory with commit hash and brief note."
+    },
+    {
+      "id": 4,
+      "desc": "Commit changes",
+      "status": "done",
+      "notes": "Committed: 3283238 fix(octmux): Stage 5.5 — slash autocomplete: sort candidates + dismiss on space. Updated docs/Stage5.md entry with actual commit hash."
+    }
+  ]
+}
