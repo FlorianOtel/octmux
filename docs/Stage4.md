@@ -3,7 +3,7 @@ title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
 updated_by: Claude Code (Claude Haiku 4.5 via /brain pipeline — Actor)
-updated_at: 2026-06-06--13-09
+updated_at: 2026-06-06--15-29
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -1166,7 +1166,7 @@ Reviewer flagged that the previous v4.7-hotfix subsection (commit `392d771`) rec
 
 ### 2026-06-06--13-09 — Stage 4.7.1: Ctrl-l repaint escape hatch
 
-**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-06--13-09
+**Implemented by:** Claude Code (Claude Opus 4.7) — 2026-06-06--13-09
 **Commit(s):** `218a212`
 
 **What shipped:**
@@ -1196,3 +1196,7 @@ The stub-closure trick is safe because `onRedraw()` is only invoked via user inp
 - `src/keybindings.ts` — Ctrl-l dispatch branch.
 - `src/app.tsx` — `onRedraw` addition to `AppProps` and forwarding to PromptInput.
 - `docs/Stage4.md` — This entry.
+
+## Notes
+
+Commit 218a212 also picked up pre-existing uncommitted doc edits to `docs/Stage5.md`, `docs/Stage7.md`, and `docs/octmux--orchestra-implementation-details.md`.
