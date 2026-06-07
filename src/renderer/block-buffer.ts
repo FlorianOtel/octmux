@@ -1,9 +1,77 @@
 import { EventEmitter } from "node:events";
+import { Marked } from "marked";
+import { markedTerminal } from "marked-terminal";
+import chalk from "chalk";
 import type { Block, Role } from "../blocks.ts";
 import { formatLine } from "../blocks.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer, CommittedLine } from "./types.ts";
 import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
+
+// Stage 10.2 — Markdown engine integration.
+//
+// API notes verified empirically against marked@15.0.0 + marked-terminal@7.3.0:
+//   - `marked.parse(text)` and `Marked#parse(text)` are SYNCHRONOUS by default
+//     in v15+ (no need to pass `{ async: false }`). They return a `string`.
+//   - `markedTerminal` is a NAMED export (factory) — `import { markedTerminal }`.
+//     The default export is the underlying `Renderer` class.
+//   - `markedTerminal({...})` does NOT take a `width` option that affects
+//     output unless `reflowText: true`; we use `reflowText: false`, so the
+//     `width` field on `BlockBufferRenderer` is informational only (the
+//     `ActiveBlock` Ink component handles wrapping via Box's width prop).
+//   - We use a per-instance `Marked` (not the global singleton) so that the
+//     extension config doesn't leak across renderers or affect the test file's
+//     own marked usage.
+//
+// chalk-fallback heuristic (constructor-time, defensive — there is no
+// `--no-block-render` escape hatch on this branch):
+//   if `FORCE_COLOR` env unset AND `process.stdout.isTTY === false`, log a
+//   one-time warning and set `chalk.level = 0` (no-color path). marked-terminal
+//   still renders structurally; chalk-applied styles emit no escape codes.
+
+let _chalkFallbackWarned = false;
+
+function _setupChalkLevel(): void {
+  const forceColor = process.env.FORCE_COLOR;
+  const isTTY = process.stdout.isTTY === true;
+  if (!forceColor && !isTTY) {
+    if (!_chalkFallbackWarned) {
+      _chalkFallbackWarned = true;
+      process.stderr.write(
+        "octmux: chalk auto-detected no TTY; falling back to no-color markdown render (text-only, no styling). To force colors, set FORCE_COLOR=1.\n"
+      );
+    }
+    chalk.level = 0;
+  } else {
+    chalk.level = 3;
+  }
+}
+
+function _makeMarkedInstance(): Marked {
+  const m = new Marked();
+  // NB: chalk.level MUST be set BEFORE markedTerminal({...}) is called.
+  // markedTerminal captures chalk-styled functions at construction time;
+  // setting chalk.level later has no effect on already-constructed styles.
+  m.use(markedTerminal({
+    heading: chalk.cyan.bold,
+    firstHeading: chalk.cyan.bold,
+    codespan: chalk.rgb(147, 161, 199),
+    code: chalk.reset,
+    listitem: chalk.reset,
+    blockquote: chalk.gray.italic,
+    hr: chalk.dim,
+    link: chalk.reset,
+    href: chalk.blue.underline,
+    strong: chalk.bold,
+    em: chalk.italic,
+    del: chalk.strikethrough,
+    reflowText: false,
+    tab: 2,
+    unescape: true,
+    emoji: true,
+  }) as any);
+  return m;
+}
 
 export class BlockBufferRenderer extends EventEmitter implements Renderer {
   readonly kind = "block-buffer" as const;
@@ -19,6 +87,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   private _nonTextTail: { role: Role; text: string } | null = null;
   private _width = 80;
   private _outputEnabled = new Map<string, boolean>();
+  private _marked: Marked;
 
   constructor(visibility: Visibility) {
     super();
@@ -26,13 +95,29 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     for (const key of OUTPUT_KEYS) {
       this._outputEnabled.set(key, true);
     }
+    // C1.4 prerequisite: chalk.level must be pinned BEFORE _makeMarkedInstance
+    // so the captured chalk-styled functions in markedTerminal use the right level.
+    _setupChalkLevel();
+    this._marked = _makeMarkedInstance();
   }
 
   private _renderActiveTextAnsi(): string {
     if (!this._activeBlockRole) return "";
-    // In 1.1: per-line formatLine of each \n-separated chunk
+    // Text role: render the FULL multi-line buffer through marked + marked-terminal.
+    // C1.4: the SAME `_activeBlockAnsi` string is then split on \n at commit time;
+    // we do NOT re-render at endBlock. This makes the live and commit paths
+    // byte-equal by construction.
+    if (this._activeBlockRole === "text") {
+      const out = this._marked.parse(this._activeTextBuf) as string;
+      // marked-terminal output typically has trailing newline(s) (one per block).
+      // Strip them so the committed-line split doesn't produce spurious empty
+      // trailing lines. This applies uniformly to live and commit paths
+      // (the C1.4 invariant test's "commit path" reconstruction must also strip).
+      return out.replace(/\n+$/, "");
+    }
+    // C1.5 fence: non-text roles continue to use per-line formatLine.
     const lines = this._activeTextBuf.split("\n");
-    return lines.map(line => formatLine(this._activeBlockRole, line, false)).join("\n");
+    return lines.map(line => formatLine(this._activeBlockRole!, line, false)).join("\n");
   }
 
   beginBlock(partID: string, role: Role, _meta?: Block["meta"]): void {

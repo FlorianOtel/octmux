@@ -1,8 +1,8 @@
 ---
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
-updated_by: local/qwen3-4b-q6
-updated_at: 2026-06-08--00:00
+updated_by: sohoai/glm-5.1
+updated_at: 2026-06-07--23-45
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -35,3 +35,53 @@ This step implements the core interface and scaffolding for BlockBufferRenderer 
 - `src/components/ActiveBlock.tsx`: New component for rendering active block with proper empty-line handling
 - `src/index.tsx`: Removed `StdoutRenderer` import, now unconditionally creates `BlockBufferRenderer` for `--single` mode and `TmuxWindowRenderer` (with `BlockBufferRenderer` as `_main`) for `--multi-window` mode
 - `src/renderer/block-buffer.test.ts`: New test file with 12 passing tests
+
+### 2026-06-07--23-45 — Stage 10.2 — Markdown engine + C1.4 invariant test
+
+**Implemented by:** Actor (sohoai/glm-5.1) via /brain — 2026-06-07--23-45
+**Commit(s):** TBD
+
+Stage 10.2 wires `marked` + `marked-terminal` + `chalk` into the text-role render path of `BlockBufferRenderer`, completing the 1.1→1.2 transition. Live block markdown is now active in both `--single` and `--multi-window` paths.
+
+**Deps (already installed in 1.1 pass, now imported and used):**
+- `marked@15.0.0`
+- `marked-terminal@^7.3.0`
+- `chalk@^5.6.2`
+
+All three are direct dependencies in `package.json` and `bun.lock` is up to date.
+
+**API gotchas verified empirically (see implementation comment block in `src/renderer/block-buffer.ts`):**
+- `marked.parse(text)` and `Marked#parse(text)` are SYNCHRONOUS by default in marked v15+ and return a `string`. No need for `{ async: false }` (which the plan referenced from an older API).
+- `markedTerminal` is a NAMED export (factory function), not the default. `import { markedTerminal } from "marked-terminal"`. The default export is the `Renderer` class.
+- `markedTerminal({...})` does NOT honor a `width` option unless `reflowText: true`. Our aesthetic uses `reflowText: false`, so the `_width` field on `BlockBufferRenderer` is informational only — `ActiveBlock`'s Ink `<Box>` handles wrapping.
+- We use a per-instance `Marked` (not the global `marked` singleton) so the extension config does not leak across renderers or affect anything else in the process that uses `marked` directly.
+
+**`chalk.level = 3` placement (load-bearing):** Set BEFORE `m.use(markedTerminal({...}))` in the renderer constructor. `markedTerminal` captures chalk-styled functions at extension-construction time; setting `chalk.level` later would have no effect on already-built styles.
+
+**Aesthetic config:** `heading`/`firstHeading` cyan-bold, `codespan` rgb(147,161,199), `code` reset, `listitem` reset, `blockquote` gray-italic, `hr` dim, `link` reset, `href` blue-underline, `strong` bold, `em` italic, `del` strikethrough, `reflowText: false`, `tab: 2`, `unescape: true`, `emoji: true`.
+
+**chalk-disabled fallback heuristic (constructor-time, defensive):** there is no `--no-block-render` escape hatch on this branch, so the heuristic is the safety net. At construction time, if `FORCE_COLOR` is unset AND `process.stdout.isTTY === false`, the renderer logs a one-time stderr warning (`"octmux: chalk auto-detected no TTY; falling back to no-color markdown render (text-only, no styling). To force colors, set FORCE_COLOR=1."`) and sets `chalk.level = 0`. With `chalk.level = 0`, chalk-applied styles emit no escape codes; marked-terminal output is structurally correct but unstyled — the binary remains usable.
+
+**C1.4 byte-equal invariant — the load-bearing correctness keystone:**
+The text-role live render and commit paths are now byte-equal **by construction**:
+1. `_renderActiveTextAnsi()` parses the FULL `_activeTextBuf` through marked and stores the result in `_activeBlockAnsi`.
+2. At `endBlock`, `_commitActiveText()` splits the SAME stored `_activeBlockAnsi` on `\n` and pushes each line as a `CommittedLine` — there is no re-render at commit time.
+3. Both paths uniformly strip trailing newlines (`.replace(/\n+$/, "")`) on the marked-terminal output so the line split doesn't produce spurious empty trailing lines.
+
+**C1.4 test (`src/renderer/block-buffer.test.ts`):** the test reads `/var/tmp/render-this-as-markdown.md`, feeds it through `BlockBufferRenderer` via incremental `appendToBlock` calls (~64-byte chunks with 1ms gaps simulating SSE deltas), then asserts:
+- `liveAnsi === commitPathAnsi` (live render == fresh `Marked` instance one-shot parse)
+- `committedAnsiJoined === liveAnsi` (committed lines, joined on `\n`, == live render)
+
+Both assertions pass. The fresh-`Marked`-instance one-shot parse is byte-equal to the per-instance incremental final render because marked's parser is deterministic (verified empirically against the actual source file).
+
+**C1.5 fence preserved:** non-text roles (`thinking`, `tool-call`, `tool-result`, `user`, `error`) still flow through per-line `formatLine` in `appendToBlock`. The markdown engine is text-role only.
+
+**Test deltas (`src/renderer/block-buffer.test.ts`):**
+- Added: 4 markdown-construct tests (heading cyan-bold `\x1b[36m`/`\x1b[1m`; fenced code reset-wrap with no yellow `\x1b[33m`; listitem `\x1b[0m`; blockquote gray-italic `\x1b[90m`/`\x1b[3m`).
+- Added: the C1.4 byte-equal invariant test.
+- Updated 2 pre-existing 10.1 tests to reflect the new text-role contract (text role now flows through marked, not per-line `formatLine`). The original assertions baked in the pre-1.2 behavior and would have been wrong against the new contract; the updated assertions instead check that the live ANSI equals the committed-joined ANSI (the actual contract).
+- Test file now sets `process.env.FORCE_COLOR = "1"` BEFORE imports so the `_setupChalkLevel` heuristic doesn't fall back to no-color under `bun test` (which has no TTY).
+
+**Test result:** 13 pass, 0 fail in `block-buffer.test.ts`. Full project test suite: 91 pass, 0 fail across 6 files.
+
+**Build:** `dist/octmux` rebuilt successfully (833 modules — up from ~568 in 10.1 because marked + marked-terminal + chalk + transitive deps add modules).
