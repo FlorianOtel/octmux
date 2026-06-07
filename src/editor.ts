@@ -48,7 +48,11 @@ export class LineEditor extends EventEmitter {
       const last = segments[segments.length - 1];
       this.lines.splice(this.row + 1, 0, ...middle, last + after);
       this.row += segments.length - 1;
-      this.col = last.length;
+      // Fix #6 (Stage 3E.7.1): land cursor at end of meaningful content, not
+      // end of trailing whitespace. Buffer content (last + after) is unchanged;
+      // only the cursor position is adjusted so it stays visible after pastes
+      // that include terminal mouse-select padding.
+      this.col = last.trimEnd().length;
     }
     this.emit("changed");
   }

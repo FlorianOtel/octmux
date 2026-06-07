@@ -133,4 +133,23 @@ describe("createPasteFilter", () => {
     expect(result.callbackText).toBe("");
     expect(result.downstreamText).toBe("");
   });
+
+  // Stage 3E.7.1 — paste atomicity hotfixes
+
+  test("Fix #2 — trailing whitespace per line is stripped from paste", async () => {
+    const result = await runTest([Buffer.from("\x1b[200~line1   \t  \nline2\t\nline3   \x1b[201~")]);
+    expect(result.callbackText).toBe("line1\nline2\nline3");
+    expect(result.downstreamText).toBe("");
+  });
+
+  test("Fix #4 — StringDecoder reassembles multi-byte UTF-8 split across chunks", async () => {
+    // The em-dash "—" is U+2014, UTF-8 bytes E2 80 94 (3 bytes).
+    // Split paste across two chunks where the em-dash straddles the boundary.
+    const result = await runTest([
+      Buffer.from([0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e, 0x61, 0xe2, 0x80]), // "\x1b[200~a" + first 2 bytes of em-dash
+      Buffer.from([0x94, 0x62, 0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]),        // last byte of em-dash + "b\x1b[201~"
+    ]);
+    expect(result.callbackText).toBe("a—b");
+    expect(result.downstreamText).toBe("");
+  });
 });

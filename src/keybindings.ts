@@ -81,24 +81,28 @@ import type { LineEditor } from "./editor.ts";
 /**
  * Dispatch one Ink 5 key event to the appropriate LineEditor action.
  *
- * Call from a useInput handler; pass lastEscTime from a ref and store the
- * returned value back into the same ref so double-Esc detection works across
- * calls. Also pass rawSeq (the raw stdin byte sequence captured before Ink
- * processes it) so that the physical Delete key can be distinguished from
- * physical Backspace — both produce key.delete=true in Ink 5's API.
+ * Call from a useInput handler; pass lastEscTime and lastUpTime from refs and
+ * store the returned values back into the same refs so double-Esc and double-Up
+ * detection work across calls. Also pass rawSeq (the raw stdin byte sequence
+ * captured before Ink processes it) so that the physical Delete key can be
+ * distinguished from physical Backspace — both produce key.delete=true in Ink 5's API.
  *
  *   useInput((input, key) => {
- *     lastEscRef.current = handleKey(input, key, editor, lastEscRef.current, rawSeqRef.current, overlayOpen, callbacks);
+ *     const result = handleKey(input, key, editor, lastEscRef.current, lastUpRef.current, rawSeqRef.current, overlayOpen, callbacks);
+ *     lastEscRef.current = result.lastEscTime;
+ *     lastUpRef.current = result.lastUpTime;
  *   });
  *
- * Returns lastEscTime unchanged for every key except Escape, where it returns
- * the current timestamp so the next Escape within 500 ms triggers clearBuffer.
+ * Returns an object with lastEscTime and lastUpTime updated as needed:
+ * - Escape key updates lastEscTime; double-Esc within 500 ms triggers clearBuffer
+ * - Up arrow at top row: first press records lastUpTime, double-Up within 500 ms enters history
  */
 export function handleKey(
   input: string,
   key: Key,
   editor: LineEditor,
   lastEscTime: number,
+  lastUpTime: number,
   rawSeq: string = '',
   overlayOpen: boolean = false,
   callbacks: {
@@ -109,7 +113,7 @@ export function handleKey(
     onResync?: () => void;
     onRedraw?: () => void;
   } = {},
-): number {
+): { lastEscTime: number; lastUpTime: number } {
 
   // ── Enter / newline ─────────────────────────────────────────────────────────
 
@@ -165,10 +169,20 @@ export function handleKey(
     editor.moveForward();    // → : move one character right
 
   } else if (key.upArrow) {
-    // ↑ : at top row → recall previous history entry; otherwise move cursor up
+    // ↑ : at top row → DOUBLE-Up within 500ms recalls previous history (mirrors
+    // double-Esc clear semantics, prevents surprise-history during multi-line edits).
+    // Within-buffer rows: move cursor up. Ctrl-P remains a single-press alias.
     if (!overlayOpen) {
-      if (editor.isAtTopRow()) editor.histPrev();
-      else editor.moveUpRow();
+      if (editor.isAtTopRow()) {
+        const now = Date.now();
+        if (now - lastUpTime < 500) {
+          editor.histPrev();
+          return { lastEscTime, lastUpTime: 0 };  // reset on commit
+        }
+        return { lastEscTime, lastUpTime: now };  // record first press
+      } else {
+        editor.moveUpRow();
+      }
     }
   } else if (key.downArrow) {
     // ↓ : at bottom row → recall next history entry; otherwise move cursor down
@@ -186,7 +200,7 @@ export function handleKey(
     if (!overlayOpen) {
       const now = Date.now();
       if (now - lastEscTime < 500) editor.clearBuffer();
-      return now;  // propagate updated time back to the caller's ref
+      return { lastEscTime: now, lastUpTime };  // propagate updated Esc time, pass lastUpTime through
     }
 
   // ── Meta (Alt) word-movement / kill ─────────────────────────────────────────
@@ -253,5 +267,5 @@ export function handleKey(
     editor.insert(input);
   }
 
-  return lastEscTime;
+  return { lastEscTime, lastUpTime };
 }

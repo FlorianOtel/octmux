@@ -2,8 +2,8 @@
 title: "octmux — Stage 3: Custom raw-mode input + Ink rendering + typed block renderer + tmux multiplex"
 created_at: 2026-05-20--00-34
 created_by: Claude Code (Actor, Claude Haiku 4.5)
-updated_by: Claude Code (Actor, Claude Haiku 4.5)
-updated_at: 2026-06-07--13-38
+updated_by: Claude Code (Brain: Opus 4.7; Actor: Haiku 4.5; Reviewer: Sonnet 4.6)
+updated_at: 2026-06-07--20-07
 context: >
   Stage 3 is the foundational UX phase split across three major sub-initiatives:
   Stage 3 (original raw-mode input), Stage 3 Extended (Ink-based rendering layer),
@@ -64,6 +64,30 @@ Ink-based (React for CLI) component tree, reducing LineEditor to a pure state
 container. All Stage 3 behavior was preserved under the new Ink rendering model._
 
 ### Implementation log (reverse chronological — newest at top)
+
+### 2026-06-07--20-07 — Stage 3E.7.1: Paste atomicity hotfixes (8 items)
+
+**Implemented by:** Claude Code (Brain: Opus 4.7; Actor: Haiku 4.5; Reviewer: Sonnet 4.6) — 2026-06-07--20-07
+**Commit(s):** `<TBD — to backfill>`
+
+Eight surgical fixes addressing chronic paste / cursor / Emacs-nav regressions on `main` (HEAD before fix: 07486a8). All changes are local to the input subsystem — `src/editor.ts`, `src/paste-filter.ts`, `src/components/PromptInput.tsx`, `src/keybindings.ts`. No tmux dependency added; `--single` remains portable.
+
+**Diagnosis grounded in Phase 0 verification.** Operator-run probe (`printf '\033[?2004h'; cat | od -An -tx1 -v` in tmux 3.3a) confirmed bracketed-paste START marker `1b 5b 32 30 30 7e` arrives at inner-pane stdin. Conclusion: bracketed paste IS working through tmux 3.3a; the operator's "garbling" symptoms (Failures #1–#5) stem from (a) Ink inline-mode render-vs-scrollback collision when buffer height grows, (b) trailing-whitespace padding from terminal mouse-select sending the cursor off-screen, and (c) up-arrow surprise into history at `row === 0`. Non-ASCII chars (→, ▷, —) are BMP single UTF-16 units and not directly mutilated by the code.
+
+**Fixes:**
+
+1. **Post-paste full repaint** — `PromptInput` paste callback calls `onRedraw?.()` after `editor.insertText(text)`, hitting the same `inkRaw.log.clear()` + `lastOutput=""` + `onRender()` path Ctrl-L uses. Eliminates the inline-mode render collision where multi-line pastes left scrollback bleeding through Ink's redraw region.
+2. **Trim trailing whitespace per pasted line** — `paste-filter.ts` normalizes each line's trailing spaces/tabs after the existing control-byte strip. Fixes cursor landing off-screen with terminal mouse-select padding.
+3. **Double-Up history (mirrors double-Esc)** — single Up at `row 0` no longer surprises into history; double-Up within 500ms enters history. Ctrl-P remains single-press alias. `handleKey` signature now returns `{ lastEscTime, lastUpTime }` instead of bare `number`. `PromptInput` gains a `lastUpRef` alongside `lastEscRef`.
+4. **StringDecoder for UTF-8 chunk safety** — paste-filter uses a persistent `StringDecoder("utf8")` instead of per-chunk `Buffer.toString("utf8")`, correctly reassembling multi-byte sequences split across stdin chunks. Added `flush()` callback to drain remaining decoder state on stream end.
+5. **Gate paste callback on `disabled`** — paste callback drops the paste when `PromptInput` is `disabled` (modal open). `disabled` and `onRedraw` added to the `useEffect` dep array so the callback re-registers on flip.
+6. **Cursor land position trim** — `editor.insertText` sets `this.col = last.trimEnd().length` instead of `last.length`. Buffer content unchanged; only cursor position adjusted so it stays visible after pastes that include trailing-whitespace padding.
+7. **Tests** — `src/paste-filter.test.ts` gains two cases (trailing-whitespace trim + StringDecoder split-UTF-8 across chunk boundary). New file `src/editor.test.ts` with three cases for `insertText` cursor land position. 78 tests pass, 0 fail.
+8. **Byte-rate paste-detection fallback** — defensive insurance for environments where bracketed-paste markers are silently stripped (older tmux, screen, certain SSH terminals). Inside `paste-filter.ts` `transform()`: if bytes arrive at < 5ms inter-byte gap AND accumulated > 10 bytes in NORMAL state, batch them in `candidateBuf` and dispatch via `pasteCallback` after a 20ms quiet-gap timer. Bypasses entirely when bracketed-paste markers are present. Manual-only test (timer-based async fragile in `bun:test`).
+
+**Process note (pipeline incident).** Phase 2 Actor work initially landed on `input-buffer-redesign` (a parallel CC session's Option C branch) because that working tree had been switched out of `main` mid-pipeline. Brain recovered by creating a worktree at `/mnt/nfs/Florian/Gin-AI/projects/octmux-stage-3E.7.1` on a fresh `stage-3E.7.1` branch off `main`, re-applying the saved patch + reconstructing the Group 1 `editor.ts` and Groups 2/3 `PromptInput.tsx` edits cleanly. Reviewer audited the final diff on the correct branch: PASS.
+
+This is a point-release of Stage 3E.7; not a new feature phase. Commit prefix `fix(octmux)` because it corrects regressions in 3E.7.
 
 ### 2026-06-07--16-21 — Stage 3E.7: Bracketed-paste support (Stage 3 spec finally implemented)
 

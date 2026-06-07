@@ -1,4 +1,5 @@
 import { Transform } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 
 /**
  * Bracketed-paste filter: intercepts paste sequences and routes them to a callback.
@@ -19,14 +20,25 @@ export function createPasteFilter(realStdin: NodeJS.ReadStream): {
   let pasteBuf = "";
   let lookAheadBuf = "";
 
+  // Fix #8: byte-rate paste-detection fallback state
+  let candidateBuf = "";
+  let candidateTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastByteTime = 0;
+
   const MARKER_START = "\x1b[200~"; // 6 characters
   const MARKER_END = "\x1b[201~";   // 6 characters
+  const decoder = new StringDecoder("utf8");
 
   const stream = new Transform({
     transform(chunk: Buffer, _enc: string, cb: (err?: Error | null) => void) {
-      const chunkStr = chunk.toString("utf8");
+      const chunkStr = decoder.write(chunk);
       let input = lookAheadBuf + chunkStr;
       lookAheadBuf = "";
+
+      // Fix #8: track inter-byte timing for paste-detection fallback
+      const now = Date.now();
+      const interByteGap = now - lastByteTime;
+      lastByteTime = now;
 
       let outputBuf = "";
 
@@ -91,7 +103,10 @@ export function createPasteFilter(realStdin: NodeJS.ReadStream): {
           const normalized = pasteBuf
             .replace(/\r\n/g, "\n")
             .replace(/\r/g, "\n")
-            .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+            .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+            .split("\n")
+            .map(l => l.trimEnd())
+            .join("\n");
           pasteCallback(normalized);
           pasteBuf = "";
           // Continue processing after the marker
@@ -100,8 +115,56 @@ export function createPasteFilter(realStdin: NodeJS.ReadStream): {
       }
 
       if (outputBuf.length > 0) {
-        this.push(outputBuf);
+        // Fix #8: byte-rate paste-detection fallback. If bytes arrive faster than
+        // a human types (5ms inter-byte) AND total accumulation > 10 bytes, treat
+        // the burst as a paste rather than per-character input. Drain through
+        // pasteCallback on a 20ms quiet-gap timer.
+        const shouldBuffer = state === "NORMAL" && interByteGap < 5 && (candidateBuf.length + outputBuf.length) > 10;
+        if (shouldBuffer) {
+          candidateBuf += outputBuf;
+          if (candidateTimer) clearTimeout(candidateTimer);
+          candidateTimer = setTimeout(() => {
+            candidateTimer = null;
+            if (candidateBuf.length > 10) {
+              // Normalize same as bracketed-paste: line endings + control bytes + trim trailing whitespace per line
+              const normalized = candidateBuf
+                .replace(/\r\n/g, "\n")
+                .replace(/\r/g, "\n")
+                .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+                .split("\n")
+                .map(l => l.trimEnd())
+                .join("\n");
+              pasteCallback(normalized);
+            } else {
+              // Below threshold on drain: pass through as normal stdin bytes.
+              stream.push(candidateBuf);
+            }
+            candidateBuf = "";
+          }, 20);
+        } else {
+          // If we have a pending candidateBuf but this byte breaks the rate, drain it normally first.
+          if (candidateBuf.length > 0) {
+            if (candidateTimer) { clearTimeout(candidateTimer); candidateTimer = null; }
+            stream.push(candidateBuf);
+            candidateBuf = "";
+          }
+          stream.push(outputBuf);
+        }
       }
+      cb();
+    },
+    flush(cb: (err?: Error | null) => void) {
+      // Drain pending paste-detection candidate first (best-effort)
+      if (candidateTimer) {
+        clearTimeout(candidateTimer);
+        candidateTimer = null;
+        if (candidateBuf.length > 0) {
+          stream.push(candidateBuf);
+          candidateBuf = "";
+        }
+      }
+      const tail = decoder.end();
+      if (tail) this.push(tail);
       cb();
     },
   });

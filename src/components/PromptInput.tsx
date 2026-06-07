@@ -27,6 +27,10 @@ export function PromptInput({ editor, disabled = false, overlayOpen = false, onS
   // prependListener ensures this fires before Ink's own stdin handler, so the
   // ref is populated before our useInput callback reads it.
   const rawSeqRef = useRef<string>('');
+  // Stage 3E.7.1 Fix #3: double-Up timestamp (mirrors lastEscRef double-Esc
+  // pattern). Single Up at row 0 no longer surprises into history; second Up
+  // within 500 ms commits. Ctrl-P remains a single-press history alias.
+  const lastUpRef = useRef<number>(0);
 
   useEffect(() => {
     editor.on("changed", forceUpdate);
@@ -45,12 +49,24 @@ export function PromptInput({ editor, disabled = false, overlayOpen = false, onS
 
   useEffect(() => {
     if (!setPasteCallback) return;
-    setPasteCallback((text) => { editor.insertText(text); });
+    setPasteCallback((text) => {
+      // Fix #5: drop paste while input is blocked (modal open). useInput is
+      // already gated by isActive below, but the paste callback is a separate
+      // path and would otherwise mutate the buffer behind the modal.
+      if (disabled) return;
+      editor.insertText(text);
+      // Fix #1: force a full Ink repaint after multi-line paste. Same hook as
+      // Ctrl-L (inkRaw.log.clear + lastOutput="" + onRender) — eliminates the
+      // inline-mode render-vs-scrollback collision when buffer height grows.
+      onRedraw?.();
+    });
     return () => { setPasteCallback(() => {}); };
-  }, [editor, setPasteCallback]);
+  }, [editor, setPasteCallback, disabled, onRedraw]);
 
   useInput((input, key) => {
-    lastEscRef.current = handleKey(input, key, editor, lastEscRef.current, rawSeqRef.current, overlayOpen ?? false, { onCyclePermMode, onHelp, onToggleTools, onToggleThinking, onResync, onRedraw });
+    const result = handleKey(input, key, editor, lastEscRef.current, lastUpRef.current, rawSeqRef.current, overlayOpen ?? false, { onCyclePermMode, onHelp, onToggleTools, onToggleThinking, onResync, onRedraw });
+    lastEscRef.current = result.lastEscTime;
+    lastUpRef.current = result.lastUpTime;
   }, { isActive: !disabled });
 
   const lines = editor.getLines();
