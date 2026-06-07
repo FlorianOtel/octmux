@@ -68,7 +68,7 @@ container. All Stage 3 behavior was preserved under the new Ink rendering model.
 ### 2026-06-07--20-07 — Stage 3E.7.1: Paste atomicity hotfixes (8 items)
 
 **Implemented by:** Claude Code (Brain: Opus 4.7; Actor: Haiku 4.5; Reviewer: Sonnet 4.6) — 2026-06-07--20-07
-**Commit(s):** `<TBD — to backfill>`
+**Commit(s):** `b77b1b7572cc68471b9ae02c255612d226837baf`
 
 Eight surgical fixes addressing chronic paste / cursor / Emacs-nav regressions on `main` (HEAD before fix: 07486a8). All changes are local to the input subsystem — `src/editor.ts`, `src/paste-filter.ts`, `src/components/PromptInput.tsx`, `src/keybindings.ts`. No tmux dependency added; `--single` remains portable.
 
