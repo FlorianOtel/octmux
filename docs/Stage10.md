@@ -16,7 +16,7 @@ context: >
 ### 2026-06-08--00:00 — Stage 10.1 — Interface + scaffold + unconditional renderer selection
 
 **Implemented by:** Actor (sohoai/qwen3-4b-q6) via /brain — 2026-06-08--01:36
-**Commit(s):** `b9cecbe`
+**Commit(s):** `cd1b1a1` (backfilled in follow-up commit)
 
 This step implements the core interface and scaffolding for BlockBufferRenderer with unconditional renderer selection.
 
