@@ -39,7 +39,7 @@ This step implements the core interface and scaffolding for BlockBufferRenderer 
 ### 2026-06-07--23-45 — Stage 10.2 — Markdown engine + C1.4 invariant test
 
 **Implemented by:** Actor (sohoai/glm-5.1) via /brain — 2026-06-07--23-45
-**Commit(s):** TBD
+**Commit(s):** `f4ae6ca` (backfilled in follow-up commit)
 
 Stage 10.2 wires `marked` + `marked-terminal` + `chalk` into the text-role render path of `BlockBufferRenderer`, completing the 1.1→1.2 transition. Live block markdown is now active in both `--single` and `--multi-window` paths.
 
