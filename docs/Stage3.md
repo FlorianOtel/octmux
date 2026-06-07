@@ -2,8 +2,8 @@
 title: "octmux — Stage 3: Custom raw-mode input + Ink rendering + typed block renderer + tmux multiplex"
 created_at: 2026-05-20--00-34
 created_by: Claude Code (Actor, Claude Haiku 4.5)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-07--16-21
+updated_by: Claude Code (Actor, Claude Haiku 4.5)
+updated_at: 2026-06-07--13-38
 context: >
   Stage 3 is the foundational UX phase split across three major sub-initiatives:
   Stage 3 (original raw-mode input), Stage 3 Extended (Ink-based rendering layer),
@@ -104,18 +104,6 @@ container. All Stage 3 behavior was preserved under the new Ink rendering model.
 **Stage 4.7.1 investigation:** Ctrl-l's onRender re-emit path was investigated during
 Phase 0; it touches no Transform-related code and was exonerated. The bracketed-paste
 implementation is independent of Ctrl-l repaint mechanics.
-
-**Observed but out of scope for this fix:**
-- **(a) Viewport scroll races:** When terminal viewport scrolls during SSE streaming (from
-  full-screen output), concurrent forceUpdate calls from up-arrow history recall sometimes
-  cause the prompt to render in a stale position. This is a timing interaction between
-  SSE reconciler and useInput history navigation, not a paste issue.
-- **(b) Queued-message multi-line recall:** The recall path (submit-while-busy → up-arrow →
-  resubmit → up-arrow again) sometimes renders only the first line of a multi-line message
-  until the user types a character to trigger a fresh render. This is likely a React
-  dependency issue with the history state machine, not specific to paste.
-
-Both are filed as follow-up work in Stage 4.
 
 **What changed in this doc:** Added Stage 3E.7 entry at top of implementation log; updated
 line 406 claim to clarify bracketed-paste was NOT implemented in 3E but IS now (3E.7);
