@@ -20,7 +20,7 @@ context: >
 
 ### 2026-06-07--17-23 — Stage 9.0 — Piece 2A: options-to-transcript persistence
 **Implemented by:** OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/qwen3-4b-q6 Actors) — 2026-06-07--17-23
-**Commit(s):** _pending — refresh after Step 13 commit_
+**Commit(s):** `b1a2b24`
 
 Adds `formatOptionsBlock(qs)` and `commitOptionsBlock(renderer, reqID, qs, seen)` as module-scope helpers in `src/app.tsx`. Wires three `setQuestion` call sites — SSE `question-asked` handler (line 640), `question-tool-detected` discovery branch (line 666), and the 5s discovery sweep for missed questions (line 265) — to commit the options block to scrollback before setting the modal state. Dedupe across sites via a single `useRef<Set<string>>` (`committedOptionsReqIDsRef` at line 175).
 
@@ -28,7 +28,7 @@ Result: options become first-class scrollback content. Operators can scroll back
 
 ### 2026-06-07--17-23 — Stage 9.1 — Piece 2B: custom-text answers via PromptInput
 **Implemented by:** OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/glm-5.1 heavy-tier Actors for the architectural seams; sohoai/qwen3-4b-q6 for routing and disabled-flag edits) — 2026-06-07--17-23
-**Commit(s):** _pending — refresh after Step 13 commit_
+**Commit(s):** `b1a2b24`
 
 Strips `QuestionModal.tsx` to a pure display component: no `useInput`, no internal state. The modal now takes `{ questions, currentSubIdx }` props and renders `questions[currentSubIdx]` directly. The PromptInput is the sole input channel. The `disabled` flag drops `!!question` entirely — the prompt is enabled whenever no other modal blocks it.
 
