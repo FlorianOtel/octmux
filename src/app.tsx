@@ -14,6 +14,7 @@ import type { Renderer } from "./renderer/types.ts";
 import { loadTogglesConfig, getToggleDefaults, rendererGateKey, type ToggleBinding } from "./config.ts";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { Rule } from "./components/Rule.tsx";
+import { ActiveBlock } from "./components/ActiveBlock.tsx";
 import { StatusLine } from "./components/StatusLine.tsx";
 import { PermissionModal } from "./components/PermissionModal.tsx";
 import { PermissionStatusLine } from "./components/PermissionStatusLine.tsx";
@@ -148,14 +149,23 @@ export function App(props: AppProps) {
   const { stdout } = useStdout();
   const w = stdout?.columns ?? 80;
 
+  // Thread column width into the renderer for markdown wrap
+  useEffect(() => {
+    renderer.setWidth(w);
+  }, [w, renderer]);
+
   // Subscribe to renderer state — new array reference on every commit means React detects changes.
   const committed = useSyncExternalStore(
     (cb) => { renderer.on("changed", cb); return () => renderer.off("changed", cb); },
     () => renderer.getCommitted(),
   );
-  const tail = useSyncExternalStore(
+  const activeBlock = useSyncExternalStore(
     (cb) => { renderer.on("changed", cb); return () => renderer.off("changed", cb); },
-    () => renderer.getTail(),
+    () => renderer.getActiveBlock(),
+  );
+  const activeBlockAnsi = useSyncExternalStore(
+    (cb) => { renderer.on("changed", cb); return () => renderer.off("changed", cb); },
+    () => renderer.getActiveBlockAnsi(),
   );
 
   // Track the current permission mode in a ref so the SSE effect can read it without re-running.
@@ -1260,7 +1270,7 @@ export function App(props: AppProps) {
       <Static items={committed}>
         {(item) => <Text key={item.id}>{item.ansi}</Text>}
       </Static>
-      {tail && <Text>{formatLine(tail.role, tail.text, false)}</Text>}
+      {activeBlock && <ActiveBlock role={activeBlock.role} ansi={activeBlockAnsi} width={w} />}
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}
       {/* Modal-bearing events (permission, question) bypass the renderer's output
           gates by design — interactive prompts must always surface to the operator

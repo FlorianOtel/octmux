@@ -2,10 +2,8 @@ import { EventEmitter } from "node:events";
 import type { Block, Role } from "../blocks.ts";
 import { formatLine } from "../blocks.ts";
 import { Visibility } from "./visibility.ts";
-import type { Renderer } from "./types.ts";
+import type { Renderer, CommittedLine } from "./types.ts";
 import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
-
-export type CommittedLine = { id: number; role: Role; ansi: string };
 
 export class StdoutRenderer extends EventEmitter implements Renderer {
   readonly kind = "stdout" as const;
@@ -76,6 +74,10 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
       newLines.push({ id: this._nextId++, role, ansi: formatLine(role, buf.slice(0, nl), false) });
       buf = buf.slice(nl + 1);
       nl = buf.indexOf("\n");
+    }
+    // Process the remaining partial line
+    if (buf.length > 0) {
+      newLines.push({ id: this._nextId++, role, ansi: formatLine(role, buf, false) });
     }
     this._tailBuf = buf;
     if (newLines.length > 0) this._committed = [...this._committed, ...newLines];
@@ -153,5 +155,10 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
   }
 
   getCommitted(): CommittedLine[] { return this._committed; }
-  getTail(): { role: Role; text: string } | null { return this._tail; }
+  getActiveBlock(): { role: Role; text: string } | null { return this._tail; }
+  getActiveBlockAnsi(): string {
+    if (!this._tail) return "";
+    return formatLine(this._tail.role, this._tail.text, false);
+  }
+  setWidth(_width: number): void { /* no-op for line-streaming renderer */ }
 }

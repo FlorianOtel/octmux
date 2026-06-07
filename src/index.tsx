@@ -8,7 +8,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { findFreePort, spawnOpencodeServer, type ServerHandle } from "./server-lifecycle.ts";
 import { App } from "./app.tsx";
 import { Visibility } from "./renderer/visibility.ts";
-import { StdoutRenderer } from "./renderer/stdout.ts";
+import { BlockBufferRenderer } from "./renderer/block-buffer.ts";
 import { TmuxWindowRenderer } from "./renderer/tmux-window.ts";
 import type { Renderer } from "./renderer/types.ts";
 import { loadExternalCommands } from "./command-registry.ts";
@@ -274,15 +274,16 @@ process.on("exit", () => { try { process.stdout.write("\x1b[?2004l"); } catch {}
 // ─── Renderer construction ────────────────────────────────────────────────────────
 
 const visibility = new Visibility();
-let renderer: Renderer;
-if (multiWindow) {
-  const tmuxRenderer = new TmuxWindowRenderer(visibility);
-  await tmuxRenderer.setup(sessionID.slice(0, 8));
-  await new Promise(res => setImmediate(res));
-  renderer = tmuxRenderer;
-} else {
-  renderer = new StdoutRenderer(visibility);
-}
+  let renderer: Renderer;
+  if (multiWindow) {
+    const tmuxRenderer = new TmuxWindowRenderer(visibility);
+    await tmuxRenderer.setup(sessionID.slice(0, 8));
+    await new Promise(res => setImmediate(res));
+    renderer = tmuxRenderer;
+  } else {
+    // Unconditionally use BlockBufferRenderer for --single mode
+    renderer = new BlockBufferRenderer(visibility);
+  }
 
 // Emit the startup banner so it appears in the first Ink frame (via the
 // renderer's committed lines). Only set for --resume / --resume-last / --fork.

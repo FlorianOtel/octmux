@@ -1,6 +1,8 @@
 import type { Block, Role } from "../blocks.ts";
 import type { Visibility } from "./visibility.ts";
 
+export type CommittedLine = { id: number; role: Role; ansi: string };
+
 export interface Renderer {
   beginBlock(partID: string, role: Role, meta?: Block["meta"]): void;
   appendToBlock(partID: string, text: string): void;
@@ -16,6 +18,11 @@ export interface Renderer {
   rename(newLabel: string): void;
   isOutputEnabled(key: string): boolean;
   setOutputEnabled(key: string, on: boolean): void;
-  readonly kind: "stdout" | "tmux-window";
+  readonly kind: "stdout" | "tmux-window" | "block-buffer";
   readonly visibility: Visibility;
+  // Multi-line active block accessors (renamed from getTail for BlockBufferRenderer)
+  getCommitted(): CommittedLine[];
+  getActiveBlock(): { role: Role; text: string } | null;
+  getActiveBlockAnsi(): string;
+  setWidth(width: number): void;
 }

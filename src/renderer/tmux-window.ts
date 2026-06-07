@@ -3,9 +3,9 @@ import { execFileSync, execFile } from "node:child_process";
 import type { Block, Role } from "../blocks.ts";
 import { formatLine } from "../blocks.ts";
 import { makeFifo, type FifoHandle } from "./fifo.ts";
-import { StdoutRenderer, type CommittedLine } from "./stdout.ts";
+import { StdoutRenderer } from "./stdout.ts";
 import { Visibility } from "./visibility.ts";
-import type { Renderer } from "./types.ts";
+import type { Renderer, CommittedLine } from "./types.ts";
 import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
 
 const SIDE_ROLES: Role[] = Object.keys(OUTPUT_KEY) as Role[];
@@ -14,7 +14,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   readonly kind = "tmux-window" as const;
   readonly visibility: Visibility;
 
-  private _main: StdoutRenderer;
+  private _main: Renderer;
   // Keyed by window key (e.g. "thinking", "tools") — at most 2 entries.
   private _fifos      = new Map<string, FifoHandle>();
   private _windowIds  = new Map<string, string>();
@@ -39,7 +39,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   constructor(visibility: Visibility) {
     super();
     this.visibility = visibility;
-    this._main = new StdoutRenderer(visibility);
+    this._main = new BlockBufferRenderer(visibility);
     this._main.on("changed", () => this.emit("changed"));
     // Register every window key with output enabled by default.
     for (const key of OUTPUT_KEYS) {
@@ -234,7 +234,9 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   }
 
   getCommitted(): CommittedLine[] { return this._main.getCommitted(); }
-  getTail(): { role: Role; text: string } | null { return this._main.getTail(); }
+  getActiveBlock(): { role: Role; text: string } | null { return this._main.getActiveBlock(); }
+  getActiveBlockAnsi(): string { return this._main.getActiveBlockAnsi(); }
+  setWidth(width: number) { this._main.setWidth(width); }
 
   private _isSideRole(r: Role): boolean { return SIDE_ROLES.includes(r); }
 }
