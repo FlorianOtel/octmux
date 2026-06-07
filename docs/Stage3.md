@@ -2,8 +2,8 @@
 title: "octmux — Stage 3: Custom raw-mode input + Ink rendering + typed block renderer + tmux multiplex"
 created_at: 2026-05-20--00-34
 created_by: Claude Code (Actor, Claude Haiku 4.5)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-25--00-00
+updated_by: Claude Code (Actor, Claude Haiku 4.5)
+updated_at: 2026-06-07--13-38
 context: >
   Stage 3 is the foundational UX phase split across three major sub-initiatives:
   Stage 3 (original raw-mode input), Stage 3 Extended (Ink-based rendering layer),
@@ -64,6 +64,52 @@ Ink-based (React for CLI) component tree, reducing LineEditor to a pure state
 container. All Stage 3 behavior was preserved under the new Ink rendering model._
 
 ### Implementation log (reverse chronological — newest at top)
+
+### 2026-06-07--16-21 — Stage 3E.7: Bracketed-paste support (Stage 3 spec finally implemented)
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-07--16-21
+**Commit(s):** `9df25330741de19e12d421e9a44e6d777eab72f4`
+
+**What shipped:**
+
+- **Bracketed-paste Transform wrapper** (`src/paste-filter.ts`): A new module that wraps stdin
+  with a Node `Transform` stream, implementing a state machine to detect paste markers
+  (`\x1b[200~` start, `\x1b[201~` end, 6 chars each). Paste content is normalized
+  (line-ending unification: `\r\n` and bare `\r` → `\n`; control-byte stripping: drop
+  `[\x00-\x08\x0b-\x1f\x7f]` but preserve `\t` and `\n`) and routed to a callback.
+  Non-paste bytes flow downstream unchanged. TTY methods (`isTTY`, `setRawMode`,
+  `setEncoding`, `ref`, `unref`) are delegated to the real stdin so Ink's operations
+  remain unaffected.
+
+- **Multi-line insertion** (`src/editor.ts`): New `insertText(text: string)` method handles
+  paste content. Single-line pastes update the cursor position inline; multi-line pastes
+  split at `\n` boundaries, inserting new lines and repositioning the cursor to the end
+  of the last line. Emits `changed` event once (same pattern as `insert`, `insertNewline`).
+
+- **Terminal enable/disable** (`src/index.tsx`): Enable bracketed-paste mode on startup
+  with `\x1b[?2004h`; disable on exit with `\x1b[?2004l` (mirroring the existing pattern
+  for alternate scroll mode `\x1b[?1007h/l`).
+
+- **Ink integration** (`src/index.tsx`, `src/app.tsx`, `src/components/PromptInput.tsx`):
+  The paste filter is instantiated before `render()`, with the stream passed as the
+  `stdin` option to Ink. The `setPasteCallback` is threaded through App props to
+  PromptInput, where a `useEffect` registers the callback with `editor.insertText`.
+
+- **Test coverage** (`src/paste-filter.test.ts`): 11 bun:test cases covering single-line
+  pastes, multi-line pastes, `\r\n` normalization, bare `\r` normalization, marker split
+  across chunks, non-paste passthrough, control-byte stripping, tab+newline preservation,
+  truncation recovery (orphan `\x1b`), empty pastes, and multiple pastes in sequence.
+  All tests pass.
+
+**Stage 4.7.1 investigation:** Ctrl-l's onRender re-emit path was investigated during
+Phase 0; it touches no Transform-related code and was exonerated. The bracketed-paste
+implementation is independent of Ctrl-l repaint mechanics.
+
+**What changed in this doc:** Added Stage 3E.7 entry at top of implementation log; updated
+line 406 claim to clarify bracketed-paste was NOT implemented in 3E but IS now (3E.7);
+frontmatter refreshed.
+
+---
 
 ### 2026-05-23--21-15 — Remove --multi-pane and TmuxPaneRenderer
 
@@ -403,7 +449,7 @@ Stage 3 represents three major architectural iterations of the octmux UX layer:
 
 1. **Stage 3 (original)** — planned custom raw-mode input with Emacs bindings, bracketed paste, and history.
 
-2. **Stage 3 Extended** — replaced the raw-mode renderer with Ink (React for CLI), preserving all Stage 3 behavior under a cleaner component architecture. LineEditor became a pure state machine; Ink's `useInput` hook drives it. All features preserved: Emacs bindings, multi-line via Alt-Enter, history, bracketed paste, double-Esc clear. This enabled a bottom-anchored layout and proper modal flows.
+2. **Stage 3 Extended** — replaced the raw-mode renderer with Ink (React for CLI), preserving all Stage 3 behavior under a cleaner component architecture. LineEditor became a pure state machine; Ink's `useInput` hook drives it. All features preserved: Emacs bindings, multi-line via Alt-Enter, history, double-Esc clear; bracketed paste (see Stage 3E.7 — finally implemented 2026-06-07). This enabled a bottom-anchored layout and proper modal flows.
 
 3. **Stage 3 UX** — eliminated streaming flicker by moving content to `<Static>` at line granularity, introduced a typed Block model with role-based rendering, added per-role visibility toggles, and implemented two tmux multiplex backends via the `Renderer` interface: `TmuxPaneRenderer` (`--multi-pane`, since deprecated) and `TmuxWindowRenderer` (`--multi-window`, the current recommended mode).
 

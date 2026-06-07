@@ -15,9 +15,10 @@ type Props = {
   onToggleThinking?: () => void;
   onResync?: () => void;
   onRedraw?: () => void;
+  setPasteCallback?: (cb: (text: string) => void) => void;
 };
 
-export function PromptInput({ editor, disabled = false, overlayOpen = false, onSubmit, onCyclePermMode, onHelp, onToggleTools, onToggleThinking, onResync, onRedraw }: Props) {
+export function PromptInput({ editor, disabled = false, overlayOpen = false, onSubmit, onCyclePermMode, onHelp, onToggleTools, onToggleThinking, onResync, onRedraw, setPasteCallback }: Props) {
   const [, forceUpdate] = useReducer((n: number) => n + 1, 0);
   const lastEscRef = useRef<number>(0);
   // Ink 5's useInput cannot distinguish physical Backspace (\x7f) from the
@@ -41,6 +42,12 @@ export function PromptInput({ editor, disabled = false, overlayOpen = false, onS
     process.stdin.prependListener('data', captureRaw);
     return () => { process.stdin.off('data', captureRaw); };
   }, []);
+
+  useEffect(() => {
+    if (!setPasteCallback) return;
+    setPasteCallback((text) => { editor.insertText(text); });
+    return () => { setPasteCallback(() => {}); };
+  }, [editor, setPasteCallback]);
 
   useInput((input, key) => {
     lastEscRef.current = handleKey(input, key, editor, lastEscRef.current, rawSeqRef.current, overlayOpen ?? false, { onCyclePermMode, onHelp, onToggleTools, onToggleThinking, onResync, onRedraw });

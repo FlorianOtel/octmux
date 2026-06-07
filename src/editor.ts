@@ -33,6 +33,26 @@ export class LineEditor extends EventEmitter {
     this.emit("changed");
   }
 
+  insertText(text: string): void {
+    if (!text) return;
+    const segments = text.split("\n");
+    const line = this.lines[this.row];
+    const before = line.slice(0, this.col);
+    const after = line.slice(this.col);
+    if (segments.length === 1) {
+      this.lines[this.row] = before + segments[0] + after;
+      this.col += segments[0].length;
+    } else {
+      this.lines[this.row] = before + segments[0];
+      const middle = segments.slice(1, -1);
+      const last = segments[segments.length - 1];
+      this.lines.splice(this.row + 1, 0, ...middle, last + after);
+      this.row += segments.length - 1;
+      this.col = last.length;
+    }
+    this.emit("changed");
+  }
+
   backspace(): void {
     if (this.col > 0) {
       const line = this.lines[this.row];

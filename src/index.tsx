@@ -12,6 +12,7 @@ import { StdoutRenderer } from "./renderer/stdout.ts";
 import { TmuxWindowRenderer } from "./renderer/tmux-window.ts";
 import type { Renderer } from "./renderer/types.ts";
 import { loadExternalCommands } from "./command-registry.ts";
+import { createPasteFilter } from "./paste-filter.ts";
 
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
 
@@ -259,12 +260,16 @@ if (resumeArg) {
 
 const eventStream = await client.global.event({});
 
-// ─── Terminal setup (alternate scroll mode only — clear happens after renderer setup) ──
+// ─── Terminal setup (alternate scroll mode + bracketed paste) ──
 
 // Alternate scroll mode: wheel events arrive as ↑/↓ arrow keys.
 // Does NOT intercept button clicks, so text selection keeps working.
 process.stdout.write("\x1b[?1007h");
 process.on("exit", () => { try { process.stdout.write("\x1b[?1007l"); } catch {} });
+
+// Bracketed paste mode: allow detection of multi-line pastes
+process.stdout.write("\x1b[?2004h");
+process.on("exit", () => { try { process.stdout.write("\x1b[?2004l"); } catch {} });
 
 // ─── Renderer construction ────────────────────────────────────────────────────────
 
@@ -310,6 +315,10 @@ if (_pad > 0) process.stdout.write('\n'.repeat(_pad));
 // completion overlay cover them from the very first frame.
 loadExternalCommands();
 
+// Create the paste filter: transforms stdin to intercept bracketed-paste sequences.
+// Ink reads from the stream's readable side; pastes are routed to a callback.
+const pasteFilter = createPasteFilter(process.stdin);
+
 // Stub-closure pattern: define a placeholder onRedraw function, then fill it in
 // after render() returns. This breaks the circular dependency where <App> needs
 // onRedraw (which needs the Ink instance) and the Ink instance needs <App>.
@@ -325,9 +334,10 @@ const appElement = (
     renderer={renderer}
     cwd={cwd}
     onRedraw={() => onRedraw()}
+    setPasteCallback={pasteFilter.setPasteCallback}
   />
 );
-const inkInstance = render(appElement, { exitOnCtrlC: false });
+const inkInstance = render(appElement, { exitOnCtrlC: false, stdin: pasteFilter.stream as unknown as NodeJS.ReadStream });
 // Ctrl-l repaint: bypass React entirely. inkInstance.rerender(appElement) goes
 // through React's updateContainer; when the root element is reference-equal
 // and no fibers have state changes, React skips the commit — so Ink's
