@@ -2,8 +2,8 @@
 title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-06--20-51
+updated_by: Anthropic Opus 4.7 (post-/brain non-pipeline hotfix)
+updated_at: 2026-06-07--19-50
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -920,6 +920,22 @@ Replaced the basic `[idle] hidden: ...` status line with an orchestra-style stat
 - `src/utils/formatters.ts` (new in ecf35f9, updated in 4f702a8) — formatters + two-pass context window lookup.
 - `src/components/StatusLine.tsx` — orchestra-style bar component (color on bar only).
 - `src/app.tsx` — state, effects, event handler, StatusLine invocation; UX fixes in 4f702a8.
+
+**Status-line git branch — refresh policy (2026-06-07 hotfix, `_pending_`):**
+
+The `gitBranch` field on the status line is read via `fetchGitBranch()` (in `src/utils/formatters.ts`), which shells out to `git rev-parse --abbrev-ref HEAD` against `process.cwd()`. The initial implementation (ecf35f9) ran this **once at mount** via a `useEffect(() => { ... }, [])` with empty dependencies, so the displayed branch became stale the moment the operator ran `git checkout` mid-session.
+
+**Refresh trigger (hotfix):** the `useEffect` is now keyed on `[isGenerating]` with an early-return guard `if (isGenerating) return;`. This fires on two events:
+
+1. **Mount** — `isGenerating` is initially `false`, so the effect runs once at startup. Preserves the original behaviour.
+2. **Turn boundary (end of a model response)** — `isGenerating` transitions from `true` (turn in progress) back to `false` (turn finished, awaiting next prompt). Anytime that transition fires, the effect re-runs, re-fetches the git branch, and updates the `gitBranch` state — refreshing the status line for the next render.
+
+**Why turn-boundary (not a timer, not an SSE event):** branch changes happen between operator interactions, not during them. A turn boundary is the cheapest, lowest-noise moment to refresh — no background interval polling git when octmux is idle, no race against `<Static>` commits mid-stream, and no coupling to opencode SSE state which is unrelated to local git. The `fetchGitBranch()` call is ~5-20ms per turn; the cost is negligible.
+
+**What it does NOT catch:** if the operator runs `git checkout` while a turn is in progress AND the next turn does not start before they look at the status line, the display will still show the pre-checkout branch until the next turn ends. This is acceptable — by definition, the operator is mid-deliberation when this happens and the display lag is at most one turn.
+
+**Files modified:**
+- `src/app.tsx` — `useEffect` deps changed from `[]` to `[isGenerating]`; added the early-return guard on `isGenerating`. No change to `fetchGitBranch()` itself.
 
 ---
 

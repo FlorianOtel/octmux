@@ -158,13 +158,18 @@ export function App(props: AppProps) {
     permissionIDRef.current = permission?.permID ?? null;
   }, [permission]);
 
-  // One-shot: fetch git branch at startup
+  // Fetch git branch at startup AND on every turn boundary (operator may have
+  // checked out a different branch between turns). isGenerating going true→false
+  // is the canonical "turn just ended" signal. The mount fire (isGenerating
+  // initially false) handles the startup case; subsequent fires keep the
+  // status-line branch label in sync with the actual repository state.
   useEffect(() => {
+    if (isGenerating) return; // only refresh when idle / after a turn ends
     (async () => {
       const branch = await fetchGitBranch();
       setGitBranch(branch);
     })();
-  }, []);
+  }, [isGenerating]);
 
   // Stage 4.5.3: Reconciler pass ref — stored on ref so polling effect and SSE-reconnect path
   // both invoke the current closure (captures latest refs/state).
