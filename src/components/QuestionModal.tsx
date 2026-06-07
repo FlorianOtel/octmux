@@ -1,5 +1,4 @@
-import { Box, Text, useInput } from "ink";
-import { useState } from "react";
+import { Box, Text } from "ink";
 
 type Question = {
   question: string;
@@ -11,32 +10,17 @@ type Question = {
 
 type Props = {
   questions: Question[];
-  onAnswer: (answers: string[][]) => void;
+  currentSubIdx: number;
 };
 
-export function QuestionModal({ questions, onAnswer }: Props) {
-  const [qIdx, setQIdx] = useState(0);
-  const [answers, setAnswers] = useState<string[][]>([]);
-
-  const q = questions[qIdx];
-
-  useInput((input) => {
-    const n = parseInt(input, 10);
-    if (isNaN(n) || n < 1 || n > q.options.length) return;
-    const chosen = [q.options[n - 1].label];
-    const next = [...answers, chosen];
-    if (qIdx < questions.length - 1) {
-      setAnswers(next);
-      setQIdx(qIdx + 1);
-    } else {
-      onAnswer(next);
-    }
-  });
+export function QuestionModal({ questions, currentSubIdx }: Props) {
+  const q = questions[currentSubIdx] ?? questions[0];
+  if (!q) return null;
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="#83a598" paddingX={1}>
       <Text color="#83a598" bold>
-        {`▶ Question ${qIdx + 1}/${questions.length}${q.header ? ` — ${q.header}` : ""}`}
+        {`▶ Question ${currentSubIdx + 1}/${questions.length}${q.header ? ` — ${q.header}` : ""}`}
       </Text>
       <Box marginTop={1}>
         <Text bold color="#ebdbb2">{q.question}</Text>
@@ -53,7 +37,7 @@ export function QuestionModal({ questions, onAnswer }: Props) {
       <Box marginTop={1}>
         <Text dimColor>
           Press <Text color="#fabd2f" bold>{`1–${q.options.length}`}</Text> to answer
-          {questions.length > 1 ? ` · ${questions.length - qIdx - 1} more after this` : ""}
+          {questions.length > 1 ? ` · ${questions.length - currentSubIdx - 1} more after this` : ""}
         </Text>
       </Box>
     </Box>

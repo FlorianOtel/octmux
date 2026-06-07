@@ -37,6 +37,21 @@ type QuestionType = {
   custom?: boolean;
 };
 
+function formatOptionsBlock(qs: QuestionType[]): string {
+  return qs.map((q, qi) => {
+    const opts = q.options
+      .map((o, i) => `  ${i + 1}. ${o.label} — ${o.description}`)
+      .join("\n");
+    return `▷ Question ${qi + 1}/${qs.length}${q.header ? ` — ${q.header}` : ""}\n${q.question}\n${opts}`;
+  }).join("\n\n");
+}
+
+function commitOptionsBlock(renderer: Renderer, reqID: string, qs: QuestionType[], seen: Set<string>): void {
+  if (seen.has(reqID)) return;
+  seen.add(reqID);
+  renderer.commitSystemMessage(formatOptionsBlock(qs));
+}
+
 type Client = ReturnType<typeof createOpencodeClient>;
 
 type AppProps = {
@@ -74,6 +89,12 @@ export function App(props: AppProps) {
   const [opencodeCommands, setOpencodeCommands] = useState<Map<string, OcCommand>>(new Map());
   const [isCompacting, setIsCompacting] = useState(false);
   const [sessionPicker, setSessionPicker] = useState<{ items: SessionPickerItem[]; idx: number } | null>(null);
+  // Stage 9.1 (Piece 2B, revised): current sub-question index, owned by app.tsx
+  // so handleSubmit can build the D4-α padded array. Modal is display-only.
+  const [currentSubIdx, setCurrentSubIdx] = useState<number>(0);
+  useEffect(() => {
+    setCurrentSubIdx(0);
+  }, [question?.reqID]);
   const [permMode, setPermMode] = useState<"ask" | "allow" | "deny">("ask");
   const [runningCost, setRunningCost] = useState<number>(0);
   const [orchestraBadge, setOrchestraBadge] = useState<OrchestraBadge>(null);
@@ -157,6 +178,9 @@ export function App(props: AppProps) {
   useEffect(() => {
     permissionIDRef.current = permission?.permID ?? null;
   }, [permission]);
+
+  // Stage 9.0 (Piece 2A): dedupe options-commit across SSE + 2 discovery paths
+  const committedOptionsReqIDsRef = useRef<Set<string>>(new Set());
 
   // Fetch git branch at startup AND on every turn boundary (operator may have
   // checked out a different branch between turns). isGenerating going true→false
@@ -249,7 +273,10 @@ export function App(props: AppProps) {
               type: "question.asked",
               properties: { id: oldest.id, sessionID: oldest.sessionID, questions: oldest.questions },
             } as unknown as Event, oldest.sessionID);
-            if (evRaw) applyReplEvents(Array.isArray(evRaw) ? evRaw : [evRaw]);
+            if (evRaw) {
+              commitOptionsBlock(renderer, oldest.id, oldest.questions, committedOptionsReqIDsRef.current);
+              applyReplEvents(Array.isArray(evRaw) ? evRaw : [evRaw]);
+            }
           }
         }
       } catch {}
@@ -621,7 +648,10 @@ export function App(props: AppProps) {
             });
           }
         }
-        else if (ev.kind === "question-asked")   setQuestion({ reqID: ev.reqID, questions: ev.questions });
+        else if (ev.kind === "question-asked") {
+          commitOptionsBlock(renderer, ev.reqID, ev.questions, committedOptionsReqIDsRef.current);
+          setQuestion({ reqID: ev.reqID, questions: ev.questions });
+        }
         else if (ev.kind === "question-tool-detected") {
           // One-shot lookup: OC's question registry should now contain the MCP
           // question that triggered this tool=question part. Match by
@@ -645,6 +675,7 @@ export function App(props: AppProps) {
                 q.tool?.callID === ev.callID
               );
               if (match && match.id !== questionIDRef.current) {
+                commitOptionsBlock(renderer, match.id, match.questions, committedOptionsReqIDsRef.current);
                 setQuestion({ reqID: match.id, questions: match.questions });
               }
             } catch {
@@ -860,7 +891,45 @@ export function App(props: AppProps) {
     await refreshTokenUsage(sessionIDRef.current);
   }, [refreshTokenUsage]);
 
+  const handleQuestion = useCallback(async (answers: string[][]) => {
+    if (!question) return;
+    await fetch(`${props.baseUrl}/question/${question.reqID}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-opencode-directory": props.cwd },
+      body: JSON.stringify({ answers }),
+    }).catch(() => {});
+    setQuestion(null);
+  }, [question, props.baseUrl, props.cwd]);
+
   const handleSubmit = useCallback(async (text: string) => {
+    // Stage 9.1 (Piece 2B, revised): route prompt input while any question is pending.
+    // Selection: trimmed buffer is a bare integer 1..N.
+    // Prose: everything else (including "1 ", "0", "12", letters, multi-line).
+    // D4-α padding: padded to string[][], current slot filled, rest [].
+    if (question) {
+      const currentQ = question.questions[currentSubIdx] ?? question.questions[0];
+      if (currentQ) {
+        const trimmed = text.trim();
+        const digitMatch = /^\d+$/.test(trimmed);
+        let chosen: string;
+        if (digitMatch) {
+          const n = parseInt(trimmed, 10);
+          if (n >= 1 && n <= currentQ.options.length) {
+            chosen = currentQ.options[n - 1].label;
+          } else {
+            chosen = trimmed;
+          }
+        } else {
+          chosen = trimmed;
+        }
+        const padded: string[][] = question.questions.map((_q, i) =>
+          i === currentSubIdx ? [chosen] : []
+        );
+        renderer.commitUserInput(text);
+        handleQuestion(padded);
+        return;
+      }
+    }
     // /exit — clean shutdown
     const exitResult = parseExitCommand(text);
     if (exitResult.handled) {
@@ -1121,7 +1190,7 @@ export function App(props: AppProps) {
       setIsGenerating(false);
       renderer.commitError(`[send error] ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [props.client, sessionID, renderer, activeModel, opencodeCommands, switchSession, editor]);
+  }, [props.client, sessionID, renderer, activeModel, opencodeCommands, switchSession, editor, question, currentSubIdx, handleQuestion]);
 
   handleSubmitRef.current = handleSubmit;
 
@@ -1134,15 +1203,7 @@ export function App(props: AppProps) {
     setPermission(null);
   }, [permission, props.client]);
 
-  const handleQuestion = useCallback(async (answers: string[][]) => {
-    if (!question) return;
-    await fetch(`${props.baseUrl}/question/${question.reqID}/reply`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-opencode-directory": props.cwd },
-      body: JSON.stringify({ answers }),
-    }).catch(() => {});
-    setQuestion(null);
-  }, [question, props.baseUrl, props.cwd]);
+ 
 
   const handleModelSelect = useCallback((item: ModelPickerItem) => {
     setActiveModel({ providerID: item.providerID, modelID: item.modelID });
@@ -1205,7 +1266,7 @@ export function App(props: AppProps) {
           gates by design — interactive prompts must always surface to the operator
           regardless of /tools-output or /thinking-output toggle state. */}
       {permission && <PermissionModal title={permission.title} onAnswer={handlePermission} />}
-      {question && <QuestionModal questions={question.questions} onAnswer={handleQuestion} />}
+      {question && <QuestionModal questions={question.questions} currentSubIdx={currentSubIdx} />}
       {isCompacting && <CompactingModal />}
       {modelPicker && (
         <ModelPickerModal
@@ -1241,7 +1302,7 @@ export function App(props: AppProps) {
           </Text>
         )}
         <Rule title={sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={!!permission || !!question || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} onHelp={triggerHelp} onToggleTools={() => toggleGate("tools-output")} onToggleThinking={() => toggleGate("thinking-output")} onResync={handleResync} onRedraw={props.onRedraw} setPasteCallback={props.setPasteCallback} />
+        <PromptInput editor={editor} disabled={!!permission || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} onHelp={triggerHelp} onToggleTools={() => toggleGate("tools-output")} onToggleThinking={() => toggleGate("thinking-output")} onResync={handleResync} onRedraw={props.onRedraw} setPasteCallback={props.setPasteCallback} />
         <Rule width={w} />
         <StatusLine
           modelLabel={
