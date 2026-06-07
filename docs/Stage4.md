@@ -921,7 +921,7 @@ Replaced the basic `[idle] hidden: ...` status line with an orchestra-style stat
 - `src/components/StatusLine.tsx` — orchestra-style bar component (color on bar only).
 - `src/app.tsx` — state, effects, event handler, StatusLine invocation; UX fixes in 4f702a8.
 
-**Status-line git branch — refresh policy (2026-06-07 hotfix, `_pending_`):**
+**Status-line git branch — refresh policy (2026-06-07 hotfix, `5ed10c2`):**
 
 The `gitBranch` field on the status line is read via `fetchGitBranch()` (in `src/utils/formatters.ts`), which shells out to `git rev-parse --abbrev-ref HEAD` against `process.cwd()`. The initial implementation (ecf35f9) ran this **once at mount** via a `useEffect(() => { ... }, [])` with empty dependencies, so the displayed branch became stale the moment the operator ran `git checkout` mid-session.
 
