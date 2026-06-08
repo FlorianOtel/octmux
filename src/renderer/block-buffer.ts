@@ -393,6 +393,16 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
           else if (prevLineWasEmpty && !lineIsEmpty) {
             lastBoundary = lineStart;
           }
+          // Stage 10.8.1 — (c) Heading boundary. Commit BEFORE the heading line.
+          // ATX headings (/^#{1,6} /) are stable top-level markdown constructs;
+          // committing the prefix-up-to-(but-not-including)-the-heading is
+          // byte-identical to a one-shot parse of that prefix.
+          // Added because the smoke-test input had only ONE \n\n in 5KB:
+          // paragraph + HR boundaries weren't firing often enough to bound
+          // the active block, but the input had ~11 headings.
+          else if (/^\s{0,3}#{1,6}\s/.test(line)) {
+            lastBoundary = lineStart;
+          }
         }
 
         lineStart = i + 1;
@@ -413,6 +423,13 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     for (const line of lines) {
       this._committed.push({ id: this._nextId++, role: "text", ansi: line });
     }
+    // Stage 10.8.1 — push a single empty CommittedLine as the inter-block
+    // separator that marked-terminal would normally insert between blocks.
+    // _renderActiveTextAnsi (and our piece-wise parse here) strip trailing \n+
+    // for safety; without this empty-line push, the joined output would lose
+    // ONE \n at each commit boundary vs a one-shot parse of the full text.
+    // C1.4 byte-equality requires the separator be present in the stream.
+    this._committed.push({ id: this._nextId++, role: "text", ansi: "" });
     this._activeTextBuf = this._activeTextBuf.slice(boundaryEnd);
     // Reset fence state defensively
     this._fenceOpen = false;

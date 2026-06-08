@@ -1,8 +1,8 @@
 ---
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
-updated_by: Actor (Claude Haiku 4.5)
-updated_at: 2026-06-08--20-20
+updated_by: Claude Code (Claude Opus 4.7)
+updated_at: 2026-06-08--14-46
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -269,4 +269,44 @@ Pathological single-paragraph or single-fenced-code-block inputs exceeding (term
 Tests: 25/25 pass in `block-buffer.test.ts`. Full suite: 103/103 pass across 6 files.
 
 **Build:** `dist/octmux` rebuilt successfully (833 modules — unchanged; no new dependencies, only boundary-detection and incremental-commit logic).
+
+### 2026-06-08--14-46 — Stage 10.8.1 — Heading boundary + inter-block separator fix
+
+**Implemented by:** Claude Code (Claude Opus 4.7) — 2026-06-08--14-46
+**Commit(s):** `<TBD>`
+
+#### Why this hotfix
+
+Operator smoke test on Stage 10.8 FIX-loop (`f81e359`) reproduced the truncation on `/var/tmp/render-this-as-markdown.md`. Empirical diagnosis from `/tmp/octmux-stream-1631.log` + OC session `ses_1585af6bbffe6Ee5xRA5fohZDY`:
+
+- Binary IS the FIX-loop binary (confirmed by `strings dist/octmux` showing zero `setAvailableRows` / `_availableRows` / `availRows` / `halfRows`).
+- Smoke-test file has only ONE `\n\n` in 5081 bytes (at the very end).
+- Model's rendered output (5538 chars) has 11 `\n\n`s, BUT between byte 2007 and byte 4216 there's a 2209-byte gap with NO paragraph boundary, NO HR, NO role transition. Design A's `_findCommitBoundary` returns -1 for the whole region. Active block grew unbounded; Ink's `clearTerminal` triggered around rendered-line 48 on the 54-row pane.
+- That 2209-byte gap contains ~11 markdown HEADINGS (`# Open items`, `## Context recap`, `### 4. Documented follow-ups`, etc).
+
+#### Fix
+
+Two changes in `src/renderer/block-buffer.ts`:
+
+1. **Heading boundary** in `_findCommitBoundary` — commit before each ATX heading (gated by `!_fenceOpen`):
+   ```ts
+   else if (/^\s{0,3}#{1,6}\s/.test(line)) {
+     lastBoundary = lineStart;
+   }
+   ```
+   Headings are stable top-level markdown constructs; the prefix-up-to-(but-not-including)-the-heading is markdown-safe to commit.
+
+2. **Inter-block separator preservation** in `_incrementalCommit` — push ONE empty `CommittedLine` after the prefix's content lines. This restores the inter-block separator (one `\n`) that marked-terminal would otherwise insert and that `.replace(/\n+$/, "")` strips. Empirically verified by `/tmp/probe-byte-equality.ts`: one-shot 73 bytes vs piecewise 72 for `"para text\n## My Heading\nmore content\n"`. Empty-line push fixes exactly that off-by-one and restores C1.4 byte-equality.
+
+#### Tests
+
+- 10.8.8: heading boundary always commits (outside fence).
+- 10.8.9: heading boundary respects fence (no commit inside code fence — verifies `#`-prefixed code comments don't trigger commits).
+- Existing C1.4 (Step 1.2) and 10.8.7 now BOTH exercise incremental commits via the heading boundary and verify byte-equality holds.
+
+**Test result:** 27/27 in `block-buffer.test.ts` (was 25 in 10.8 FIX-loop), 105/105 full suite (was 103). Binary rebuilt — 833 modules.
+
+#### Known limitation (preserved + scoped)
+
+A single section without any heading, blank-line, HR, or role-transition break that exceeds (terminal_rows − chrome) rendered lines will still trigger Ink's `clearTerminal` overflow. Examples: a fenced code block longer than the pane; a wall of text with no structure at all. Out of scope for content-driven boundary detection.
 

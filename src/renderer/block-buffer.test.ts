@@ -537,6 +537,33 @@ describe("BlockBufferRenderer", () => {
       const oneShot = (makeCommitPathMarked().parse(source) as string).replace(/\n+$/, "");
       expect(totalCommitted).toBe(oneShot);
     });
+
+    test("10.8.8 heading boundary always commits (outside fence)", () => {
+      // Stage 10.8.1 regression: input streams without \n\n separators between
+      // sections (real-world content like /var/tmp/render-this-as-markdown.md)
+      // require heading-boundary detection so the active block doesn't grow
+      // unbounded between sections.
+      const r = new BlockBufferRenderer(new Visibility());
+      r.beginBlock("p", "text");
+      r.appendToBlock("p", "para text\n## My Heading\nmore content\n");
+      // Heading commit fires BEFORE "## My Heading" — committed prefix contains
+      // "para text\n", active buffer contains "## My Heading\nmore content\n".
+      expect(r.getCommitted().length).toBeGreaterThan(0);
+      const committedJoined = r.getCommitted().map(c => c.ansi).join("\n");
+      expect(committedJoined).toContain("para text");
+      const activeText = r.getActiveBlock()?.text ?? "";
+      expect(activeText).toContain("My Heading");
+      expect(activeText).not.toContain("para text");
+    });
+
+    test("10.8.9 heading boundary respects fence (no commit inside code fence)", () => {
+      const r = new BlockBufferRenderer(new Visibility());
+      r.beginBlock("p", "text");
+      // A '#'-prefixed line INSIDE a fenced code block must not trigger a heading commit.
+      r.appendToBlock("p", "```python\n# this is a comment, not a heading\nprint('hi')\n```\n");
+      // No commit fires inside fence; nothing has been committed.
+      expect(r.getCommitted()).toEqual([]);
+    });
   });
 
 });
