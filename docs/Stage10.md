@@ -1,12 +1,17 @@
 ---
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
-updated_by: Actor (Claude Haiku 4.5)
-updated_at: 2026-06-08--10-17
+updated_by: Claude Code (Claude Opus 4.7)
+updated_at: 2026-06-08--22-15
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
-  The branch `feat/block-renderer` is the gate - merge to main is required for operator visibility.
+  The branch `feat/block-renderer` is the gate — merge to main is required for operator visibility.
+  Stage 10.7 (2026-06-08) adds a bounded React surface that defeats Ink's clearTerminal
+  overflow branch, plus an immediate-render throttle that smooths the visual cadence of
+  high-token-rate model output. The failed-experiment chain from an earlier dead-end
+  (markdown-semantic incremental commit) is preserved out-of-tree at the tag
+  `stage-10.8.1-failed-experiments` (no commits from it survive on this branch).
 ---
 
 # Stage 10 — Block-Buffered Renderer (Piece 1)
@@ -215,4 +220,91 @@ Phase 0 must verify symptoms ACROSS the full diagnosis chain, not just at one ch
 **Test result:** 20/20 pass in `block-buffer.test.ts` (16 → 20 with 4 new identity-stability tests). Full suite 98/98 pass across 6 files.
 
 **Build:** `dist/octmux` rebuilt successfully (833 modules — unchanged; no new dependencies, only cache fields and memoisation logic).
+
+---
+
+### 2026-06-08--22-15 — Stage 10.7 — Bounded surface + overflow margin + render throttle
+
+**Implemented by:** Claude Code (Claude Opus 4.7) — 2026-06-08--22-15
+**Commit(s):** `9e138d6` (feat)
+
+**Note on prior dead-end:** an earlier branch of work labelled "Stage 10.7 / 10.8 / 10.8.1" attempted to bound the dynamic region by detecting markdown block boundaries (`_findCommitBoundary`, `_incrementalCommit`, fence-state tracking) and committing partial blocks mid-stream. After three unsuccessful fix-loops the subsystem was abandoned as structurally unsound (`marked-terminal` is not prefix-closed: a prefix's rendering can change based on what follows — loose lists, reference links, tables, setext, lazy continuation). Stage 10.7 below is the *replacement* design. The discarded subsystem is preserved out-of-tree under tag `stage-10.8.1-failed-experiments` at commit `eeb9a3a` for forensic reference; no commits from it survive on this branch.
+
+#### Design
+
+**Where geometry belongs.** The renderer (`BlockBufferRenderer`) is *geometry-free* — it never reads `stdout.rows` / `stdout.columns`. Geometry lives strictly in the React surface (`src/app.tsx`), which is the legitimate consumer of terminal dimensions via `useStdout()`. The renderer emits the full ANSI-rendered active buffer; the surface decides what fraction of it to display. This avoids the layering violation that bit the prior dead-end: any geometry input to the renderer makes the "Stage N+1 raise the geometry threshold" iteration unavoidable, and turns transient chrome growth into a renderer-state bug.
+
+**`ActiveBlock` last-K visual-row cap (`src/components/ActiveBlock.tsx`).** Three pure helpers exported alongside the component:
+- `stripAnsi(s)` — drops SGR escapes (`\x1b[...m`) so length is the printable-character width.
+- `visualRows(line, width)` — returns `max(1, ceil(stripAnsi(line).length / max(1, width)))`. A single 240-character line at width 80 counts as 3 visual rows.
+- `tailSliceByVisualRows(all, width, maxRows)` — walks the line array from the bottom, accumulating `visualRows(line, width)`, and stops *before* adding a line that would push `used > maxRows`. Returns `all.slice(start)`.
+
+The component returns `null` when role is null or `ansi` is empty; otherwise splits `ansi` on `\n`, runs the tail-slice, and renders the resulting lines through `<Box flexDirection="column" width={width}>` with one `<Text>` per line (empty lines rendered as a single space so Ink's flex layout reserves a row). The renderer's `_activeBlockAnsi` still holds the *full* one-shot marked-terminal parse; only the surface's *display* is bounded. At `endBlock` / role transition, `_commitActiveText` flushes all lines to `<Static>` one-shot, so the full content lands in terminal-native scrollback regardless of how tall the block grew.
+
+**Surface cap math, threaded from `src/app.tsx`:**
+```ts
+const CHROME_ROWS = 10;
+const w           = Math.max(80, stdout?.columns ?? 80);
+const maxActive   = Math.max(16, (stdout?.rows ?? 24) - CHROME_ROWS);
+```
+Both axes follow the same "derive from terminal but never less than floor" pattern. The width floor (80) ensures wrap-counting works on small/undefined terminals; the rows floor (16) ensures a usable streaming tail on 80×24 even if `stdout.rows` underreports. `CHROME_ROWS = 10` decomposes as: typical chrome 5 (`SubprocessStatus 1 + Rule 1 + PromptInput 1 + marginBottom={2}`) + 1 row for Ink's inclusive overflow check (`outputHeight >= stdout.rows`) + 4 rows of headroom for transient chrome growth (multi-line `PromptInput`, modal overlays, yoga edge rounding). On a 54-row pane this gives K=44; on 80×24 the floor (16) binds. Worst case with chrome=9 on 54 rows: dynamic = 44 + 9 = 53 < 54 → strictly below the overflow ceiling.
+
+**`_commitActiveText` array-replace (`src/renderer/block-buffer.ts`).** Switched the single in-place `_committed.push(...)` site to `this._committed = [...this._committed, ...newLines]`. Now matches the pattern already used in every other lifecycle method (`commitTurnEnd`, `commitUserInput`, `commitSystemMessage`, `commitError`). Guarantees that `getCommitted()` returns a new array reference after a commit, so `<Static>` reliably picks up the new lines without depending on a sibling store (`activeBlock`) co-changing on the same tick.
+
+**Render throttle for high-rate streams.** New private field `_lastEmitMs: number = 0`. The `text.includes("\n")` branch of `appendToBlock` now reads:
+```ts
+if (text.includes("\n")) {
+  const now = Date.now();
+  if (now - this._lastEmitMs >= 80) {
+    this._activeBlockAnsi = this._renderActiveTextAnsi();
+    this._lastEmitMs = now;
+    this.emit("changed");
+  }
+}
+```
+The trailing-edge debounce timer (100 ms, unchanged behavior) also updates `_lastEmitMs = Date.now()` in its body, so the immediate path and the timer share one rate budget. Effect: at most ~12 immediate renders per second on a hot model-token stream; low-rate streams (tool output) bypass the throttle in practice because the inter-delta gap exceeds 80 ms.
+
+**`getActiveBlockAnsi()` lazy-flush.** Now calls `_flushDebounce()` before returning the cached ANSI string. The internal `_activeBlockAnsi` field can be stale between deltas (throttle-skipped or timer-pending), but any external consumer — React's `useSyncExternalStore`, lifecycle methods, tests — sees the freshest value. `_flushDebounce` is a no-op when no timer is pending, so the React hot path (called once per `changed` emit) is unchanged in steady state. This preserves the C1.4 byte-equal invariant (`live == commit-path render`) as a *call-time* property rather than an asymptotic one.
+
+**Salvaged `BlockBufferRenderer` import in `src/renderer/tmux-window.ts`.** A latent missing-import at `d1e29a2`: the class was instantiated on line 41 (`new BlockBufferRenderer(visibility)`) without being imported. This was a working defect that didn't bite because every smoke test ran `--single` (the `TmuxWindowRenderer` path was never instantiated). One-line fix bundled into this stage's source commit.
+
+#### Problems faced and solved
+
+**Ink's overflow check is inclusive.** `node_modules/ink/build/ink.js:121` reads `if (outputHeight >= this.options.stdout.rows)`. The earlier `CHROME_ROWS = 6` constant gave `K = stdout.rows - 6`, meaning `K + chrome = stdout.rows` exactly when chrome rendered at 6 — equality is enough to fire the overflow branch. Three independent runtime reproductions during smoke testing (rendering a 5KB file with prior session content in scrollback) showed prior-turn content briefly painted on screen mid-stream. Mechanism: when overflow fires, Ink writes `clearTerminal + fullStaticOutput + output` — the *entire session's* `<Static>` content, from the top. Bumping `CHROME_ROWS` to 10 added 4 rows of headroom, enough to absorb chrome transients without crossing the ceiling.
+
+**`<Static>` is append-only across the whole session.** Ink's `fullStaticOutput` accumulates every `<Static>` item emitted since the React tree mounted and is never reset — not even by the renderer's own `clearAll()` (which only resets `_committed`; `fullStaticOutput` is Ink-internal state). So any overflow event re-emits *every* turn's committed content, not just the current turn's. This is what made the symptom so disorienting: "tables from a totally unrelated prior prompt flashed during a smooth file render." The fix is structural: keep the dynamic region strictly below `stdout.rows` so the overflow branch never fires in the first place.
+
+**`marked-terminal` is not prefix-closed.** The prior dead-end (Stage 10.7/10.8/10.8.1 from the failed-experiment chain) tried to commit *source* prefixes mid-stream by detecting markdown block boundaries. This is structurally unsound: a prefix's rendered output can change based on what follows (loose lists become tight when an extra paragraph appears between items, reference links resolve when the reference definition arrives later, setext headings need their underline, etc.). The C1.4 byte-equality invariant relied on committing only at "safe" boundaries, and each boundary heuristic missed a different class of input. **Solution:** never commit a parsed *source prefix*. The renderer parses the *full active buffer* on every render, and `_commitActiveText` only fires on natural lifecycle events (turn-end, role transition) when the source is *complete*. Bounding the active region's *display* (not its parsed extent) decouples height safety from markdown correctness.
+
+**High-token-rate streams produced bursty visual cadence.** The Stage 10.4 flush-on-newline path was unconditional: every delta containing `\n` triggered an immediate full-buffer marked re-parse plus `emit("changed")`. Tool-result content arrives as a few large chunks (smooth — handful of immediate renders); model-generated content arrives at many tokens per second, often with newlines in every delta (bursty — dozens of full-buffer re-parses per second). Operator observation: file rendering was "almost reading speed" smooth; 600-line generated markdown was "very bursty AND caused screen flickers." 80 ms throttle on the immediate path cuts the cadence to ~12 Hz max for fast streams without affecting slow streams (whose inter-delta gap already exceeds 80 ms).
+
+**Throttle vs. C1.4 freshness invariant.** Throttling the immediate render meant `_activeBlockAnsi` could be stale at call-time. The C1.4 test (`live == one-shot parse of full source`) failed because the test captures `getActiveBlockAnsi()` immediately after feeding the full source via 64-byte chunks with 1 ms gaps, and the throttle skipped most intermediate renders. Solution: make `getActiveBlockAnsi()` lazy-flush via `_flushDebounce()` on each call. Pending timer (if any) is force-rendered synchronously, then the fresh ANSI is returned. Steady-state hot path unaffected (no-op when no timer is pending).
+
+**Old debounce tests probed the wrong thing.** Two tests in the Stage 10.4 debounce suite used `expect(getActiveBlockAnsi()).toBe("")` as an indirect probe for "no automatic emit has happened yet." Once `getActiveBlockAnsi` became lazy-flush, that probe no longer worked — calling it forced a render. The tests' actual contract — that non-newline deltas do not fire `emit("changed")` — is preserved, but observable only via direct event counting. Both tests rewritten to count `changed` emits directly; same property, more accurate test.
+
+**Multi-line `PromptInput` and modal overlays mutate chrome height.** Single-line input + single-line status + horizontal rule + marginBottom={2} totals 5 rows; multi-line input or any modal adds 2–5 more. With a tight `CHROME_ROWS = 6` reserve, a 1-row chrome bump was enough to cross the overflow ceiling. The `CHROME_ROWS = 10` reserve absorbs chrome transients up to 4 extra rows above the typical 5 — safe for the typical multi-line-input + small-modal case.
+
+#### Future issues — potential problems & future work
+
+1. **Very large modal stacks** (chrome ≥ 9 simultaneously with K=44 on a 54-row pane) could still cross the overflow ceiling. The fix would be one of: (a) bump `CHROME_ROWS` to 12+ (costs 2 more rows of visible tail), (b) make `CHROME_ROWS` modal-aware (subtract modal height dynamically — needs modal subtree height threaded into the cap computation), or (c) accept the limitation and patch on report. No known operator complaint yet.
+
+2. **No way to clear Ink's `fullStaticOutput`.** Even after `renderer.clearAll()` resets the React-visible `_committed` array, Ink's internal accumulated `<Static>` buffer survives — and any future overflow would re-emit *all* of it. If Stage 10.7's cap math is ever defeated, the user sees content from sessions ago. Workaround in practice: kill and re-launch octmux for a true session reset. A long-term solution would require either patching Ink (write `fullStaticOutput = ""` on session reset) or remounting the whole React tree on `clearAll`.
+
+3. **Single block taller than the screen has mid-stream scroll-out.** A markdown response taller than `K=44` rows shows only the trailing 44 lines during streaming; earlier content is invisible until the block commits at turn-end (then becomes terminal-native scrollback). Acceptable for normal markdown rendering, but limits the UX for "stream a long verbatim block" scenarios. **Future work (Stage 11?):** "rendered-line watermark" mechanism — progressively commit lines to `<Static>` as they scroll above the K-line window, driven by the same `maxRows` from the surface. Keeps mid-block scrollback at the cost of a tiny residual risk that a late re-parse re-styles an already-committed line (the non-prefix-closed cases).
+
+4. **80 ms throttle is empirical, not derived.** It works well for the observed model token rates (Sonnet, Haiku). Faster future models, or pathological streams with many tiny `\n`-bearing deltas, could still produce visible bursts. The throttle is easy to tune (single literal `80` in `block-buffer.ts`), but a more principled approach would adapt the throttle to recent delta rate (raise it under sustained high load, lower it for low-rate streams). Not worth doing without runtime evidence.
+
+5. **Child-session event routing (`match=false` in earlier capture logs).** A separate concern surfaced during the failed-experiment phase: some deltas arrived with `isTrackedChild=false`, suggesting a routing issue in `src/events.ts`. Orthogonal to the height ceiling; deferred until/unless a defect surfaces post-Stage 10.7.
+
+6. **No `OCTMUX_MAX_ACTIVE_LINES` env override.** Operator explicitly declined this knob in Phase 0. If runtime tuning of `K` becomes useful (e.g., for very tall or very short terminals), adding the env override is a one-line change in `src/app.tsx`. No rebuild semantics other than re-launching octmux.
+
+7. **Wide terminals waste left/right tail capacity.** The cap counts *visual rows*, including wrapped lines. On a 200-column terminal a `marked-terminal`-rendered code block typically uses ≤80 cols of width; the rest is whitespace. The cap correctly counts unwrapped rows (1 visual row per logical line) so wide terminals get full benefit; but a truly pathological multi-KB line that never wraps could still push a single "logical" line over the cap. The `tailSliceByVisualRows` helper handles this case correctly — a single over-long line either fits as one visual row or wraps and gets accounted for — but the slice may discard otherwise-visible context.
+
+#### Test result
+
+All 109 tests pass — 98 baseline (Stages 10.1 → 10.6) + 9 new surface tests in `src/components/ActiveBlock.test.ts` + 2 new renderer tests in the `Stage 11 — _commitActiveText array-replace` describe block of `block-buffer.test.ts`. Two existing Stage 10.4 debounce tests updated to observe via `emit("changed")` counts instead of the now-stale `getActiveBlockAnsi() === ""` probe.
+
+#### Build
+
+`dist/octmux` rebuilt successfully (833 modules; no new dependencies). Symlink `~/.local/bin/octmux.block-render` → `dist/octmux` already in place. Three operator smoke tests post-implementation: (a) render `/var/tmp/render-this-as-markdown.md` verbatim — smooth, no flicker, no reset; (b) generate a 600-row markdown with all known markers — smooth, no flicker, no prior-turn content; (c) cross-turn render after generated content — confirmed PASS by operator.
 
