@@ -219,7 +219,7 @@ Phase 0 must verify symptoms ACROSS the full diagnosis chain, not just at one ch
 ### 2026-06-08--11-23 — Stage 10.7 — Defensive PartUpdated reconcile (intermittent SSE delta loss)
 
 **Implemented by:** Claude Code (Claude Opus 4.7) — 2026-06-08--11-23
-**Commit(s):** `42638af`
+**Commit(s):** `<TBD>`
 
 #### Symptom
 
