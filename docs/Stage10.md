@@ -85,3 +85,23 @@ Both assertions pass. The fresh-`Marked`-instance one-shot parse is byte-equal t
 **Test result:** 13 pass, 0 fail in `block-buffer.test.ts`. Full project test suite: 91 pass, 0 fail across 6 files.
 
 **Build:** `dist/octmux` rebuilt successfully (833 modules — up from ~568 in 10.1 because marked + marked-terminal + chalk + transitive deps add modules).
+
+### 2026-06-08--02:00 — Stage 10.3 — Multi-window wiring verified
+
+**Implemented by:** local/qwen3-4b-q6 — 2026-06-08--02:00
+**Commit(s):** (pending Brain commit)
+
+This step verifies that `TmuxWindowRenderer` correctly wires `BlockBufferRenderer` as its `_main` renderer (already implemented in 10.1 step 4).
+
+**Verification findings:**
+- Constructor (line 39-48): `_main = new BlockBufferRenderer(visibility)` at line 42; re-emit handler `this._main.on("changed", () => this.emit("changed"))` at line 43 correctly fires on every state change.
+- `clearAll()` (line 212-217): delegates to `this._main.clearAll()` (line 215), which clears committed AND active state.
+- `dispose()` (line 227-234): delegates to `await this._main.dispose()` (line 233), which is a no-op in 1.3 (1.4 may add timer cleanup).
+- Side FIFOs (lines 158-205) unchanged per C1.5; tool-call/tool-result still use per-line `formatLine`.
+
+**Side FIFOs note:** The `beginBlock`/`appendToBlock`/`endBlock` paths for side windows (thinking, tools) remain unchanged. Side roles continue to write through FIFOs to tmux side windows, not through `_main`. Only the text role (active block) uses `BlockBufferRenderer`.
+
+**Smoke verification:** End-to-end `--multi-window` flow verified. No flag required — `TmuxWindowRenderer` unconditionally uses `BlockBufferRenderer` as `_main`.
+
+**Test result:** 91 pass, 0 fail across 6 files (no code changes in 10.3).
+
