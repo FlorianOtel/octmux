@@ -406,3 +406,59 @@ describe("filterEvent — parallel multi-task dispatch out-of-order", () => {
     expect((out_y as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === "ses_child_y")).toBe(true);
   });
 });
+
+// Stage 10.7 — text PartUpdated reconcile path. OC always emits a final
+// message.part.updated with the complete accumulated text at text-end
+// (processor.ts:826). Without this handler we silently lost any tail bytes
+// that SSE deltas failed to deliver.
+function textPartUpdated(partID: string, fullText: string, messageID = "msg_1") {
+  return {
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id: partID,
+        sessionID: PARENT_SID,
+        messageID,
+        type: "text",
+        text: fullText,
+      },
+    },
+  } as any;
+}
+
+describe("filterEvent — text PartUpdated reconcile (Stage 10.7)", () => {
+  test("first PartUpdated with text.length === 0 emits block-start + generating (unchanged from prior behaviour)", () => {
+    const out = filterEvent(textPartUpdated("prt_text_a", ""), PARENT_SID);
+    expect(Array.isArray(out)).toBe(true);
+    const evs = out as any[];
+    expect(evs.some(e => e.kind === "block-start" && e.role === "text")).toBe(true);
+    expect(evs.some(e => e.kind === "generating")).toBe(true);
+  });
+
+  test("subsequent PartUpdated with text.length > 0 emits block-reconcile (Stage 10.7 NEW)", () => {
+    // First: register the part via len=0 PartUpdated.
+    filterEvent(textPartUpdated("prt_text_b", ""), PARENT_SID);
+    // Then: a final state push with the complete text.
+    const out = filterEvent(textPartUpdated("prt_text_b", "the full accumulated text"), PARENT_SID);
+    expect(out).not.toBeNull();
+    expect((out as any).kind).toBe("block-reconcile");
+    expect((out as any).partID).toBe("prt_text_b");
+    expect((out as any).text).toBe("the full accumulated text");
+  });
+
+  test("PartUpdated for an untracked partID (no prior len=0 init) is dropped", () => {
+    // No block-start registration first → openParts.get(part.id) is undefined.
+    const out = filterEvent(textPartUpdated("prt_text_orphan", "stray content"), PARENT_SID);
+    expect(out).toBeNull();
+  });
+
+  test("PartUpdated for a user-message part is dropped (user messages are never reconciled)", () => {
+    // Mark this messageID as a user message via message.updated.
+    filterEvent({
+      type: "message.updated",
+      properties: { info: { sessionID: PARENT_SID, id: "msg_user_1", role: "user", time: {} } },
+    } as any, PARENT_SID);
+    const out = filterEvent(textPartUpdated("prt_user_x", "user echo", "msg_user_1"), PARENT_SID);
+    expect(out).toBeNull();
+  });
+});

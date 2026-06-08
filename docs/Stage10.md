@@ -1,8 +1,8 @@
 ---
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
-updated_by: Actor (Claude Haiku 4.5)
-updated_at: 2026-06-08--10-17
+updated_by: Claude Code (Claude Opus 4.7)
+updated_at: 2026-06-08--11-23
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -215,4 +215,129 @@ Phase 0 must verify symptoms ACROSS the full diagnosis chain, not just at one ch
 **Test result:** 20/20 pass in `block-buffer.test.ts` (16 → 20 with 4 new identity-stability tests). Full suite 98/98 pass across 6 files.
 
 **Build:** `dist/octmux` rebuilt successfully (833 modules — unchanged; no new dependencies, only cache fields and memoisation logic).
+
+### 2026-06-08--11-23 — Stage 10.7 — Defensive PartUpdated reconcile (intermittent SSE delta loss)
+
+**Implemented by:** Claude Code (Claude Opus 4.7) — 2026-06-08--11-23
+**Commit(s):** `<TBD>`
+
+#### Symptom
+
+Operator's smoke test on Stage 10.6 (`feat/block-renderer`, model Haiku 4.5,
+session `ses_1592a0a24ffeszDWDECNJOoBoc`): the model emitted a 5256-char
+markdown response that completed normally on the OC side (DB has the full
+text, `time.completed` set, `oc-history` renders it correctly). But octmux's
+terminal scrollback contained only the first ~2749 chars — the tail (chars
+2750–5256) never reached the renderer. No flicker, no max-update-depth, no
+crash. Just a silent truncation right after the line "From docs/Stage9.md
+\"Known follow-ups\":".
+
+The Stage 10.6 freeze fix was intact (no flicker, no warnings, Ctrl-C alive);
+this is a different failure mode that surfaced only once 10.6 made the UI
+stable enough to expose it.
+
+#### Diagnosis
+
+Three candidate explanations were considered:
+
+- A — SSE delivery dropped events mid-stream.
+- B — octmux's `events.ts` silently dropped `message.part.delta` events under
+  some condition.
+- C — OC sent the tail bytes only via `message.part.updated` (not via deltas),
+  which octmux's `events.ts:261` returned null for.
+
+A controlled probe (fresh OC session, direct SSE subscription, same prompt)
+delivered 502 deltas summing to exactly the final text length — GAP = 0.
+**Candidate C is falsified for the normal case**; in healthy delivery, deltas
+cover the full text. **The bug is intermittent** — could not be reproduced
+on demand.
+
+A second researcher pass on the OC server source
+(`/mnt/nfs/Florian/Gin-AI/projects/opencode/packages/opencode/src/session/processor.ts:763–826`)
+confirmed: OC ALWAYS emits a final `updatePart` at text-end (line 826) that
+publishes `message.part.updated` carrying the COMPLETE accumulated text.
+This event is the authoritative state for the part. Whether the deltas were
+complete or short, the final PartUpdated has the truth.
+
+We do not know which of A, B, or some other layer is the actual cause of
+the intermittent loss. We CAN make the symptom impossible regardless.
+
+#### Fix — defensive reconcile
+
+`Renderer` interface gains a new method:
+
+```ts
+reconcileActiveText(partID: string, fullText: string): void;
+```
+
+`BlockBufferRenderer` implements it as follows:
+
+- No-op if `partID !== _activeTextPartID` or `_activeBlockRole !== "text"`.
+- No-op if `fullText === _activeTextBuf` (idempotent).
+- No-op if `fullText.length <= _activeTextBuf.length` (defensive — never
+  shrink; trust deltas if they somehow surpassed the snapshot).
+- Otherwise: cancel any pending debounce timer (so it doesn't fire a stale
+  render after we reconcile), set `_activeTextBuf = fullText`, re-render
+  `_activeBlockAnsi`, emit `"changed"`.
+
+`StdoutRenderer.reconcileActiveText` is a documented no-op (per-line streaming,
+no buffered active text to reconcile).
+`TmuxWindowRenderer.reconcileActiveText` delegates to `_main` (the inner
+`BlockBufferRenderer`); side-window FIFOs need no reconcile.
+
+`events.ts` line 261 previously did `return null` for non-empty text
+`PartUpdated` events. It now returns a new ReplEvent kind
+`block-reconcile` (only when `openParts.get(part.id) === "text"`, i.e. the
+part was previously tracked via a block-start). `app.tsx`'s `applyReplEvents`
+dispatches this to `renderer.reconcileActiveText`.
+
+#### Instrumentation for future captures
+
+When `reconcileActiveText` fills in a gap of ≥ 32 chars, the renderer writes
+a one-line warning to stderr:
+
+```
+octmux: Stage 10.7 reconcile filled tail gap of <N> chars on partID=<id> (SSE delta loss — ...)
+```
+
+This makes future intermittent occurrences visible in the tmux pane (or
+captured if `2> /tmp/octmux-stream.log` is used). The fix masks the symptom;
+the warning preserves evidence that the underlying bug still exists.
+
+#### What this fix does NOT do
+
+- Does NOT identify the root cause of the intermittent delta loss.
+- Does NOT defend against a loss of the final `message.part.updated` event
+  itself (same SSE pipe). If that path is also affected, the fix doesn't help.
+- Does NOT poll OC's REST API as a fallback (would add network round-trips).
+  If the SSE-only reconcile turns out to be insufficient, that's the next
+  step — but only after evidence justifies it.
+
+#### Tests
+
+`src/renderer/block-buffer.test.ts` — new `describe("Stage 10.7 — reconcileActiveText")`
+block with 7 tests:
+
+- Fills in tail when active buffer is shorter.
+- No-op when buffer matches (Stage 10.6 cache identity preserved).
+- No-op when fullText is shorter (defensive, never shrinks).
+- No-op when partID does not match.
+- No-op when active block is non-text role.
+- Stage 10.6 cache invalidates after reconcile (new wrapper reference).
+- Cancels pending debounce timer.
+
+`src/events.test.ts` — new `describe("filterEvent — text PartUpdated reconcile (Stage 10.7)")`
+block with 4 tests:
+
+- Initial len=0 PartUpdated still emits block-start + generating (unchanged).
+- Subsequent len>0 PartUpdated emits `block-reconcile`.
+- Untracked partID (no prior block-start) returns null.
+- User-message text PartUpdated returns null (no reconcile for user echoes).
+
+**Test result:** 109/109 pass across 6 files (was 98 in 10.6, +7 reconcile +
+4 events). Full suite 0 fail.
+
+**Build:** `dist/octmux` rebuilt; module count unchanged from 10.6 (833).
+
+
 

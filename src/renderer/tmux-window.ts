@@ -159,6 +159,15 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     }
   }
 
+  // Stage 10.7 — Text-role reconcile is delegated to `_main` (the wrapped
+  // BlockBufferRenderer). Side windows (thinking / tool-call / tool-result)
+  // are line-streamed via FIFOs with no active buffer to reconcile, so the
+  // delegation handles only the text role correctly by construction (the inner
+  // BlockBufferRenderer.reconcileActiveText is a no-op for non-active partIDs).
+  reconcileActiveText(partID: string, fullText: string): void {
+    this._main.reconcileActiveText(partID, fullText);
+  }
+
   appendToBlock(partID: string, text: string): void {
     const role = this._openBlocks.get(partID);
     if (!role) return;

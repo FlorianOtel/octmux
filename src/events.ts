@@ -18,6 +18,10 @@ import type { Role } from "./blocks.ts";
 export type ReplEvent =
   | { kind: "block-start"; partID: string; role: Role; toolName?: string }
   | { kind: "block-delta"; partID: string; role: Role; text: string }
+  // Stage 10.7 — Authoritative full-text state push from OC's final
+  // message.part.updated (processor.ts:826). Routed to
+  // renderer.reconcileActiveText to recover from intermittent SSE delta loss.
+  | { kind: "block-reconcile"; partID: string; text: string }
   | { kind: "block-end";   partID: string; role: Role; status?: "ok" | "error" }
   | { kind: "session-idle" }
   | { kind: "error"; message: string }
@@ -257,6 +261,16 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
           { kind: "generating" },
         );
         return events;
+      }
+      // Stage 10.7 — Non-empty PartUpdated for a tracked text part is the
+      // authoritative full-text state push from OC (processor.ts:826 emits this
+      // at text-end with the complete accumulated text). Previously we returned
+      // null here, which silently lost any tail bytes the SSE delta stream
+      // failed to deliver. Now we emit block-reconcile; the renderer's
+      // reconcileActiveText is idempotent (no-op when buffer matches) and
+      // never shrinks the buffer (defensive against ordering races).
+      if (part.text.length > 0 && openParts.get(part.id) === "text") {
+        return { kind: "block-reconcile", partID: part.id, text: part.text };
       }
       return null;
     }
