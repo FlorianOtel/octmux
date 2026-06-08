@@ -361,6 +361,58 @@ describe("BlockBufferRenderer", () => {
     });
   });
 
+  describe("Stage 10.6 — getActiveBlock identity stability (streaming-freeze regression)", () => {
+    test("consecutive calls with no appends return the same object reference", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "identity-part-1";
+      renderer.beginBlock(partID, "text");
+      renderer.appendToBlock(partID, "hello");
+      const first = renderer.getActiveBlock();
+      const second = renderer.getActiveBlock();
+      expect(first).not.toBeNull();
+      expect(first === second).toBe(true);
+    });
+
+    test("reference changes after appendToBlock (new string identity = cache invalidation)", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "identity-part-2";
+      renderer.beginBlock(partID, "text");
+      renderer.appendToBlock(partID, "first");
+      const before = renderer.getActiveBlock();
+      expect(before!.text).toBe("first");
+      renderer.appendToBlock(partID, " second");
+      const after = renderer.getActiveBlock();
+      expect(after!.text).toBe("first second");
+      expect(before === after).toBe(false);
+    });
+
+    test("returns null after endBlock (lifecycle guard)", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "identity-part-3";
+      renderer.beginBlock(partID, "text");
+      renderer.appendToBlock(partID, "some text");
+      const cached = renderer.getActiveBlock();
+      expect(cached).not.toBeNull();
+      renderer.endBlock(partID, "ok");
+      expect(renderer.getActiveBlock()).toBeNull();
+    });
+
+    test("multiple appends: each new append returns a new reference, same-append calls return same reference", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "identity-part-4";
+      renderer.beginBlock(partID, "text");
+      renderer.appendToBlock(partID, "a");
+      const ref1a = renderer.getActiveBlock();
+      const ref1b = renderer.getActiveBlock();
+      expect(ref1a === ref1b).toBe(true);
+      renderer.appendToBlock(partID, "b");
+      const ref2a = renderer.getActiveBlock();
+      const ref2b = renderer.getActiveBlock();
+      expect(ref2a === ref2b).toBe(true);
+      expect(ref1a === ref2a).toBe(false);
+    });
+  });
+
   describe("Step 1.2 — C1.4 byte-equal invariant", () => {
     test("C1.4 commit-on-end byte-equal invariant: live == committed for /var/tmp/render-this-as-markdown.md", async () => {
       // (a) chalk.level pinned at top of file.

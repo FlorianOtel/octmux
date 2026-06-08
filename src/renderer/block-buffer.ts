@@ -98,6 +98,29 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   // `_activeBlockAnsi` that `_commitActiveText()` splits is the latest live ANSI.
   private _textDebounce: ReturnType<typeof setTimeout> | null = null;
 
+  // Stage 10.6 — memoised active-block wrapper.
+  // getActiveBlock() is called by React's useSyncExternalStore twice per
+  // reconciler cycle for identity comparison (Object.is). Returning a new
+  // `{role, text}` literal on every call makes Object.is return false on
+  // every cycle, triggering an unconditional forceStoreRerender storm that
+  // saturates NESTED_PASSIVE_UPDATE_LIMIT, flickers the screen, and
+  // starves libuv stdin — making Ctrl-C undeliverable.
+  //
+  // Fix: cache the wrapper. JS strings are immutable; `+=` always creates a
+  // new string reference, so `_activeTextBuf` identity change is the correct
+  // cache-invalidation key. When the buf reference hasn't changed, return the
+  // same wrapper object — Object.is(A, A) === true → no storm.
+  //
+  // The `_activeTextPartID === null` early-return at the top of getActiveBlock()
+  // already nulls out the active block on every lifecycle path
+  // (_commitActiveText, endBlock, commitTurnEnd, commitUserInput,
+  // commitSystemMessage, commitError, clearAll, dispose) — no per-method
+  // cache-null logic is needed.
+  private _activeBlockCache: { role: Role; text: string } | null = null;
+  // The _activeTextBuf value that was current when _activeBlockCache was built.
+  // String identity (===) is the invalidation key.
+  private _activeBlockCacheBuf: string | null = null;
+
   constructor(visibility: Visibility) {
     super();
     this.visibility = visibility;
@@ -366,12 +389,32 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
 
   getCommitted(): CommittedLine[] { return this._committed; }
   getActiveBlock(): { role: Role; text: string } | null {
+    // Early-return null covers every lifecycle path that clears the active
+    // block (_commitActiveText, endBlock, commitTurnEnd, commitUserInput,
+    // commitSystemMessage, commitError, clearAll, dispose).
     if (this._activeTextPartID === null) return null;
-    // For text role, return the full buffered text
+
     if (this._activeBlockRole === "text") {
-      return { role: this._activeBlockRole, text: this._activeTextBuf };
+      // Memoisation: return the cached wrapper when the buffer string reference
+      // hasn't changed. JS strings are immutable — `+=` always produces a new
+      // string, so reference equality is a safe and cheap invalidation key.
+      // This prevents React's useSyncExternalStore from seeing a new object
+      // on every call and firing forceStoreRerender unconditionally (the
+      // streaming-freeze root cause fixed in Stage 10.6).
+      if (
+        this._activeBlockCache !== null &&
+        this._activeBlockCacheBuf === this._activeTextBuf
+      ) {
+        return this._activeBlockCache;
+      }
+      this._activeBlockCache = { role: this._activeBlockRole, text: this._activeTextBuf };
+      this._activeBlockCacheBuf = this._activeTextBuf;
+      return this._activeBlockCache;
     }
-    // For non-text roles, return the partial tail
+
+    // Non-text roles: _nonTextTail is already an instance-level object that is
+    // only reassigned during appendToBlock, so two consecutive snapshot reads
+    // return the same reference — no memoisation needed here.
     return this._nonTextTail ?? null;
   }
   getActiveBlockAnsi(): string {

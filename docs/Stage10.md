@@ -1,8 +1,8 @@
 ---
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
-updated_by: Actor (sohoai/qwen3-4b-q6)
-updated_at: 2026-06-08--03-00
+updated_by: Actor (Claude Haiku 4.5)
+updated_at: 2026-06-08--10-17
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -165,4 +165,54 @@ Phase 3 Reviewer audit returned FIX with 3 specific issues; this sub-stage appli
 3. **MINOR — package.json version pin:** Changed `"marked-terminal": "^7.3.0"` to `"marked-terminal": "7.3.0"` (already pinned in bun.lock).
 
 Tests: 94/94 pass (unchanged). Build: 833 modules.
+
+### 2026-06-08--10-17 — Stage 10.6 — Fix streaming freeze (memoise getActiveBlock)
+
+**Implemented by:** Actor (Claude Haiku 4.5) via /brain — 2026-06-08--10-17
+**Commit(s):** `<TBD — backfilled>`
+
+During a long markdown-streaming response on `feat/block-renderer` (HEAD before this stage), the app froze mid-stream: rendering stopped, the screen flickered at ~1 Hz, Ctrl-C became undeliverable, and only `kill -9` escaped. Two prior Stage 10.6 attempts misdiagnosed the root cause and were hard-reset.
+
+**Diagnosis — the actual root cause:**
+
+`BlockBufferRenderer.getActiveBlock()` returned a new `{role, text}` object literal on every call when a text block was active. React's `useSyncExternalStore` calls `getSnapshot()` twice per reconciler cycle and compares the results via `Object.is` for reference equality. New object identity on every call triggered `forceStoreRerender` unconditionally → self-sustaining synchronous render loop → libuv blocked → stdin starved → Ctrl-C dead. The 50-cycle limit in React fired `console.error` (NOT throw); Ink's `patchConsole` intercepted the error output, cleared the screen, wrote the warning, and redrawed → the visible 1 Hz flicker.
+
+**Why the two prior diagnoses were wrong:**
+
+1. **"Throttle emit rate" (Stage 10.6 attempt 1):** The loop is render-driven, not emit-driven. The problem was not how often we emit `changed`, but how React responds to each emit (Object.is returning false on every getSnapshot call drove forceStoreRerender on every emit). Throttling emit rate had no effect.
+
+2. **"Push→spread on _commitActiveText" (Stage 10.6.1 — also rewind):** The wrong getter was suspected. The actual problem getter was `getActiveBlock`, not anything in the commit path. Mutating the commit path was a misdirection.
+
+**Visibility-delta forensic — why the symptom changed across attempts:**
+
+In Stage 10.6 (this stage), warnings appear as readable stack text at session start. In Stage 10.5 (prior), only flicker occurred. Three mechanisms explain the difference:
+
+1. **setImmediate boundary spacing:** Stage 10.6 uses `setImmediate` boundary spacing between reconciler cycles; Ink's 32 ms `throttledLog` window no longer suppresses intermediate `onRender` callbacks. More cycles → more warnings queued.
+
+2. **Push→spread multiplication:** The failed Stage 10.6.1 added a SECOND identity-change channel via the `committed` array (push→spread mutation). This multiplied the `forceStoreRerender` rate at session-start replay because `src/replay.ts:82-86` walks text parts synchronously, and each part triggered two identity-change paths instead of one.
+
+3. **Screen state timing:** At session start, Ink's `lastOutput` was empty when the 50-cycle limit fired → `writeToStderr` did `log.clear()` + write warning + `log("")` → warning persisted because nothing was redrawn over it. In Stage 10.5, the limit fired DURING streaming when `lastOutput` had content → the redraw overwrote the warning → fast flicker only.
+
+**Fix — memoisation with string-identity cache invalidation:**
+
+`BlockBufferRenderer` now caches the active-block wrapper object via two new private fields:
+- `_activeBlockCache: { role: Role; text: string } | null` — the cached wrapper object.
+- `_activeBlockCacheBuf: string | null` — the `_activeTextBuf` string value when the cache was built.
+
+When `getActiveBlock()` is called for a text role:
+1. Check if `_activeBlockCache !== null` AND `_activeBlockCacheBuf === this._activeTextBuf` (string identity comparison).
+2. If both true, return the cached wrapper — `Object.is(A, A) === true` → no `forceStoreRerender`.
+3. Otherwise, rebuild the cache with a new wrapper and store both the wrapper and the current `_activeTextBuf` reference.
+
+Why this works: JS strings are immutable. Every `_activeTextBuf += text` assignment creates a new string object. The string reference identity change is the correct cache-invalidation key — cheap and reliable. Non-text roles (`_nonTextTail`) already return the same instance-level object on consecutive calls, so no memoisation is needed there.
+
+The `_activeTextPartID === null` early-return at the top of `getActiveBlock()` already nulls the active block on every lifecycle path (`_commitActiveText`, `endBlock`, `commitTurnEnd`, `commitUserInput`, `commitSystemMessage`, `commitError`, `clearAll`, `dispose`) — no per-method cache-null logic is needed.
+
+**Lessons learned:**
+
+Phase 0 must verify symptoms ACROSS the full diagnosis chain, not just at one checkpoint. React's `useSyncExternalStore` `getSnapshot` identity stability is a load-bearing contract; any value mutation or object-wrapping path that returns a new reference on repeated calls is a latent freeze bug waiting to happen. Debugging via "what would the simplest cause be" beats following Reviewer-flagged "latent bugs" without independent verification in Phase 0. `console.error` in Ink-managed React paths is NOT silent — it triggers `patchConsole` hooking with visible side effects.
+
+**Test result:** 20/20 pass in `block-buffer.test.ts` (16 → 20 with 4 new identity-stability tests). Full suite 98/98 pass across 6 files.
+
+**Build:** `dist/octmux` rebuilt successfully (833 modules — unchanged; no new dependencies, only cache fields and memoisation logic).
 
