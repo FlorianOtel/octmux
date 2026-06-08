@@ -2,7 +2,7 @@
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
 updated_by: Actor (Claude Haiku 4.5)
-updated_at: 2026-06-08--10-17
+updated_at: 2026-06-08--14-03
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -215,4 +215,50 @@ Phase 0 must verify symptoms ACROSS the full diagnosis chain, not just at one ch
 **Test result:** 20/20 pass in `block-buffer.test.ts` (16 → 20 with 4 new identity-stability tests). Full suite 98/98 pass across 6 files.
 
 **Build:** `dist/octmux` rebuilt successfully (833 modules — unchanged; no new dependencies, only cache fields and memoisation logic).
+
+### 2026-06-08--14-03 — Stage 10.8 — Incremental commit (semantic boundaries + size-threshold)
+
+**Implemented by:** Actor (Claude Haiku 4.5) — 2026-06-08--14-03
+**Commit(s):** `d5cf6d0`
+
+#### Diagnosis
+
+Reproducible mid-stream truncation at ~51 rendered lines (54-row pane with 6-row chrome) was caused by Ink's log-update writing `ansiEscapes.clearTerminal` when `outputHeight >= stdout.rows` (node_modules/ink/build/ink.js:121-122). The active text block grew unbounded; each render past the threshold wiped the screen and redrew everything. Three prior fix attempts (Stage 10.6 v1 throttle, 10.6.1 push→spread, 10.7 PartUpdated reconcile) all misdiagnosed and were reverted. The fix this time is verified empirically: ink.js source confirms clearTerminal call, the truncation line-count matches the pane-minus-chrome threshold, and oc-history (which uses a pager) renders the same complete text post-hoc.
+
+#### Implementation
+
+`BlockBufferRenderer` now incrementally commits the active block at semantic boundaries — horizontal rules (--- outside fenced code blocks), paragraph boundaries (blank lines, gated by size), tool/reasoning role transitions, and a hard size fallback when no logical boundary is found within (pane_rows-chrome) lines. Fence-tracking ensures we never commit inside a code block.
+
+New `Renderer.setAvailableRows(rows: number)` method threads terminal height from `app.tsx` via `useStdout()` into the renderer. `TmuxWindowRenderer._main.setAvailableRows()` delegates to the `BlockBufferRenderer` instance; `StdoutRenderer` has a no-op implementation (per-line streaming has no Ink overflow risk).
+
+`_findCommitBoundary(buf: string, availRows: number): number` walks the buffer line-by-line tracking fence state (opening fences `` `{3,}|~{3,} ``; closing when fence marker is repeated at required depth). Returns the byte offset (exclusive) of the last safe boundary:
+- (a) HR boundary (---|***|___) ALWAYS, outside fences
+- (b) Paragraph boundary (blank-line separator) ONLY if renderedLineCount >= halfRows
+- (c) Hard fallback: if renderedLineCount >= fullRows, commit at next \n and break
+
+`_incrementalCommit(boundaryEnd: number)` slices the prefix, re-parses via the per-instance marked, strips trailing \n, splits on \n, commits each line, leaves remainder in `_activeTextBuf`, resets fence state, and re-renders.
+
+Both flush points in `appendToBlock` (flush-on-\n and debounce timer callback) now call `_findCommitBoundary` after render and invoke `_incrementalCommit` if boundary > 0.
+
+`beginBlock` was modified to flush text on ANY role transition (not just text→text), ensuring that text blocks are committed before switching to tool-call/tool-result/reasoning roles.
+
+#### Why prior attempts failed
+
+- Stage 10.6 v1: throttled the render loop, misdiagnosing the overflow as a high-frequency-render problem. The actual problem was unbounded active-block growth.
+- Stage 10.6.1: reverted push→spread to fix PartUpdated race, wrong diagnosis of the root cause.
+- Stage 10.7: added defensive PartUpdated reconciliation. The PartUpdated events were never the bottleneck; the active block size was.
+
+All three were static-reasoning-driven without empirical ink.js source verification. This fix is grounded in reading the Ink source and matching the observed truncation line-count to the threshold.
+
+#### Known limitation
+
+A single fenced code block longer than (pane_rows - chrome) lines cannot be incrementally committed. The hard-fallback boundary detection waits for the fence to close. In pathological cases a single code fence > 48 lines will still trigger Ink's clearTerminal. Documented as a design trade-off; the alternative (committing mid-fence) would break markdown structure.
+
+#### Test result
+
+Tests: existing 20 + 7 new Stage 10.8 + 1 updated C1.4 (now asserts total committed === one-shot parse). All 27 pass. Modified test 10.8.7 to use `availRows=80` to avoid hard-fallback mid-structure and preserve C1.4 byte-equality invariant.
+
+Full suite: 105 tests pass across 6 files.
+
+**Build:** `dist/octmux` rebuilt successfully (833 modules — unchanged; no new dependencies, only boundary-detection and incremental-commit logic).
 
