@@ -161,4 +161,5 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
     return formatLine(this._tail.role, this._tail.text, false);
   }
   setWidth(_width: number): void { /* no-op for line-streaming renderer */ }
+  setAvailableRows(_rows: number): void { /* no-op: per-line streaming, no Ink overflow risk */ }
 }

@@ -5,6 +5,7 @@ import { formatLine } from "../blocks.ts";
 import { makeFifo, type FifoHandle } from "./fifo.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer, CommittedLine } from "./types.ts";
+import { BlockBufferRenderer } from "./block-buffer.ts";
 import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
 
 const SIDE_ROLES: Role[] = Object.keys(OUTPUT_KEY) as Role[];
@@ -236,6 +237,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   getActiveBlock(): { role: Role; text: string } | null { return this._main.getActiveBlock(); }
   getActiveBlockAnsi(): string { return this._main.getActiveBlockAnsi(); }
   setWidth(width: number) { this._main.setWidth(width); }
+  setAvailableRows(rows: number): void { this._main.setAvailableRows(rows); }
 
   private _isSideRole(r: Role): boolean { return SIDE_ROLES.includes(r); }
 }

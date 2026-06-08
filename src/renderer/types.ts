@@ -25,4 +25,5 @@ export interface Renderer {
   getActiveBlock(): { role: Role; text: string } | null;
   getActiveBlockAnsi(): string;
   setWidth(width: number): void;
+  setAvailableRows(rows: number): void;
 }

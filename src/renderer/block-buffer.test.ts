@@ -414,7 +414,7 @@ describe("BlockBufferRenderer", () => {
   });
 
   describe("Step 1.2 — C1.4 byte-equal invariant", () => {
-    test("C1.4 commit-on-end byte-equal invariant: live == committed for /var/tmp/render-this-as-markdown.md", async () => {
+    test("C1.4 commit-on-end byte-equal invariant: total committed equals one-shot parse", async () => {
       // (a) chalk.level pinned at top of file.
       // (b) read source from /var/tmp/render-this-as-markdown.md
       const source = await Bun.file("/var/tmp/render-this-as-markdown.md").text();
@@ -432,26 +432,133 @@ describe("BlockBufferRenderer", () => {
         await new Promise(r => setTimeout(r, 1));
       }
 
-      // (e) capture final live ANSI
-      const liveAnsi = renderer.getActiveBlockAnsi();
-
-      // (f) endBlock and capture the committed lines for this block
-      const committedBefore = renderer.getCommitted().length;
+      // (e) endBlock to commit any remaining active block
       renderer.endBlock(partID, "ok");
       const committedAfter = renderer.getCommitted();
-      const newlyCommitted = committedAfter.slice(committedBefore);
-      const committedAnsiJoined = newlyCommitted.map(l => l.ansi).join("\n");
 
-      // (g) re-render via the "commit path" — fresh Marked instance with the
+      // (f) re-render via the "commit path" — fresh Marked instance with the
       // same aesthetic config, parsing the full source in one shot. Apply the
       // same trailing-newline strip as `_renderActiveTextAnsi` does.
-      const commitPathAnsiRaw = makeCommitPathMarked().parse(source) as string;
-      const commitPathAnsi = commitPathAnsiRaw.replace(/\n+$/, "");
+      const oneShot = (makeCommitPathMarked().parse(source) as string).replace(/\n+$/, "");
+      const totalCommitted = committedAfter.map(l => l.ansi).join("\n");
 
-      // (h) byte-equal assertions:
-      //   liveAnsi === commitPathAnsi  AND  committedAnsiJoined === liveAnsi
-      expect(liveAnsi).toBe(commitPathAnsi);
-      expect(committedAnsiJoined).toBe(liveAnsi);
+      // (g) byte-equal assertion: total committed must equal one-shot parse
+      expect(totalCommitted).toBe(oneShot);
+    });
+  });
+
+  describe("Stage 10.8 — Incremental commit (semantic boundary + size-threshold)", () => {
+
+    test("10.8.1 HR boundary commit (conservative)", () => {
+      const r = new BlockBufferRenderer(new Visibility());
+      r.setAvailableRows(20);
+      r.beginBlock("p", "text");
+      r.appendToBlock("p", "para1 line\n\n---\n\npara2 line\n");
+      const committed = r.getCommitted();
+      expect(committed.length).toBeGreaterThan(0);
+      const allCommittedText = committed.map(c => c.ansi).join("\n");
+      expect(allCommittedText).toContain("para1 line");
+      const active = r.getActiveBlock();
+      expect(active).not.toBeNull();
+      expect(active!.text).toContain("para2 line");
+      expect(active!.text).not.toContain("para1 line");
+    });
+
+    test("10.8.2 Role-transition flush (tool-call beginBlock flushes prior text)", () => {
+      const r = new BlockBufferRenderer(new Visibility());
+      r.beginBlock("p1", "text");
+      r.appendToBlock("p1", "hello text\n");
+      const beforeCommit = r.getCommitted().length;
+      r.beginBlock("p2", "tool-call");
+      const afterCommit = r.getCommitted().length;
+      expect(afterCommit).toBeGreaterThan(beforeCommit);
+      const allText = r.getCommitted().map(c => c.ansi).join("\n");
+      expect(allText).toContain("hello text");
+      expect(r.getActiveBlock()).toBeNull();
+    });
+
+    test("10.8.3 Paragraph boundary BELOW half-threshold does NOT commit", () => {
+      const r = new BlockBufferRenderer(new Visibility());
+      r.setAvailableRows(30);  // halfRows = 15
+      r.beginBlock("p", "text");
+      // Feed a small amount: a single paragraph + paragraph break + another small paragraph.
+      r.appendToBlock("p", "short para 1\n\nshort para 2\n");
+      // The \n\n boundary fires but rendered line count is well below 15.
+      expect(r.getCommitted()).toEqual([]);
+    });
+
+    test("10.8.4 Paragraph boundary ABOVE half-threshold triggers commit", () => {
+      const r = new BlockBufferRenderer(new Visibility());
+      r.setAvailableRows(10);  // halfRows = 5
+      r.beginBlock("p", "text");
+      // Force renderedLineCount above 5 by feeding many short paragraphs each separated by \n\n.
+      // marked renders each paragraph as one wrapped line + blank line between paragraphs.
+      const para = "Some text content here.";
+      let s = "";
+      for (let i = 0; i < 6; i++) s += para + "\n\n";
+      s += "trigger more\n";
+      r.appendToBlock("p", s);
+      expect(r.getCommitted().length).toBeGreaterThan(0);
+    });
+
+    test("10.8.5 Hard fallback at fullRows commits at next \\n", () => {
+      const r = new BlockBufferRenderer(new Visibility());
+      r.setAvailableRows(6);  // fullRows = 6
+      r.beginBlock("p", "text");
+      // Feed 8 short single-line paragraphs separated by single \n (no blank lines).
+      // marked renders consecutive non-blank lines as a single paragraph — so we need
+      // \n\n to force separate rendered paragraphs (and thus more rendered lines).
+      let s = "";
+      for (let i = 0; i < 8; i++) s += `Line ${i}\n\n`;
+      r.appendToBlock("p", s);
+      expect(r.getCommitted().length).toBeGreaterThan(0);
+    });
+
+    test("10.8.6 Fence-aware: \\n\\n INSIDE code fence does NOT commit", () => {
+      const r = new BlockBufferRenderer(new Visibility());
+      r.setAvailableRows(4);  // halfRows = 2, fullRows = 4
+      r.beginBlock("p", "text");
+      // Feed code fence with internal blank line, then content after fence.
+      r.appendToBlock("p", "```\nline1\n\nline2\n```\n");
+      // The \n\n INSIDE the fence must NOT trigger a commit.
+      // If incremental commit fired mid-fence, the committed lines would be incorrect.
+      // After the closing fence and the trailing \n, we may or may not commit depending on
+      // line count — but the key assertion is the active buffer still contains the FULL
+      // code fence content (not split across commit boundary).
+      const active = r.getActiveBlock();
+      // If commit happened post-fence, active may be empty / new buffer. If no commit at all,
+      // active contains the full fence.
+      if (r.getCommitted().length > 0) {
+        // Commit happened — verify it includes the FULL fence (not split inside).
+        const committedJoined = r.getCommitted().map(c => c.ansi).join("\n");
+        // The committed text should not END mid-fence-content.
+        // It should contain both line1 and line2 OR have the closing fence committed too.
+        expect(committedJoined.includes("line1") && committedJoined.includes("line2")).toBe(true);
+      } else {
+        // No commit yet — verify active still has full fence including line1, line2.
+        expect(active!.text).toContain("line1");
+        expect(active!.text).toContain("line2");
+        expect(active!.text).toContain("```");
+      }
+    });
+
+    test("10.8.7 C1.4 byte-equality after incremental commits on real source file", async () => {
+      const source = await Bun.file("/var/tmp/render-this-as-markdown.md").text();
+      const r = new BlockBufferRenderer(new Visibility());
+      // Use a generous availRows to avoid hard-fallback mid-structure.
+      // This test verifies the C1.4 byte-equality invariant is preserved even when
+      // incremental commits happen at semantic boundaries (HR, paragraph transitions).
+      r.setAvailableRows(80);  // Enough rows to avoid hard-fallback on typical files.
+      r.beginBlock("c14", "text");
+      const chunkSize = 64;
+      for (let i = 0; i < source.length; i += chunkSize) {
+        r.appendToBlock("c14", source.slice(i, i + chunkSize));
+        await new Promise(res => setTimeout(res, 1));
+      }
+      r.endBlock("c14", "ok");
+      const totalCommitted = r.getCommitted().map(l => l.ansi).join("\n");
+      const oneShot = (makeCommitPathMarked().parse(source) as string).replace(/\n+$/, "");
+      expect(totalCommitted).toBe(oneShot);
     });
   });
 

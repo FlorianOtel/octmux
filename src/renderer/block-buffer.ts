@@ -29,6 +29,8 @@ import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
 //   one-time warning and set `chalk.level = 0` (no-color path). marked-terminal
 //   still renders structurally; chalk-applied styles emit no escape codes.
 
+const CHROME_ROWS = 6; // Rule(1)+Input(1)+Rule(1)+StatusLine(1)+marginBottom(2)
+
 let _chalkFallbackWarned = false;
 
 function _setupChalkLevel(): void {
@@ -86,6 +88,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   private _activeBlockRole: Role | null = null;
   private _nonTextTail: { role: Role; text: string } | null = null;
   private _width = 80;
+  private _availableRows = 80 - CHROME_ROWS;
   private _outputEnabled = new Map<string, boolean>();
   private _marked: Marked;
   // Stage 10.4 — 100 ms trailing-edge debounce for text-role intra-line bursts.
@@ -120,6 +123,13 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   // The _activeTextBuf value that was current when _activeBlockCache was built.
   // String identity (===) is the invalidation key.
   private _activeBlockCacheBuf: string | null = null;
+
+  // Stage 10.8 — fence-tracking for incremental-commit boundary detection.
+  // Used to skip boundary detection inside code fences (opening /^[ \t]{0,3}(`{3,}|~{3,})/,
+  // closing when fence marker is repeated at the required depth).
+  private _fenceOpen = false;
+  private _fenceChar = "";
+  private _fenceLen = 0;
 
   constructor(visibility: Visibility) {
     super();
@@ -158,9 +168,9 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     if (_outKey && !this.isOutputEnabled(_outKey)) return;
     this._openBlocks.set(partID, role);
 
-    // Block transition: if we're entering a new text block while another is open,
-    // auto-flush the prior text block as a side-effect (defensive).
-    if (this._activeTextPartID !== null && this._activeTextPartID !== partID && role === "text") {
+    // Stage 10.8: flush text on ANY role transition (not just text→text).
+    // This ensures we commit the active text buffer before switching to a non-text role.
+    if (this._activeTextPartID !== null && this._activeTextPartID !== partID) {
       // Stage 10.4: pre-flush debounce so the prior block's commit uses its
       // latest live ANSI.
       this._flushDebounce();
@@ -201,6 +211,9 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
       if (text.includes("\n")) {
         this._activeBlockAnsi = this._renderActiveTextAnsi();
         this.emit("changed");
+        // Stage 10.8: incremental-commit boundary check
+        const _b1 = this._findCommitBoundary(this._activeTextBuf, this._availableRows);
+        if (_b1 > 0) this._incrementalCommit(_b1);
       }
       // Always schedule a trailing-edge timer — handles the burst case AND
       // catches the final intra-line tail when the operator stops typing /
@@ -215,6 +228,9 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         if (this._activeBlockRole === null) return;
         this._activeBlockAnsi = this._renderActiveTextAnsi();
         this.emit("changed");
+        // Stage 10.8: incremental-commit boundary check
+        const _b2 = this._findCommitBoundary(this._activeTextBuf, this._availableRows);
+        if (_b2 > 0) this._incrementalCommit(_b2);
       }, 100);
     } else {
       // Non-text roles: replicate StdoutRenderer's line-streaming
@@ -336,6 +352,84 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     }
   }
 
+  // Stage 10.8 — boundary detector for incremental commit.
+  // Walks the buffer line-by-line, tracking fence state and looking for safe commit points.
+  // Returns the byte offset (exclusive) of the last safe boundary, or -1 if none found.
+  private _findCommitBoundary(buf: string, availRows: number): number {
+    const halfRows = Math.floor(availRows / 2);
+    const fullRows = availRows;
+    const renderedLineCount = this._activeBlockAnsi.split("\n").length;
+
+    let lastBoundary = -1;
+    let lineStart = 0;
+    let prevLineWasEmpty = false;
+
+    for (let i = 0; i < buf.length; i++) {
+      if (buf[i] === "\n") {
+        const line = buf.slice(lineStart, i);
+        const lineIsEmpty = line.trim() === "";
+
+        // Update fence state: detect opening and closing fences
+        const fenceOpenMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+        if (!this._fenceOpen && fenceOpenMatch) {
+          this._fenceOpen = true;
+          this._fenceChar = fenceOpenMatch[1][0];
+          this._fenceLen = fenceOpenMatch[1].length;
+        } else if (
+          this._fenceOpen &&
+          new RegExp(`^[ \\t]{0,3}${this._fenceChar}{${this._fenceLen},}\\s*$`).test(line)
+        ) {
+          this._fenceOpen = false;
+        }
+
+        // Skip boundary detection if inside a fence
+        if (!this._fenceOpen) {
+          // (a) Horizontal rule boundary — ALWAYS a safe commit point (outside fence)
+          if (/^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+            lastBoundary = i + 1; // Include the newline
+          }
+          // (b) Paragraph boundary: previous line was empty (we just passed a blank line)
+          // and this line is not empty (we're entering new content).
+          // This detects the transition from blank-line separator to content.
+          // ONLY if renderedLineCount >= halfRows.
+          else if (prevLineWasEmpty && !lineIsEmpty && renderedLineCount >= halfRows) {
+            lastBoundary = lineStart; // Commit up to (but not including) the current content line
+          }
+        }
+
+        // (c) Hard fallback: if renderedLineCount >= fullRows, commit at next \n
+        if (renderedLineCount >= fullRows) {
+          lastBoundary = i + 1; // Include the newline
+          break;
+        }
+
+        lineStart = i + 1;
+        prevLineWasEmpty = lineIsEmpty;
+      }
+    }
+
+    return lastBoundary;
+  }
+
+  // Stage 10.8 — incremental commit: slice the prefix at boundaryEnd, parse and commit it,
+  // leave remainder in _activeTextBuf, reset fence state, and re-render.
+  private _incrementalCommit(boundaryEnd: number): void {
+    const prefix = this._activeTextBuf.slice(0, boundaryEnd);
+    const rawAnsi = this._marked.parse(prefix) as string;
+    const ansi = rawAnsi.replace(/\n+$/, "");
+    const lines = ansi.split("\n");
+    for (const line of lines) {
+      this._committed.push({ id: this._nextId++, role: "text", ansi: line });
+    }
+    this._activeTextBuf = this._activeTextBuf.slice(boundaryEnd);
+    // Reset fence state defensively
+    this._fenceOpen = false;
+    this._fenceChar = "";
+    this._fenceLen = 0;
+    this._activeBlockAnsi = this._renderActiveTextAnsi();
+    this.emit("changed");
+  }
+
   private _commitActiveText(): void {
     if (this._activeTextPartID === null || this._activeBlockRole === null) return;
     // Split the LAST live-rendered ANSI on \n; commit each line as a CommittedLine.
@@ -352,6 +446,10 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     this._activeBlockAnsi = "";
     this._activeBlockRole = null;
     this._activeTextPartID = null;
+    // Stage 10.8: reset fence state
+    this._fenceOpen = false;
+    this._fenceChar = "";
+    this._fenceLen = 0;
     this.emit("changed");
   }
 
@@ -435,4 +533,5 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     return "";
   }
   setWidth(width: number): void { this._width = width; }
+  setAvailableRows(rows: number): void { this._availableRows = rows; }
 }
