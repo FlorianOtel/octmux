@@ -108,7 +108,7 @@ This step verifies that `TmuxWindowRenderer` correctly wires `BlockBufferRendere
 ### 2026-06-08--02-08 — Stage 10.4 — Debounce + SIGWINCH/reconnect repaint
 
 **Implemented by:** Actor (sohoai/glm-5.1) via /brain — 2026-06-08--02-08
-**Commit(s):** TBD
+**Commit(s):** `9125a30` (backfilled in follow-up commit)
 
 Stage 10.4 closes Piece 1 of the block-renderer plan with three coupled improvements: a 100 ms trailing-edge debounce on text-role intra-line burst storms, flush-on-`\n` for live UX, and repaint hooks for terminal resize (SIGWINCH) and SSE reconnect.
 
