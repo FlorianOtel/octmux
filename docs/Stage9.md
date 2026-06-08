@@ -2,8 +2,8 @@
 title: "Stage 9 — Question Deliberation Flow (Piece 2)"
 created_at: 2026-06-07--17-23
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_at: 2026-06-07--17-23
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-06-08--08-34
 context: >
   Stage 9 implements Piece 2 of the octmux UI architecture redesign: the AskUserQuestion tool's options are committed to scrollback (Piece 2A) and the operator can answer with prose in addition to digit selection (Piece 2B). Piece 2 is renderer-independent and works identically under both --single (StdoutRenderer) and --multi-window (TmuxWindowRenderer) modes.
 ---
@@ -35,6 +35,17 @@ Strips `QuestionModal.tsx` to a pure display component: no `useInput`, no intern
 Routing logic at the top of `handleSubmit` (added BEFORE all slash-command parsing): if a question is pending, trim the buffer; if it matches `/^\d+$/` AND parses to 1..N (where N = options length), POST `currentQ.options[n-1].label`; otherwise POST the prose. For multi-question batches, the current slot (`currentSubIdx`) is populated and the rest are padded with empty `[]` arrays — matching opencode's canonical convention (`questionAnswers` at `cli/cmd/run/question.shared.ts:105-107`).
 
 Tactical fix during implementation: `handleQuestion` was relocated to be declared BEFORE `handleSubmit` in source order to avoid a React `useCallback` deps-array TDZ error ("Cannot access 'handleQuestion' before initialization").
+
+### 2026-06-08--08-34 — Stage 9.2 — Answer-summary scrollback line
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-08--08-34
+**Commit(s):** `<pending>`
+
+Adds `formatAnswerSummary(q, subIdx, total, rawText)` module-scope helper (next to `formatOptionsBlock`) that builds a `▶ Answered Q{i+1}/{N}…` summary string. For in-range digit picks, expands the digit to its full option line `{n}. {label} — {description}`, mirroring the shape used in `formatOptionsBlock`. For prose (out-of-range digit, plain text, multi-line), uses the verbatim trimmed text.
+
+In `handleSubmit`'s question-branch, replaces `renderer.commitUserInput(text)` (which produced a bare raw digit like `> 3` with no context) with `renderer.commitSystemMessage(formatAnswerSummary(...))`. The raw-text echo is suppressed; the new summary block is its sole replacement.
+
+The original `▷ Question N/M` options block (committed by Stage 9 Piece 2A) is untouched — it remains in immutable `<Static>` scrollback.
 
 ## Decisions (canonical list)
 
