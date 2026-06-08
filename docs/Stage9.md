@@ -39,7 +39,7 @@ Tactical fix during implementation: `handleQuestion` was relocated to be declare
 ### 2026-06-08--08-34 — Stage 9.2 — Answer-summary scrollback line
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-08--08-34
-**Commit(s):** `<pending>`
+**Commit(s):** `b3ecc86`
 
 Adds `formatAnswerSummary(q, subIdx, total, rawText)` module-scope helper (next to `formatOptionsBlock`) that builds a `▶ Answered Q{i+1}/{N}…` summary string. For in-range digit picks, expands the digit to its full option line `{n}. {label} — {description}`, mirroring the shape used in `formatOptionsBlock`. For prose (out-of-range digit, plain text, multi-line), uses the verbatim trimmed text.
 
