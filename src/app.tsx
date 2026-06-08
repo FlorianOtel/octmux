@@ -593,12 +593,6 @@ export function App(props: AppProps) {
             watcherRef.current?.notifyParentActivity(Date.now());
           }
         }
-        else if (ev.kind === "block-reconcile") {
-          // Stage 10.7 — authoritative full-text from OC's final
-          // message.part.updated. renderer.reconcileActiveText is idempotent
-          // and only fills in if active buf is shorter (never shrinks).
-          renderer.reconcileActiveText(ev.partID, ev.text);
-        }
         else if (ev.kind === "block-end") {
           renderer.endBlock(ev.partID, ev.status);
           if (ev.role === "thinking") setProcTimes(p => ({ ...p, thinking: null }));

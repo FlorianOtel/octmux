@@ -336,44 +336,6 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     }
   }
 
-  // Stage 10.7 — Sync the active text buffer with OC's authoritative full-text
-  // state from a final `message.part.updated` event. OC always emits this at
-  // text-end (processor.ts:826), with `part.text` carrying the complete
-  // accumulated text. If SSE deltas were lost in transit (or dropped in
-  // events.ts), the active buffer is short — this method fills in the tail.
-  //
-  // Idempotent and defensive:
-  // - No-op if partID isn't the current active text block.
-  // - No-op if `fullText` is byte-identical to `_activeTextBuf`.
-  // - No-op if `fullText.length <= _activeTextBuf.length` (don't shrink — trust
-  //   the deltas if they somehow ran ahead of the snapshot).
-  // - Cancels any pending debounce timer so no stale render fires after the
-  //   reconcile.
-  // - Emits a one-line stderr warning when the reconcile fills in a non-trivial
-  //   gap (≥ 32 chars) so operators can spot the underlying delta-loss bug if
-  //   it recurs, even though the user-visible symptom is now masked.
-  reconcileActiveText(partID: string, fullText: string): void {
-    if (this._activeTextPartID !== partID || this._activeBlockRole !== "text") return;
-    if (this._activeTextBuf === fullText) return;
-    if (fullText.length <= this._activeTextBuf.length) return;
-    const gap = fullText.length - this._activeTextBuf.length;
-    if (this._textDebounce !== null) {
-      clearTimeout(this._textDebounce);
-      this._textDebounce = null;
-    }
-    this._activeTextBuf = fullText;
-    this._activeBlockAnsi = this._renderActiveTextAnsi();
-    if (gap >= 32) {
-      try {
-        process.stderr.write(
-          `octmux: Stage 10.7 reconcile filled tail gap of ${gap} chars on partID=${partID} ` +
-          `(SSE delta loss — see docs/Stage10.md for instrumentation guidance)\n`
-        );
-      } catch { /* defensive — never let a logging failure break the render path */ }
-    }
-    this.emit("changed");
-  }
-
   private _commitActiveText(): void {
     if (this._activeTextPartID === null || this._activeBlockRole === null) return;
     // Split the LAST live-rendered ANSI on \n; commit each line as a CommittedLine.

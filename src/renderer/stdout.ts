@@ -38,15 +38,6 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
     // _activePart intentionally NOT cleared here — kept for block-transition detection.
   }
 
-  // Stage 10.7 — no-op for the legacy line-streaming renderer.
-  // StdoutRenderer commits each completed line as soon as it sees a `\n` (see
-  // appendToBlock below); there is no buffered active text to reconcile against
-  // OC's final state. Any delta loss results in immediate gaps in committed
-  // content. This branch only exists to satisfy the Renderer interface; in
-  // practice the unconditional renderer selector in src/index.tsx routes all
-  // --single mode traffic to BlockBufferRenderer, where reconcile is meaningful.
-  reconcileActiveText(_partID: string, _fullText: string): void { /* intentional no-op */ }
-
   beginBlock(partID: string, role: Role, _meta?: Block["meta"]): void {
     if (!this.visibility.isVisible(role)) return;
     const _outKey = OUTPUT_KEY[role];
