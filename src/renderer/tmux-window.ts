@@ -237,7 +237,6 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   getActiveBlock(): { role: Role; text: string } | null { return this._main.getActiveBlock(); }
   getActiveBlockAnsi(): string { return this._main.getActiveBlockAnsi(); }
   setWidth(width: number) { this._main.setWidth(width); }
-  setAvailableRows(rows: number): void { this._main.setAvailableRows(rows); }
 
   private _isSideRole(r: Role): boolean { return SIDE_ROLES.includes(r); }
 }

@@ -29,8 +29,6 @@ import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
 //   one-time warning and set `chalk.level = 0` (no-color path). marked-terminal
 //   still renders structurally; chalk-applied styles emit no escape codes.
 
-const CHROME_ROWS = 6; // Rule(1)+Input(1)+Rule(1)+StatusLine(1)+marginBottom(2)
-
 let _chalkFallbackWarned = false;
 
 function _setupChalkLevel(): void {
@@ -88,7 +86,6 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   private _activeBlockRole: Role | null = null;
   private _nonTextTail: { role: Role; text: string } | null = null;
   private _width = 80;
-  private _availableRows = 80 - CHROME_ROWS;
   private _outputEnabled = new Map<string, boolean>();
   private _marked: Marked;
   // Stage 10.4 — 100 ms trailing-edge debounce for text-role intra-line bursts.
@@ -212,7 +209,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         this._activeBlockAnsi = this._renderActiveTextAnsi();
         this.emit("changed");
         // Stage 10.8: incremental-commit boundary check
-        const _b1 = this._findCommitBoundary(this._activeTextBuf, this._availableRows);
+        const _b1 = this._findCommitBoundary(this._activeTextBuf);
         if (_b1 > 0) this._incrementalCommit(_b1);
       }
       // Always schedule a trailing-edge timer — handles the burst case AND
@@ -229,7 +226,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         this._activeBlockAnsi = this._renderActiveTextAnsi();
         this.emit("changed");
         // Stage 10.8: incremental-commit boundary check
-        const _b2 = this._findCommitBoundary(this._activeTextBuf, this._availableRows);
+        const _b2 = this._findCommitBoundary(this._activeTextBuf);
         if (_b2 > 0) this._incrementalCommit(_b2);
       }, 100);
     } else {
@@ -352,14 +349,16 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     }
   }
 
-  // Stage 10.8 — boundary detector for incremental commit.
-  // Walks the buffer line-by-line, tracking fence state and looking for safe commit points.
-  // Returns the byte offset (exclusive) of the last safe boundary, or -1 if none found.
-  private _findCommitBoundary(buf: string, availRows: number): number {
-    const halfRows = Math.floor(availRows / 2);
-    const fullRows = availRows;
-    const renderedLineCount = this._activeBlockAnsi.split("\n").length;
-
+  // Stage 10.8 (FIX-loop) — semantic-boundary commit detector.
+  // Walks the buffer line-by-line tracking fence state and looking for safe commit
+  // points outside fenced code blocks. Returns the byte offset (exclusive) of the
+  // last safe boundary, or -1 if none found.
+  //
+  // NO size-based thresholds: the renderer must not depend on terminal geometry
+  // (layering violation; operator pushback after Reviewer FIX round 1). Pathological
+  // inputs (single paragraph or fenced code block exceeding terminal height) may
+  // still trigger Ink's clearTerminal overflow — documented limitation.
+  private _findCommitBoundary(buf: string): number {
     let lastBoundary = -1;
     let lineStart = 0;
     let prevLineWasEmpty = false;
@@ -369,7 +368,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         const line = buf.slice(lineStart, i);
         const lineIsEmpty = line.trim() === "";
 
-        // Update fence state: detect opening and closing fences
+        // Update fence state (opening / closing)
         const fenceOpenMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
         if (!this._fenceOpen && fenceOpenMatch) {
           this._fenceOpen = true;
@@ -382,25 +381,18 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
           this._fenceOpen = false;
         }
 
-        // Skip boundary detection if inside a fence
+        // Boundary tests (outside fence only)
         if (!this._fenceOpen) {
-          // (a) Horizontal rule boundary — ALWAYS a safe commit point (outside fence)
+          // (a) Horizontal rule — ALWAYS a safe commit
           if (/^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-            lastBoundary = i + 1; // Include the newline
+            lastBoundary = i + 1; // include trailing \n
           }
-          // (b) Paragraph boundary: previous line was empty (we just passed a blank line)
-          // and this line is not empty (we're entering new content).
-          // This detects the transition from blank-line separator to content.
-          // ONLY if renderedLineCount >= halfRows.
-          else if (prevLineWasEmpty && !lineIsEmpty && renderedLineCount >= halfRows) {
-            lastBoundary = lineStart; // Commit up to (but not including) the current content line
+          // (b) Paragraph boundary: previous line was empty AND this line is NOT empty
+          // (we just transitioned from a blank-line separator to new content).
+          // ALWAYS commit (no size gate per Design A).
+          else if (prevLineWasEmpty && !lineIsEmpty) {
+            lastBoundary = lineStart;
           }
-        }
-
-        // (c) Hard fallback: if renderedLineCount >= fullRows, commit at next \n
-        if (renderedLineCount >= fullRows) {
-          lastBoundary = i + 1; // Include the newline
-          break;
         }
 
         lineStart = i + 1;
@@ -533,5 +525,4 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     return "";
   }
   setWidth(width: number): void { this._width = width; }
-  setAvailableRows(rows: number): void { this._availableRows = rows; }
 }

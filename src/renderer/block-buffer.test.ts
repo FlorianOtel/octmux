@@ -451,7 +451,6 @@ describe("BlockBufferRenderer", () => {
 
     test("10.8.1 HR boundary commit (conservative)", () => {
       const r = new BlockBufferRenderer(new Visibility());
-      r.setAvailableRows(20);
       r.beginBlock("p", "text");
       r.appendToBlock("p", "para1 line\n\n---\n\npara2 line\n");
       const committed = r.getCommitted();
@@ -477,46 +476,22 @@ describe("BlockBufferRenderer", () => {
       expect(r.getActiveBlock()).toBeNull();
     });
 
-    test("10.8.3 Paragraph boundary BELOW half-threshold does NOT commit", () => {
+    test("10.8.4 paragraph boundary always commits (no size gate)", () => {
       const r = new BlockBufferRenderer(new Visibility());
-      r.setAvailableRows(30);  // halfRows = 15
       r.beginBlock("p", "text");
-      // Feed a small amount: a single paragraph + paragraph break + another small paragraph.
-      r.appendToBlock("p", "short para 1\n\nshort para 2\n");
-      // The \n\n boundary fires but rendered line count is well below 15.
-      expect(r.getCommitted()).toEqual([]);
+      r.appendToBlock("p", "para1 line\n\npara2 line\n");
+      // After the \n\n boundary, _committed should be non-empty.
+      expect(r.getCommitted().length).toBeGreaterThan(0);
+      const allText = r.getCommitted().map(c => c.ansi).join("\n");
+      expect(allText).toContain("para1 line");
+      const active = r.getActiveBlock();
+      expect(active).not.toBeNull();
+      expect(active!.text).toContain("para2 line");
     });
 
-    test("10.8.4 Paragraph boundary ABOVE half-threshold triggers commit", () => {
-      const r = new BlockBufferRenderer(new Visibility());
-      r.setAvailableRows(10);  // halfRows = 5
-      r.beginBlock("p", "text");
-      // Force renderedLineCount above 5 by feeding many short paragraphs each separated by \n\n.
-      // marked renders each paragraph as one wrapped line + blank line between paragraphs.
-      const para = "Some text content here.";
-      let s = "";
-      for (let i = 0; i < 6; i++) s += para + "\n\n";
-      s += "trigger more\n";
-      r.appendToBlock("p", s);
-      expect(r.getCommitted().length).toBeGreaterThan(0);
-    });
-
-    test("10.8.5 Hard fallback at fullRows commits at next \\n", () => {
-      const r = new BlockBufferRenderer(new Visibility());
-      r.setAvailableRows(6);  // fullRows = 6
-      r.beginBlock("p", "text");
-      // Feed 8 short single-line paragraphs separated by single \n (no blank lines).
-      // marked renders consecutive non-blank lines as a single paragraph — so we need
-      // \n\n to force separate rendered paragraphs (and thus more rendered lines).
-      let s = "";
-      for (let i = 0; i < 8; i++) s += `Line ${i}\n\n`;
-      r.appendToBlock("p", s);
-      expect(r.getCommitted().length).toBeGreaterThan(0);
-    });
 
     test("10.8.6 Fence-aware: \\n\\n INSIDE code fence does NOT commit", () => {
       const r = new BlockBufferRenderer(new Visibility());
-      r.setAvailableRows(4);  // halfRows = 2, fullRows = 4
       r.beginBlock("p", "text");
       // Feed code fence with internal blank line, then content after fence.
       r.appendToBlock("p", "```\nline1\n\nline2\n```\n");
@@ -543,12 +518,14 @@ describe("BlockBufferRenderer", () => {
     });
 
     test("10.8.7 C1.4 byte-equality after incremental commits on real source file", async () => {
+      // C1.4 invariant: totalCommitted must equal one-shot parse of the full source.
+      // This test runs against the real file used in the main C1.4 test to ensure
+      // incremental commits don't break the invariant. Whether or not incremental
+      // commits actually fire depends on the file's structure — that's OK; the
+      // invariant holds regardless (if incremental commits fire, totalCommitted is
+      // their sum; if they don't, it's just the endBlock commit).
       const source = await Bun.file("/var/tmp/render-this-as-markdown.md").text();
       const r = new BlockBufferRenderer(new Visibility());
-      // Use a generous availRows to avoid hard-fallback mid-structure.
-      // This test verifies the C1.4 byte-equality invariant is preserved even when
-      // incremental commits happen at semantic boundaries (HR, paragraph transitions).
-      r.setAvailableRows(80);  // Enough rows to avoid hard-fallback on typical files.
       r.beginBlock("c14", "text");
       const chunkSize = 64;
       for (let i = 0; i < source.length; i += chunkSize) {

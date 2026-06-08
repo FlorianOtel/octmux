@@ -148,17 +148,11 @@ export function App(props: AppProps) {
 
   const { stdout } = useStdout();
   const w = stdout?.columns ?? 80;
-  const termRows = stdout?.rows ?? 24;
 
   // Thread column width into the renderer for markdown wrap
   useEffect(() => {
     renderer.setWidth(w);
   }, [w, renderer]);
-
-  // Thread terminal rows into the renderer for incremental-commit boundary detection
-  useEffect(() => {
-    renderer.setAvailableRows(termRows - 6);  // 6 = chrome
-  }, [termRows, renderer]);
 
   // Subscribe to renderer state — new array reference on every commit means React detects changes.
   const committed = useSyncExternalStore(
