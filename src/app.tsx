@@ -802,6 +802,11 @@ export function App(props: AppProps) {
           stream = fresh.stream;
           // One-shot reconciliation pass after reconnect
           await runReconcilerPassRef.current?.();
+          // Stage 10.4 — SSE-reconnect repaint hook. The reconciler may have
+          // mutated `_committed` (via clearAll + replay) and the active region
+          // needs a re-render at the new state. Closes the C1.9 SSE-reconnect
+          // repaint gap.
+          props.onRedraw?.();
         } catch {
           // retry after backoff
         }

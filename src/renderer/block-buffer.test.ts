@@ -201,7 +201,10 @@ describe("BlockBufferRenderer", () => {
     test("heading renders with cyan-bold ANSI (chalk.cyan.bold)", () => {
       const renderer = new BlockBufferRenderer(new Visibility());
       renderer.beginBlock("h-part", "text");
-      renderer.appendToBlock("h-part", "# Heading One");
+      // Stage 10.4: include trailing \n to trigger flush-on-\n (debounce
+      // would otherwise hold the render for ~100 ms). The markdown construct
+      // (heading) is unchanged.
+      renderer.appendToBlock("h-part", "# Heading One\n");
       const ansi = renderer.getActiveBlockAnsi();
       // chalk.cyan = \x1b[36m, chalk.bold = \x1b[1m
       expect(ansi).toContain("\x1b[36m");
@@ -240,13 +243,121 @@ describe("BlockBufferRenderer", () => {
     test("blockquote renders with gray-italic ANSI (chalk.gray.italic)", () => {
       const renderer = new BlockBufferRenderer(new Visibility());
       renderer.beginBlock("quote-part", "text");
-      renderer.appendToBlock("quote-part", "> A quoted line");
+      // Stage 10.4: include trailing \n to trigger flush-on-\n (debounce
+      // would otherwise hold the render for ~100 ms). Markdown unchanged.
+      renderer.appendToBlock("quote-part", "> A quoted line\n");
       const ansi = renderer.getActiveBlockAnsi();
       // chalk.gray = \x1b[90m, chalk.italic = \x1b[3m
       expect(ansi).toContain("\x1b[90m");
       expect(ansi).toContain("\x1b[3m");
       expect(ansi).toContain("quoted line");
       renderer.endBlock("quote-part", "ok");
+    });
+  });
+
+  describe("Step 1.4 — Debounce", () => {
+    test("100 ms trailing-edge debounce: non-newline delta defers render until timer fires", async () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "debounce-part-1";
+      try {
+        renderer.beginBlock(partID, "text");
+
+        // (a) append a non-newline delta — should NOT trigger an immediate render.
+        renderer.appendToBlock(partID, "hello");
+
+        // (b) _activeBlockAnsi is still empty (debounce holds the render).
+        //     The buffer is updated, but the rendered ANSI string is not yet.
+        expect(renderer.getActiveBlockAnsi()).toBe("");
+        // Sanity: the active block buffer DOES contain the text.
+        expect(renderer.getActiveBlock()?.text).toBe("hello");
+
+        // (c) wait 110 ms for the trailing-edge timer to fire.
+        await new Promise(r => setTimeout(r, 110));
+
+        // (d) now the live ANSI should be the formatted "hello".
+        const ansiAfterFirst = renderer.getActiveBlockAnsi();
+        expect(ansiAfterFirst).not.toBe("");
+        expect(ansiAfterFirst).toContain("hello");
+
+        // (e) fire two rapid non-newline appends. The first call's timer
+        //     should be cancelled by the second call's reset.
+        renderer.appendToBlock(partID, " world");
+        renderer.appendToBlock(partID, "!");
+
+        // The render is still deferred — the second append cancelled the
+        // timer scheduled by the first and scheduled its own.
+        // _activeBlockAnsi still reflects the previous render of "hello".
+        expect(renderer.getActiveBlockAnsi()).toBe(ansiAfterFirst);
+
+        // (f) wait 110 ms for the second timer to fire.
+        await new Promise(r => setTimeout(r, 110));
+
+        // (g) live ANSI now contains the full "hello world!" — the first
+        //     timer fired once (after step c) and the second timer fired
+        //     once (after step f). The interleaved appends did NOT cause
+        //     two extra renders.
+        const ansiAfterSecond = renderer.getActiveBlockAnsi();
+        expect(ansiAfterSecond).toContain("hello world!");
+        expect(renderer.getActiveBlock()?.text).toBe("hello world!");
+      } finally {
+        // Test-isolation cleanup: cancel any leftover timer so a failing
+        // assertion above doesn't leak a timer into the next test.
+        if (renderer._textDebounce !== null) {
+          clearTimeout(renderer._textDebounce);
+          renderer._textDebounce = null;
+        }
+      }
+    });
+
+    test("flush-on-newline: a delta containing \\n triggers immediate render", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "debounce-part-2";
+      try {
+        renderer.beginBlock(partID, "text");
+        // A delta WITH a newline must render immediately (no wait needed).
+        renderer.appendToBlock(partID, "first line\n");
+        const ansi = renderer.getActiveBlockAnsi();
+        expect(ansi).not.toBe("");
+        expect(ansi).toContain("first line");
+      } finally {
+        if (renderer._textDebounce !== null) {
+          clearTimeout(renderer._textDebounce);
+          renderer._textDebounce = null;
+        }
+      }
+    });
+
+    test("endBlock pre-flush captures latest live ANSI even mid-debounce (C1.4 preserved)", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "debounce-part-3";
+      try {
+        renderer.beginBlock(partID, "text");
+        // Non-newline delta — debounce holds the render.
+        renderer.appendToBlock(partID, "mid-debounce content");
+        // _activeBlockAnsi is empty (no flush-on-\n, no timer fire yet).
+        expect(renderer.getActiveBlockAnsi()).toBe("");
+
+        // endBlock arrives within the 100 ms window — pre-flush must
+        // synchronously render so the commit captures the latest ANSI.
+        const committedBefore = renderer.getCommitted().length;
+        renderer.endBlock(partID, "ok");
+        const committedAfter = renderer.getCommitted();
+        const newlyCommitted = committedAfter.slice(committedBefore);
+        const joined = newlyCommitted.map(l => l.ansi).join("\n");
+
+        // The committed ANSI must contain the buffered text — proving the
+        // pre-flush fired and `_commitActiveText` split a non-stale string.
+        expect(joined).toContain("mid-debounce content");
+        // No leftover timer (pre-flush clears it).
+        expect(renderer._textDebounce).toBeNull();
+        // Active block is gone.
+        expect(renderer.getActiveBlock()).toBeNull();
+      } finally {
+        if (renderer._textDebounce !== null) {
+          clearTimeout(renderer._textDebounce);
+          renderer._textDebounce = null;
+        }
+      }
     });
   });
 

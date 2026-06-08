@@ -2,7 +2,7 @@
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
 updated_by: sohoai/glm-5.1
-updated_at: 2026-06-07--23-45
+updated_at: 2026-06-08--02-08
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -104,4 +104,52 @@ This step verifies that `TmuxWindowRenderer` correctly wires `BlockBufferRendere
 **Smoke verification:** End-to-end `--multi-window` flow verified. No flag required — `TmuxWindowRenderer` unconditionally uses `BlockBufferRenderer` as `_main`.
 
 **Test result:** 91 pass, 0 fail across 6 files (no code changes in 10.3).
+
+### 2026-06-08--02-08 — Stage 10.4 — Debounce + SIGWINCH/reconnect repaint
+
+**Implemented by:** Actor (sohoai/glm-5.1) via /brain — 2026-06-08--02-08
+**Commit(s):** TBD
+
+Stage 10.4 closes Piece 1 of the block-renderer plan with three coupled improvements: a 100 ms trailing-edge debounce on text-role intra-line burst storms, flush-on-`\n` for live UX, and repaint hooks for terminal resize (SIGWINCH) and SSE reconnect.
+
+**Operator-visible "Stage 10 complete" milestone:** Block-buffered markdown rendering is now feature-complete on `feat/block-renderer`. Active region buffers multi-line text, renders through marked + marked-terminal, handles intra-line storms without over-rendering, repaints cleanly on resize, and survives SSE reconnect without stale geometry. Merge to `main` remains the operator-visibility gate.
+
+**1. 100 ms trailing-edge debounce + flush-on-`\n` in `appendToBlock` (text role):**
+- New private field `_textDebounce: ReturnType<typeof setTimeout> | null` on `BlockBufferRenderer`.
+- On each text-role delta in `appendToBlock`:
+  1. Cancel any pending trailing-edge timer (`clearTimeout` + null).
+  2. Append delta to `_activeTextBuf`.
+  3. If the delta `text.includes("\n")`, synchronously render + emit `changed` IMMEDIATELY — the flush-on-`\n` invariant keeps live UX responsive (operators see new lines as they complete, not after a 100 ms delay).
+  4. ALWAYS schedule a new 100 ms timer that, when it fires, renders + emits.
+- Net effect: small intra-line bursts (no `\n`) are throttled to one render per 100 ms; line completions are live. Non-text roles (`thinking`, `tool-call`, `tool-result`, `user`, `error`) are unchanged — they line-stream per-byte through `formatLine`, which is already fast.
+- The `_activeBlockAnsi` field is the cached live render. Between flushes, it may be stale; consumers see fresh data via the `changed` emit (which fires on flush-on-`\n` and on the trailing-edge timer).
+
+**2. Debounce pre-flush in every commit-path lifecycle method:**
+- New private helper `_flushDebounce()`: if a timer is pending, `clearTimeout`, null it, and synchronously call `_renderActiveTextAnsi()` to update `_activeBlockAnsi` to the latest live render. No emit (the lifecycle caller emits anyway).
+- Called as the FIRST statement in: `beginBlock` (text-block-transition path), `endBlock` (text role), `commitTurnEnd`, `commitUserInput`, `commitSystemMessage`, `commitError`, `clearAll`, `dispose`.
+- This is the load-bearing piece for the **C1.4 invariant**: when `_commitActiveText()` runs, it splits the SAME stored `_activeBlockAnsi` that the live ANSI consumer would see — the pre-flush guarantees this string reflects the most recent `_activeTextBuf`, including any deltas received within the open 100 ms debounce window. No re-render at commit time; the commit path remains byte-equal-by-construction to the live path.
+
+**3. SIGWINCH repaint hook (`src/index.tsx`):**
+- `process.on("SIGWINCH", onRedraw)` registered after `onRedraw` closure is wired (`inkRaw.log.clear()` + `lastOutput = ""` + `onRender()`).
+- `process.on("exit", ...)` paired handler removes the SIGWINCH listener cleanly on shutdown.
+- Terminal resize → SIGWINCH → `onRedraw` fires → bounded active region repaints at the new width. The `useEffect(...renderer.setWidth(w), [w, renderer])` in `<App>` (driven by `useStdout().columns`) handles the width update on the React side; SIGWINCH is the kernel-level signal that propagates through both paths.
+
+**4. SSE-reconnect repaint hook (`src/app.tsx`):**
+- In the SSE reconnect block (`catch` → `props.client.global.event({})` + `await runReconcilerPassRef.current?.()`), added `props.onRedraw?.()` after the reconciler pass.
+- The reconciler may have mutated `_committed` via `clearAll` + replay; the active region needs a re-render at the new state. Closes the C1.9 SSE-reconnect repaint gap.
+
+**Test additions (`src/renderer/block-buffer.test.ts`):**
+- New `describe` block `"Step 1.4 — Debounce"` with three tests:
+  1. **Trailing-edge debounce test (the plan's step 24 case):** `appendToBlock(partID, "hello")` — assert `getActiveBlockAnsi() === ""` (debounce holds); wait 110 ms; assert `getActiveBlockAnsi()` now contains "hello"; rapid `" world"` + `"!"` appends; assert ANSI is still the previous render; wait 110 ms; assert ANSI is "hello world!". `finally` block clears `_textDebounce` for test isolation.
+  2. **Flush-on-`\n` test:** delta with `\n` triggers immediate render (no wait needed).
+  3. **endBlock pre-flush test:** mid-debounce `endBlock` arrival — assert pre-flush captures the latest buffer + commits a non-stale string; `_textDebounce` is null after; C1.4 preserved.
+- Two pre-existing 1.2 markdown-construct tests updated: `"# Heading One"` → `"# Heading One\n"` and `"> A quoted line"` → `"> A quoted line\n"`. The trailing newline triggers flush-on-`\n` so the synchronous `getActiveBlockAnsi()` assertion remains valid. The markdown construct under test (heading, blockquote) is unchanged.
+
+**`getActiveBlockAnsi()` contract note:** Under Stage 10.4 debounce, the getter may return ANSI up to 100 ms stale between non-newline deltas. This is intentional and documented in-line — Ink's `useSyncExternalStore` only calls the getter on `changed` emits, and emits fire on flush-on-`\n` (immediate) and on the trailing-edge timer (~100 ms after the last delta), so the displayed ANSI is always synchronised with the last `changed` emit. The C1.4 invariant test reads `getActiveBlockAnsi()` after a sequence of newline-bearing chunks (the source file `/var/tmp/render-this-as-markdown.md` ends in `\n\n`), so the final chunk's flush-on-`\n` keeps it fresh; the invariant holds.
+
+**Test result:** 94 pass, 0 fail across 6 files (16 in `block-buffer.test.ts`: 13 from 10.1/10.2 + 3 new debounce tests).
+
+**Build:** `dist/octmux` rebuilt successfully (833 modules — unchanged from 10.3; no new dependencies, only new code).
+
+**Out of scope (preserved for later stages):** `getCommitted()` write semantics, reconciler clear+replay during SSE reconnect (already implemented in app.tsx pre-Stage 10), per-role render dispatching beyond text/non-text fence.
 

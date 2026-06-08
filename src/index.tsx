@@ -364,3 +364,12 @@ onRedraw = () => {
   inkRaw.lastOutput = "";
   inkRaw.onRender();
 };
+
+// Stage 10.4 — SIGWINCH repaint hook. Terminal resize fires SIGWINCH; the
+// bounded active region needs a fresh paint at the new width. The width
+// change also flows through `useStdout().columns` → the `useEffect(...
+// renderer.setWidth(w), [w, renderer])` in <App>, which re-renders the
+// active block at the new width. We route through the same `onRedraw`
+// closure as Ctrl-l: `inkRaw.log.clear()` + `lastOutput=""` + `onRender()`.
+process.on("SIGWINCH", onRedraw);
+process.on("exit", () => { try { process.off("SIGWINCH", onRedraw); } catch {} });

@@ -88,6 +88,15 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   private _width = 80;
   private _outputEnabled = new Map<string, boolean>();
   private _marked: Marked;
+  // Stage 10.4 — 100 ms trailing-edge debounce for text-role intra-line bursts.
+  // Newlines flush immediately (operators see new lines as they complete); the
+  // trailing-edge timer covers intra-line burst storms without over-rendering.
+  // Non-text roles are unchanged (per-line streaming is already fast).
+  // C1.4 invariant: every lifecycle method that may commit (endBlock text,
+  // commitTurnEnd, commitUserInput, commitSystemMessage, commitError, clearAll,
+  // dispose) pre-flushes this timer + re-renders synchronously so the SAME
+  // `_activeBlockAnsi` that `_commitActiveText()` splits is the latest live ANSI.
+  private _textDebounce: ReturnType<typeof setTimeout> | null = null;
 
   constructor(visibility: Visibility) {
     super();
@@ -129,6 +138,9 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     // Block transition: if we're entering a new text block while another is open,
     // auto-flush the prior text block as a side-effect (defensive).
     if (this._activeTextPartID !== null && this._activeTextPartID !== partID && role === "text") {
+      // Stage 10.4: pre-flush debounce so the prior block's commit uses its
+      // latest live ANSI.
+      this._flushDebounce();
       this._commitActiveText();
     }
   }
@@ -146,6 +158,12 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     if (_outKey && !this.isOutputEnabled(_outKey)) return;
 
     if (role === "text") {
+      // Stage 10.4 — debounce + flush-on-\n. Clear any pending trailing-edge
+      // timer (a fresh delta resets the 100 ms window).
+      if (this._textDebounce !== null) {
+        clearTimeout(this._textDebounce);
+        this._textDebounce = null;
+      }
       // First delta of a new text block
       if (this._activeTextPartID === null) {
         this._activeTextPartID = partID;
@@ -153,9 +171,28 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
       }
       // Append to the FULL buffer — do NOT split or commit during appendToBlock
       this._activeTextBuf += text;
-      // Re-render the FULL buffer to ANSI
-      this._activeBlockAnsi = this._renderActiveTextAnsi();
-      this.emit("changed");
+      // Flush-on-\n: if this delta completes one or more lines, render + emit
+      // IMMEDIATELY so operators see new lines as soon as they complete (C1.8 +
+      // UX requirement). Intra-line bursts (no \n in delta) skip this and rely
+      // on the trailing-edge timer below.
+      if (text.includes("\n")) {
+        this._activeBlockAnsi = this._renderActiveTextAnsi();
+        this.emit("changed");
+      }
+      // Always schedule a trailing-edge timer — handles the burst case AND
+      // catches the final intra-line tail when the operator stops typing /
+      // the stream stops mid-line. The timer fires at most once per 100 ms
+      // because the next delta clears it.
+      this._textDebounce = setTimeout(() => {
+        this._textDebounce = null;
+        // Defensive: only render if the active text block still exists.
+        // Lifecycle methods always pre-flush + clear the timer before
+        // resetting state, so this should always be true when the timer
+        // fires — but guard anyway in case of an unexpected ordering.
+        if (this._activeBlockRole === null) return;
+        this._activeBlockAnsi = this._renderActiveTextAnsi();
+        this.emit("changed");
+      }, 100);
     } else {
       // Non-text roles: replicate StdoutRenderer's line-streaming
       let buf = text;
@@ -184,7 +221,11 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
       return;
     }
     if (role && this.visibility.isVisible(role) && this._activeTextPartID === partID) {
-      // C1.4 invariant: use the LAST live-rendered ANSI; do NOT re-render here.
+      // Stage 10.4: pre-flush any pending debounce so `_activeBlockAnsi` is the
+      // latest live render before _commitActiveText splits it. C1.4 invariant
+      // is preserved: the commit uses the SAME (now-current) live ANSI; no
+      // re-render at commit time.
+      this._flushDebounce();
       this._commitActiveText();
     }
     this._openBlocks.delete(partID);
@@ -192,7 +233,8 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   }
 
   commitTurnEnd(): void {
-    // Flush active text block first
+    // Stage 10.4: pre-flush debounce + flush active text block.
+    this._flushDebounce();
     if (this._activeTextPartID !== null) {
       this._commitActiveText();
     }
@@ -208,7 +250,8 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   }
 
   commitUserInput(text: string): void {
-    // Flush active text block first
+    // Stage 10.4: pre-flush debounce + flush active text block.
+    this._flushDebounce();
     if (this._activeTextPartID !== null) {
       this._commitActiveText();
     }
@@ -221,7 +264,8 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   }
 
   commitSystemMessage(text: string): void {
-    // Flush active text block first
+    // Stage 10.4: pre-flush debounce + flush active text block.
+    this._flushDebounce();
     if (this._activeTextPartID !== null) {
       this._commitActiveText();
     }
@@ -234,7 +278,8 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   }
 
   commitError(message: string): void {
-    // Flush active text block first
+    // Stage 10.4: pre-flush debounce + flush active text block.
+    this._flushDebounce();
     if (this._activeTextPartID !== null) {
       this._commitActiveText();
     }
@@ -247,6 +292,25 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
       ansi: formatLine("error", message, true),
     }];
     this.emit("changed");
+  }
+
+  // Stage 10.4 — debounce pre-flush. Called from every lifecycle method that
+  // may commit, clear, or dispose the active text block. Cancels any pending
+  // trailing-edge timer and synchronously updates `_activeBlockAnsi` to reflect
+  // the latest `_activeTextBuf`. This is the load-bearing piece for the C1.4
+  // invariant: the SAME `_activeBlockAnsi` that `_commitActiveText()` splits is
+  // the latest live ANSI, guaranteed byte-equal-by-construction to what an
+  // immediate full re-render would produce.
+  private _flushDebounce(): void {
+    if (this._textDebounce !== null) {
+      clearTimeout(this._textDebounce);
+      this._textDebounce = null;
+      // Re-render synchronously so `_activeBlockAnsi` is up-to-date.
+      // Guard: only render if there is still an active text block (defensive).
+      if (this._activeBlockRole !== null) {
+        this._activeBlockAnsi = this._renderActiveTextAnsi();
+      }
+    }
   }
 
   private _commitActiveText(): void {
@@ -269,7 +333,8 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   }
 
   clearAll(): void {
-    // Flush active text block first
+    // Stage 10.4: pre-flush debounce so no stale timer fires after clearAll.
+    this._flushDebounce();
     if (this._activeTextPartID !== null) {
       this._commitActiveText();
     }
@@ -284,7 +349,9 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   }
 
   async dispose(): Promise<void> {
-     // Flush active text block
+     // Stage 10.4: pre-flush debounce + flush active text block. No stale
+     // timer should fire after dispose.
+     this._flushDebounce();
      if (this._activeTextPartID !== null) {
        this._commitActiveText();
      }
@@ -309,7 +376,12 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   }
   getActiveBlockAnsi(): string {
     if (this._activeTextPartID === null || this._activeBlockRole === null) return "";
-    // For text role, return the live-rendered ANSI
+    // For text role, return the live-rendered ANSI. Note: under Stage 10.4
+    // debounce, this may be stale by up to 100 ms between non-newline deltas;
+    // Ink's `useSyncExternalStore` only calls this getter on `changed` emits,
+    // and emits fire either on flush-on-\n (immediate) or on the trailing-edge
+    // timer (~100 ms after the last delta), so the displayed ANSI is always
+    // synchronised with the last `changed` emit.
     if (this._activeBlockRole === "text") {
       return this._activeBlockAnsi;
     }
