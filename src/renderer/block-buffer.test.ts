@@ -256,46 +256,50 @@ describe("BlockBufferRenderer", () => {
   });
 
   describe("Step 1.4 — Debounce", () => {
-    test("100 ms trailing-edge debounce: non-newline delta defers render until timer fires", async () => {
+    test("100 ms trailing-edge debounce: non-newline delta defers emit until timer fires", async () => {
       const renderer = new BlockBufferRenderer(new Visibility());
       const partID = "debounce-part-1";
+      // Stage 11.1: getActiveBlockAnsi() lazy-flushes on read, so we
+      // can't use it as a probe for "no automatic render happened yet".
+      // Count `changed` emits instead — the underlying contract.
+      let emitCount = 0;
+      renderer.on("changed", () => { emitCount++; });
       try {
         renderer.beginBlock(partID, "text");
 
-        // (a) append a non-newline delta — should NOT trigger an immediate render.
+        // (a) append a non-newline delta — should NOT trigger an immediate emit.
         renderer.appendToBlock(partID, "hello");
 
-        // (b) _activeBlockAnsi is still empty (debounce holds the render).
-        //     The buffer is updated, but the rendered ANSI string is not yet.
-        expect(renderer.getActiveBlockAnsi()).toBe("");
+        // (b) no emit yet — debounce holds it.
+        expect(emitCount).toBe(0);
         // Sanity: the active block buffer DOES contain the text.
         expect(renderer.getActiveBlock()?.text).toBe("hello");
 
         // (c) wait 110 ms for the trailing-edge timer to fire.
         await new Promise(r => setTimeout(r, 110));
 
-        // (d) now the live ANSI should be the formatted "hello".
+        // (d) the timer has fired exactly once, emitting one `changed`.
+        //     Live ANSI now contains the formatted "hello".
+        expect(emitCount).toBe(1);
         const ansiAfterFirst = renderer.getActiveBlockAnsi();
         expect(ansiAfterFirst).not.toBe("");
         expect(ansiAfterFirst).toContain("hello");
 
         // (e) fire two rapid non-newline appends. The first call's timer
-        //     should be cancelled by the second call's reset.
+        //     should be cancelled by the second call's reset, so still
+        //     only one PENDING timer (and no extra emits in the meantime).
+        const emitCountBefore = emitCount;
         renderer.appendToBlock(partID, " world");
         renderer.appendToBlock(partID, "!");
-
-        // The render is still deferred — the second append cancelled the
-        // timer scheduled by the first and scheduled its own.
-        // _activeBlockAnsi still reflects the previous render of "hello".
-        expect(renderer.getActiveBlockAnsi()).toBe(ansiAfterFirst);
+        expect(emitCount).toBe(emitCountBefore); // no extra emit yet
 
         // (f) wait 110 ms for the second timer to fire.
         await new Promise(r => setTimeout(r, 110));
 
-        // (g) live ANSI now contains the full "hello world!" — the first
-        //     timer fired once (after step c) and the second timer fired
-        //     once (after step f). The interleaved appends did NOT cause
-        //     two extra renders.
+        // (g) exactly one more emit fired (the second timer); live ANSI
+        //     now contains the full "hello world!" — the interleaved
+        //     appends did NOT cause two extra renders.
+        expect(emitCount).toBe(emitCountBefore + 1);
         const ansiAfterSecond = renderer.getActiveBlockAnsi();
         expect(ansiAfterSecond).toContain("hello world!");
         expect(renderer.getActiveBlock()?.text).toBe("hello world!");
@@ -332,10 +336,20 @@ describe("BlockBufferRenderer", () => {
       const partID = "debounce-part-3";
       try {
         renderer.beginBlock(partID, "text");
-        // Non-newline delta — debounce holds the render.
+        // Non-newline delta — internal `_activeBlockAnsi` is held by the
+        // debounce timer (no automatic flush-on-\n, no timer fire yet).
         renderer.appendToBlock(partID, "mid-debounce content");
-        // _activeBlockAnsi is empty (no flush-on-\n, no timer fire yet).
-        expect(renderer.getActiveBlockAnsi()).toBe("");
+
+        // Stage 11.1: getActiveBlockAnsi() lazy-flushes on read, so a
+        // consumer that calls it mid-debounce sees the up-to-date ANSI
+        // (NOT "" as it returned pre-Stage-11.1). This is the explicit
+        // call-time C1.4 freshness property.
+        expect(renderer.getActiveBlockAnsi()).toContain("mid-debounce content");
+
+        // Re-arm the debounce path for the endBlock pre-flush assertion:
+        // the lazy flush above cleared the timer; a fresh delta schedules
+        // a new one so we can verify endBlock pre-flushes it.
+        renderer.appendToBlock(partID, " trailing");
 
         // endBlock arrives within the 100 ms window — pre-flush must
         // synchronously render so the commit captures the latest ANSI.
@@ -345,9 +359,11 @@ describe("BlockBufferRenderer", () => {
         const newlyCommitted = committedAfter.slice(committedBefore);
         const joined = newlyCommitted.map(l => l.ansi).join("\n");
 
-        // The committed ANSI must contain the buffered text — proving the
-        // pre-flush fired and `_commitActiveText` split a non-stale string.
+        // The committed ANSI must contain BOTH the original delta and
+        // the trailing delta — proving the pre-flush fired and
+        // `_commitActiveText` split a non-stale string.
         expect(joined).toContain("mid-debounce content");
+        expect(joined).toContain("trailing");
         // No leftover timer (pre-flush clears it).
         expect(renderer._textDebounce).toBeNull();
         // Active block is gone.
@@ -452,6 +468,32 @@ describe("BlockBufferRenderer", () => {
       //   liveAnsi === commitPathAnsi  AND  committedAnsiJoined === liveAnsi
       expect(liveAnsi).toBe(commitPathAnsi);
       expect(committedAnsiJoined).toBe(liveAnsi);
+    });
+  });
+
+  describe("Stage 11 — _commitActiveText array-replace (Change 2)", () => {
+    test("getCommitted() reference changes after _commitActiveText (array-replace identity)", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("p", "text");
+      renderer.appendToBlock("p", "hello\n");
+      const before = renderer.getCommitted();
+      expect(before).toHaveLength(0);
+      renderer.endBlock("p", "ok");
+      const after = renderer.getCommitted();
+      expect(after === before).toBe(false);
+      expect(after.length).toBeGreaterThan(0);
+    });
+
+    test("C1.4 invariant still holds: committed contains the rendered content", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("p", "text");
+      renderer.appendToBlock("p", "# Heading\n\nsome paragraph text");
+      renderer.endBlock("p", "ok");
+      const committed = renderer.getCommitted();
+      const joined = committed.map(l => l.ansi).join("\n");
+      expect(joined).toContain("Heading");
+      expect(joined).toContain("paragraph text");
+      expect(committed.length).toBeGreaterThan(0);
     });
   });
 

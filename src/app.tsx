@@ -147,7 +147,16 @@ export function App(props: AppProps) {
   const projectName = path.basename(process.cwd());
 
   const { stdout } = useStdout();
-  const w = stdout?.columns ?? 80;
+  // Stage 11.1: reserve = 10 rows. Breakdown: chrome (5) + Ink's inclusive
+  // `outputHeight >= stdout.rows` overflow check (1) + 4 rows of headroom for
+  // transient chrome growth (multi-line PromptInput, modal, yoga-layout edge
+  // rounding). With reserve=10 + K=44 on a 54-row pane, dynamic region tops out
+  // at 53 even when chrome briefly grows to 9 — staying strictly below rows.
+  // Was 6 in Stage 11; bumped after three independent reproductions of
+  // fullStaticOutput re-emission ("prior-turn content flashed on screen").
+  const CHROME_ROWS = 10;
+  const w = Math.max(80, stdout?.columns ?? 80);
+  const maxActiveRows = Math.max(16, (stdout?.rows ?? 24) - CHROME_ROWS);
 
   // Thread column width into the renderer for markdown wrap
   useEffect(() => {
@@ -1275,7 +1284,7 @@ export function App(props: AppProps) {
       <Static items={committed}>
         {(item) => <Text key={item.id}>{item.ansi}</Text>}
       </Static>
-      {activeBlock && <ActiveBlock role={activeBlock.role} ansi={activeBlockAnsi} width={w} />}
+      {activeBlock && <ActiveBlock role={activeBlock.role} ansi={activeBlockAnsi} width={w} maxRows={maxActiveRows} />}
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}
       {/* Modal-bearing events (permission, question) bypass the renderer's output
           gates by design — interactive prompts must always surface to the operator

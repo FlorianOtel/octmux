@@ -98,6 +98,15 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   // `_activeBlockAnsi` that `_commitActiveText()` splits is the latest live ANSI.
   private _textDebounce: ReturnType<typeof setTimeout> | null = null;
 
+  // Stage 11.1 — render throttle clock. Tracks the wall-clock time of the
+  // most-recent immediate render (flush-on-\n branch) AND the trailing-edge
+  // timer body so the two share one rate-limit budget. Bounds the immediate
+  // render path to ~12 Hz max during high-rate token streams (model-generated
+  // markdown), preventing the bursty visual cadence the unthrottled path
+  // produced. Low-rate streams (tool output) are unaffected — the elapsed
+  // gap between consecutive \n-bearing deltas exceeds the throttle window.
+  private _lastEmitMs: number = 0;
+
   // Stage 10.6 — memoised active-block wrapper.
   // getActiveBlock() is called by React's useSyncExternalStore twice per
   // reconciler cycle for identity comparison (Object.is). Returning a new
@@ -195,12 +204,25 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
       // Append to the FULL buffer — do NOT split or commit during appendToBlock
       this._activeTextBuf += text;
       // Flush-on-\n: if this delta completes one or more lines, render + emit
-      // IMMEDIATELY so operators see new lines as soon as they complete (C1.8 +
-      // UX requirement). Intra-line bursts (no \n in delta) skip this and rely
+      // so operators see new lines as soon as they complete (C1.8 + UX
+      // requirement). Intra-line bursts (no \n in delta) skip this and rely
       // on the trailing-edge timer below.
+      //
+      // Stage 11.1 — throttle. The unthrottled immediate path produced a
+      // bursty visual cadence on high-rate token streams (model-generated
+      // markdown): every \n-bearing delta drove a full-buffer re-parse +
+      // emit, often dozens per second. Skip the immediate render when the
+      // previous one fired < 80 ms ago — the trailing-edge timer is the
+      // safety net and will fire 100 ms after the last delta regardless.
+      // Low-rate streams (tool output) skip the throttle in practice
+      // because the inter-delta gap exceeds 80 ms.
       if (text.includes("\n")) {
-        this._activeBlockAnsi = this._renderActiveTextAnsi();
-        this.emit("changed");
+        const now = Date.now();
+        if (now - this._lastEmitMs >= 80) {
+          this._activeBlockAnsi = this._renderActiveTextAnsi();
+          this._lastEmitMs = now;
+          this.emit("changed");
+        }
       }
       // Always schedule a trailing-edge timer — handles the burst case AND
       // catches the final intra-line tail when the operator stops typing /
@@ -214,6 +236,8 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         // fires — but guard anyway in case of an unexpected ordering.
         if (this._activeBlockRole === null) return;
         this._activeBlockAnsi = this._renderActiveTextAnsi();
+        // Stage 11.1: share the throttle clock with the immediate path.
+        this._lastEmitMs = Date.now();
         this.emit("changed");
       }, 100);
     } else {
@@ -338,15 +362,16 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
 
   private _commitActiveText(): void {
     if (this._activeTextPartID === null || this._activeBlockRole === null) return;
-    // Split the LAST live-rendered ANSI on \n; commit each line as a CommittedLine.
-    const lines = this._activeBlockAnsi.split("\n");
-    for (const line of lines) {
-      this._committed.push({
-        id: this._nextId++,
-        role: this._activeBlockRole,
-        ansi: line,
-      });
-    }
+    // Array-replace (not in-place push) so getCommitted() returns a new reference,
+    // reliably signalling <Static> to pick up the new lines without depending on a
+    // sibling store (activeBlock) changing on the same tick. Matches the pattern
+    // already used in commitTurnEnd / commitUserInput / commitSystemMessage / commitError.
+    const newLines = this._activeBlockAnsi.split("\n").map(line => ({
+      id: this._nextId++,
+      role: this._activeBlockRole!,
+      ansi: line,
+    }));
+    this._committed = [...this._committed, ...newLines];
     // Reset active state
     this._activeTextBuf = "";
     this._activeBlockAnsi = "";
@@ -419,13 +444,17 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   }
   getActiveBlockAnsi(): string {
     if (this._activeTextPartID === null || this._activeBlockRole === null) return "";
-    // For text role, return the live-rendered ANSI. Note: under Stage 10.4
-    // debounce, this may be stale by up to 100 ms between non-newline deltas;
-    // Ink's `useSyncExternalStore` only calls this getter on `changed` emits,
-    // and emits fire either on flush-on-\n (immediate) or on the trailing-edge
-    // timer (~100 ms after the last delta), so the displayed ANSI is always
-    // synchronised with the last `changed` emit.
+    // For text role, return the live-rendered ANSI. Stage 11.1 — force-flush
+    // any pending debounce timer here so the returned value is ALWAYS
+    // synchronised with `_activeTextBuf`, regardless of whether the throttle
+    // (immediate path) or the trailing-edge timer last won. `_flushDebounce`
+    // is a no-op when no timer is pending, so the React useSyncExternalStore
+    // hot path (called on every `changed` emit) is unchanged in steady state
+    // — the lazy render only fires when a throttle-skipped delta is the
+    // newest state. Preserves C1.4 (live == commit-path render) as a
+    // call-time invariant rather than an asymptotic one.
     if (this._activeBlockRole === "text") {
+      this._flushDebounce();
       return this._activeBlockAnsi;
     }
     // For non-text roles, render the partial tail

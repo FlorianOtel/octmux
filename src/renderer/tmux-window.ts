@@ -6,6 +6,7 @@ import { makeFifo, type FifoHandle } from "./fifo.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer, CommittedLine } from "./types.ts";
 import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
+import { BlockBufferRenderer } from "./block-buffer.ts";
 
 const SIDE_ROLES: Role[] = Object.keys(OUTPUT_KEY) as Role[];
 

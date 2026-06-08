@@ -1,0 +1,63 @@
+import { describe, test, expect } from "bun:test";
+import { stripAnsi, visualRows, tailSliceByVisualRows } from "./ActiveBlock.tsx";
+
+describe("ActiveBlock helpers", () => {
+  test("stripAnsi removes SGR escape sequences", () => {
+    const input = "\x1b[31mhi\x1b[0m";
+    const result = stripAnsi(input);
+    expect(result).toBe("hi");
+  });
+
+  test("visualRows('', 80) === 1", () => {
+    const result = visualRows("", 80);
+    expect(result).toBe(1);
+  });
+
+  test("visualRows('hi', 80) === 1", () => {
+    const result = visualRows("hi", 80);
+    expect(result).toBe(1);
+  });
+
+  test("visualRows wraps correctly on width boundary", () => {
+    const twoRows = visualRows("a".repeat(160), 80);
+    expect(twoRows).toBe(2);
+
+    const threeRows = visualRows("a".repeat(161), 80);
+    expect(threeRows).toBe(3);
+  });
+
+  test("visualRows defensively handles zero width", () => {
+    const result = visualRows("a", 0);
+    expect(result).toBeGreaterThanOrEqual(1);
+  });
+
+  test("tailSliceByVisualRows with full input fits", () => {
+    const input = ["a", "b", "c"];
+    const result = tailSliceByVisualRows(input, 80, 10);
+    expect(result).toEqual(["a", "b", "c"]);
+  });
+
+  test("tailSliceByVisualRows returns last 3 lines", () => {
+    const input = ["a", "b", "c", "d", "e"];
+    const result = tailSliceByVisualRows(input, 80, 3);
+    expect(result).toEqual(["c", "d", "e"]);
+  });
+
+  test("tailSliceByVisualRows with wrapping line excludes earlier lines", () => {
+    const input = ["short", "a".repeat(240), "tail"];
+    // 240-char line counts as 3 rows (ceil(240/80) = 3)
+    // tail is 1 row, so total 4 rows
+    // with maxRows=4, the last 4 rows are: tail (1) + 240-line (3) = 4
+    // "short" should be excluded
+    const result = tailSliceByVisualRows(input, 80, 4);
+    expect(result).toEqual(["a".repeat(240), "tail"]);
+  });
+
+  test("tailSliceByVisualRows returns empty when single line exceeds maxRows", () => {
+    const input = ["a".repeat(240)];
+    // 240 chars = 3 rows, but maxRows=1
+    // returns []
+    const result = tailSliceByVisualRows(input, 80, 1);
+    expect(result).toEqual([]);
+  });
+});
