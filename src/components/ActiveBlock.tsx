@@ -13,11 +13,7 @@ export function ActiveBlock({ role, ansi, width }: { role: Role | null; ansi: st
   return (
     <Box flexDirection="column" width={width}>
       {lines.map((line, idx) => (
-        <Text key={idx}>{line}</Text>
-      ))}
-      {/* Empty lines (post-split) render as space to avoid zero-height in Yoga layout */}
-      {lines.filter(l => l.length === 0).map((_, idx) => (
-        <Text key={`empty-${idx}`}>{" "}</Text>
+        <Text key={idx}>{line.length === 0 ? " " : line}</Text>
       ))}
     </Box>
   );

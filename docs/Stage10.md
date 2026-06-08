@@ -1,8 +1,8 @@
 ---
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
-updated_by: sohoai/glm-5.1
-updated_at: 2026-06-08--02-08
+updated_by: Actor (sohoai/qwen3-4b-q6)
+updated_at: 2026-06-08--03-00
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -152,4 +152,17 @@ Stage 10.4 closes Piece 1 of the block-renderer plan with three coupled improvem
 **Build:** `dist/octmux` rebuilt successfully (833 modules — unchanged from 10.3; no new dependencies, only new code).
 
 **Out of scope (preserved for later stages):** `getCommitted()` write semantics, reconciler clear+replay during SSE reconnect (already implemented in app.tsx pre-Stage 10), per-role render dispatching beyond text/non-text fence.
+
+### 2026-06-08--03-00 — Stage 10.5 — Reviewer FIX (ActiveBlock layout + cleanup)
+
+**Implemented by:** Actor (sohoai/qwen3-4b-q6) via /brain Phase 3 FIX-loop — 2026-06-08--03-00
+**Commit(s):** TBD
+
+Phase 3 Reviewer audit returned FIX with 3 specific issues; this sub-stage applies all 3.
+
+1. **MAJOR — ActiveBlock.tsx empty-line rendering:** Fixed double-render of empty lines by collapsing the two separate maps into a single inline map that renders empty lines as spaces for Yoga layout compatibility.
+2. **MINOR — tmux-window.ts dead import:** Removed unused `StdoutRenderer` import; `CommittedLine` import already correctly points to `./types.ts`.
+3. **MINOR — package.json version pin:** Changed `"marked-terminal": "^7.3.0"` to `"marked-terminal": "7.3.0"` (already pinned in bun.lock).
+
+Tests: 94/94 pass (unchanged). Build: 833 modules.
 

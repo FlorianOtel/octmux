@@ -3,7 +3,6 @@ import { execFileSync, execFile } from "node:child_process";
 import type { Block, Role } from "../blocks.ts";
 import { formatLine } from "../blocks.ts";
 import { makeFifo, type FifoHandle } from "./fifo.ts";
-import { StdoutRenderer } from "./stdout.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer, CommittedLine } from "./types.ts";
 import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
