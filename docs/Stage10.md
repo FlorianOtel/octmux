@@ -169,7 +169,7 @@ Tests: 94/94 pass (unchanged). Build: 833 modules.
 ### 2026-06-08--10-17 — Stage 10.6 — Fix streaming freeze (memoise getActiveBlock)
 
 **Implemented by:** Actor (Claude Haiku 4.5) via /brain — 2026-06-08--10-17
-**Commit(s):** `<TBD — backfilled>`
+**Commit(s):** `d1e29a2`
 
 During a long markdown-streaming response on `feat/block-renderer` (HEAD before this stage), the app froze mid-stream: rendering stopped, the screen flickered at ~1 Hz, Ctrl-C became undeliverable, and only `kill -9` escaped. Two prior Stage 10.6 attempts misdiagnosed the root cause and were hard-reset.
 
