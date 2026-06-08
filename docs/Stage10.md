@@ -273,7 +273,7 @@ Tests: 25/25 pass in `block-buffer.test.ts`. Full suite: 103/103 pass across 6 f
 ### 2026-06-08--14-46 — Stage 10.8.1 — Heading boundary + inter-block separator fix
 
 **Implemented by:** Claude Code (Claude Opus 4.7) — 2026-06-08--14-46
-**Commit(s):** `<TBD>`
+**Commit(s):** `a9238404cffbfbf08667d1a56af695ed09d6a9d5`
 
 #### Why this hotfix
 
