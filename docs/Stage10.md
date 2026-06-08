@@ -156,7 +156,7 @@ Stage 10.4 closes Piece 1 of the block-renderer plan with three coupled improvem
 ### 2026-06-08--03-00 — Stage 10.5 — Reviewer FIX (ActiveBlock layout + cleanup)
 
 **Implemented by:** Actor (sohoai/qwen3-4b-q6) via /brain Phase 3 FIX-loop — 2026-06-08--03-00
-**Commit(s):** TBD
+**Commit(s):** `3c6d910` (backfilled in follow-up commit)
 
 Phase 3 Reviewer audit returned FIX with 3 specific issues; this sub-stage applies all 3.
 
