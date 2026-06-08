@@ -218,8 +218,8 @@ Phase 0 must verify symptoms ACROSS the full diagnosis chain, not just at one ch
 
 ### 2026-06-08--14-03 — Stage 10.8 — Incremental commit (semantic boundaries + size-threshold)
 
-**Implemented by:** Actor (Claude Haiku 4.5) — 2026-06-08--14-03
-**Commit(s):** `d5cf6d0` (code) + FIX-loop
+**Implemented by:** Actor (Claude Haiku 4.5) — 2026-06-08--14-03 + FIX-loop 2026-06-08--20-30
+**Commit(s):** `d5cf6d0` (original) + `f81e359` (FIX-loop)
 
 #### Diagnosis
 
