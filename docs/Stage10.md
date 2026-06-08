@@ -89,7 +89,7 @@ Both assertions pass. The fresh-`Marked`-instance one-shot parse is byte-equal t
 ### 2026-06-08--02:00 — Stage 10.3 — Multi-window wiring verified
 
 **Implemented by:** local/qwen3-4b-q6 — 2026-06-08--02:00
-**Commit(s):** (pending Brain commit)
+**Commit(s):** `7e35202` (backfilled in follow-up commit)
 
 This step verifies that `TmuxWindowRenderer` correctly wires `BlockBufferRenderer` as its `_main` renderer (already implemented in 10.1 step 4).
 
