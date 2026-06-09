@@ -1,8 +1,8 @@
 ---
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
-updated_by: Claude Code (Claude Opus 4.7)
-updated_at: 2026-06-08--22-15
+updated_by: Actor (Claude Haiku 4.5)
+updated_at: 2026-06-09--12-43
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -290,7 +290,7 @@ The trailing-edge debounce timer (100 ms, unchanged behavior) also updates `_las
 
 2. **No way to clear Ink's `fullStaticOutput`.** Even after `renderer.clearAll()` resets the React-visible `_committed` array, Ink's internal accumulated `<Static>` buffer survives — and any future overflow would re-emit *all* of it. If Stage 10.7's cap math is ever defeated, the user sees content from sessions ago. Workaround in practice: kill and re-launch octmux for a true session reset. A long-term solution would require either patching Ink (write `fullStaticOutput = ""` on session reset) or remounting the whole React tree on `clearAll`.
 
-3. **Single block taller than the screen has mid-stream scroll-out.** A markdown response taller than `K=44` rows shows only the trailing 44 lines during streaming; earlier content is invisible until the block commits at turn-end (then becomes terminal-native scrollback). Acceptable for normal markdown rendering, but limits the UX for "stream a long verbatim block" scenarios. **Future work (Stage 11?):** "rendered-line watermark" mechanism — progressively commit lines to `<Static>` as they scroll above the K-line window, driven by the same `maxRows` from the surface. Keeps mid-block scrollback at the cost of a tiny residual risk that a late re-parse re-styles an already-committed line (the non-prefix-closed cases).
+3. **Single block taller than the screen has mid-stream scroll-out.** A markdown response taller than `K=44` rows shows only the trailing 44 lines during streaming; earlier content is invisible until the block commits at turn-end (then becomes terminal-native scrollback). Acceptable for normal markdown rendering, but limits the UX for "stream a long verbatim block" scenarios. **Future work (deferred to a future Stage 10.x):** "rendered-line watermark" mechanism — progressively commit lines to `<Static>` as they scroll above the K-line window, driven by the same `maxRows` from the surface. Keeps mid-block scrollback at the cost of a tiny residual risk that a late re-parse re-styles an already-committed line (the non-prefix-closed cases).
 
 4. **80 ms throttle is empirical, not derived.** It works well for the observed model token rates (Sonnet, Haiku). Faster future models, or pathological streams with many tiny `\n`-bearing deltas, could still produce visible bursts. The throttle is easy to tune (single literal `80` in `block-buffer.ts`), but a more principled approach would adapt the throttle to recent delta rate (raise it under sustained high load, lower it for low-rate streams). Not worth doing without runtime evidence.
 
@@ -302,9 +302,45 @@ The trailing-edge debounce timer (100 ms, unchanged behavior) also updates `_las
 
 #### Test result
 
-All 109 tests pass — 98 baseline (Stages 10.1 → 10.6) + 9 new surface tests in `src/components/ActiveBlock.test.ts` + 2 new renderer tests in the `Stage 11 — _commitActiveText array-replace` describe block of `block-buffer.test.ts`. Two existing Stage 10.4 debounce tests updated to observe via `emit("changed")` counts instead of the now-stale `getActiveBlockAnsi() === ""` probe.
+All 109 tests pass — 98 baseline (Stages 10.1 → 10.6) + 9 new surface tests in `src/components/ActiveBlock.test.ts` + 2 new renderer tests in the `Stage 10.7 — _commitActiveText array-replace` describe block of `block-buffer.test.ts`. Two existing Stage 10.4 debounce tests updated to observe via `emit("changed")` counts instead of the now-stale `getActiveBlockAnsi() === ""` probe.
 
 #### Build
 
 `dist/octmux` rebuilt successfully (833 modules; no new dependencies). Symlink `~/.local/bin/octmux.block-render` → `dist/octmux` already in place. Three operator smoke tests post-implementation: (a) render `/var/tmp/render-this-as-markdown.md` verbatim — smooth, no flicker, no reset; (b) generate a 600-row markdown with all known markers — smooth, no flicker, no prior-turn content; (c) cross-turn render after generated content — confirmed PASS by operator.
+
+---
+
+### 2026-06-09--12-43 — Stage 10.8 — Inter-message blank line + Static empty-line fix
+
+**Implemented by:** Actor (Claude Haiku 4.5) — 2026-06-09--12-43
+**Commit(s):** `85c3545`
+
+#### Design
+
+Two coordinated edits fix observed real-model-output rendering defects.
+
+**Edit A — `<Static>` empty-line workaround (`src/app.tsx:1285`).** Ink's Yoga flex layout collapses `<Text>` with empty content to zero height. Marked-terminal correctly emits `\n\n` between block-level elements; those arrive in `_committed` as `CommittedLine.ansi: ""` and silently vanish. The fix mirrors the workaround already present at `ActiveBlock.tsx:39`: render empty lines as a single space so Ink reserves the row.
+
+**Edit B — `Block.meta.messageID` threading.** Extended `Block.meta` (`src/blocks.ts`) and `ReplEvent["block-start"]` (`src/events.ts`) with optional `messageID?: string`; populated at the text-part block-start emit site from `part.messageID` (already in scope). `app.tsx` block-start dispatch forwards via `meta`. `BlockBufferRenderer` gains private field `_lastTextMessageID: string | null = null` and, in `beginBlock`, injects one `CommittedLine` with `ansi: " "` (space — same Ink-quirk workaround `commitTurnEnd` uses) before opening a new text block whose messageID differs from `_lastTextMessageID`. Field reset in `clearAll()` and `dispose()`.
+
+The renamed `meta?` parameter (was `_meta?`) of `beginBlock` in `block-buffer.ts` — implementations on `stdout.ts` and `tmux-window.ts` continue to ignore `meta` (`_meta?` there).
+
+Bundled cleanup: 9 stale "Stage 11" / "Stage 11.1" source-code annotations renamed to "Stage 10.7" (left over from the earlier Stage 10.7 consolidation that renamed commits/docs but missed source annotations). 2 stale refs in this very doc also cleaned up. Memory file refs similarly reframed (preserving the historical git tag `stage-11-as-implemented`).
+
+#### Problems faced and solved
+
+Operator observed wall-of-text rendering with real model output (vs oc-history's properly-spaced output). Phase 0 probes showed: (1) marked-terminal already emits `\n\n` between blocks, so the gap was downstream; (2) the `<Static>` lambda lacked the empty-line workaround that `ActiveBlock` already had; (3) consecutive assistant messages have no per-message boundary in the scrollback because `Block.meta.messageID` was never threaded.
+
+Ink Yoga's empty-text → zero-height quirk: confirmed by direct comparison with `ActiveBlock.tsx:39`'s long-standing workaround. The same quirk affects `<Static>` children. The fix mirrors the same pattern symmetrically.
+
+`Renderer.beginBlock(partID, role, meta?)` exposed an unused `meta?` hook — the natural place for messageID. No new API surface; the existing hook just started being used.
+
+Bundled cleanup of stale "Stage 11" / "Stage 11.1" source annotations addressed the operator-flagged version-numbering inconsistency in the same commit. (Third operator flag on version-inflation; updated `feedback-version-numbering` memory.)
+
+#### Future issues / future work
+
+- **Demarcation is messageID-only.** Operator picked Q1=c (blank line only). If a future stage wants a model badge / timestamp header at the message boundary, the `_lastTextMessageID` transition check in `beginBlock` is the injection point.
+- **Non-text roles are unaffected.** Tool blocks carry per-tool ANSI headers via `formatLine`. Reasoning streams to a side window in multi-window mode.
+- **`<Static>` `fullStaticOutput` accumulation (inherited from Stage 10.7).** Surfaced blank lines that were previously zero-height are now visible in Ink's accumulation buffer. Any future overflow event will re-emit them. The Stage 10.7 cap math continues to be the primary overflow guard; this stage does not worsen the risk.
+- **User-message demarcation deferred.** Operator picked Q4=fine as-is.
 
