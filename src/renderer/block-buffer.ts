@@ -193,14 +193,23 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         process.stderr.write(`[octmux-render] beginBlock TEXT  partID=${partID}  messageID=${meta.messageID}  _lastTextMessageID=${this._lastTextMessageID}  willInject=${willInject}\n`);
       }
       if (this._lastTextMessageID !== null && this._lastTextMessageID !== meta.messageID) {
-        // Stage 10.8.1: format local time YYYY-MM-DD--HH-MM and inject as
-        // the demarcation row. Substantive content is required because Ink
-        // collapses single-whitespace <Text> rows arriving as standalone
-        // Static appends (empirically verified at commit 3127a51).
+        // Stage 10.8.1: inject a 3-line demarcation block — empty line,
+        // a dim "YYYY-MM-DD HH:MM" timestamp, empty line — pushed as ONE
+        // array-replace so the surrounding empty rows are part of the
+        // same batch (within-message batches with `ansi: ""` rows render
+        // correctly via the Static empty-line workaround at app.tsx:1285;
+        // standalone single-item " " appends do not — see commits 3127a51
+        // and ff4d006). The dim ANSI (\x1b[2m ... \x1b[22m) matches the
+        // marked-terminal `hr` style for an unobtrusive grey-out look.
         const d = new Date();
         const pad = (n: number) => String(n).padStart(2, "0");
-        const ts = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}--${pad(d.getHours())}-${pad(d.getMinutes())}`;
-        this._committed = [...this._committed, { id: this._nextId++, role: "text", ansi: ts }];
+        const ts = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        const dimTs = `\x1b[2m${ts}\x1b[22m`;
+        this._committed = [...this._committed,
+          { id: this._nextId++, role: "text", ansi: "" },
+          { id: this._nextId++, role: "text", ansi: dimTs },
+          { id: this._nextId++, role: "text", ansi: "" },
+        ];
         this.emit("changed");
         if (process.env.OCTMUX_DEBUG_RENDER === "1") {
           process.stderr.write(`[octmux-render]   → INJECT FIRED. committed.length now ${this._committed.length}\n`);

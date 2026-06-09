@@ -510,11 +510,20 @@ describe("BlockBufferRenderer", () => {
       renderer.endBlock("part-2");
       const afterSecond = renderer.getCommitted();
 
-      const separatorLine = afterSecond[afterFirst];
-      expect(separatorLine).toBeDefined();
-      // Stage 10.8.1: inject content is a YYYY-MM-DD--HH-MM timestamp.
-      expect(separatorLine.ansi).toMatch(/^\d{4}-\d{2}-\d{2}--\d{2}-\d{2}$/);
-      expect(separatorLine.role).toBe("text");
+      // Stage 10.8.1: 3-line demarcation block — empty / dim-timestamp / empty.
+      const emptyTop = afterSecond[afterFirst];
+      const tsLine   = afterSecond[afterFirst + 1];
+      const emptyBot = afterSecond[afterFirst + 2];
+      expect(emptyTop).toBeDefined();
+      expect(emptyTop.ansi).toBe("");
+      expect(emptyTop.role).toBe("text");
+      expect(tsLine).toBeDefined();
+      // Timestamp wrapped in dim ANSI (\x1b[2m ... \x1b[22m); content matches
+      // YYYY-MM-DD HH:MM (space-separated, single colon).
+      expect(tsLine.ansi).toMatch(/^\x1b\[2m\d{4}-\d{2}-\d{2} \d{2}:\d{2}\x1b\[22m$/);
+      expect(tsLine.role).toBe("text");
+      expect(emptyBot).toBeDefined();
+      expect(emptyBot.ansi).toBe("");
     });
 
     test("same messageID across consecutive beginBlocks does NOT inject a blank CommittedLine", () => {
@@ -531,9 +540,9 @@ describe("BlockBufferRenderer", () => {
 
       const firstNewLine = afterSecond[afterFirst];
       expect(firstNewLine).toBeDefined();
-      // Stage 10.8.1: if same messageID, no timestamp separator injected;
-      // first new line is part-2's content (which won't match the ts pattern).
-      expect(firstNewLine.ansi).not.toMatch(/^\d{4}-\d{2}-\d{2}--\d{2}-\d{2}$/);
+      // Stage 10.8.1: same messageID → NO 3-line demarcation block.
+      // First new line is part-2's content (not the dim-timestamp pattern).
+      expect(firstNewLine.ansi).not.toMatch(/^\x1b\[2m\d{4}-\d{2}-\d{2} \d{2}:\d{2}\x1b\[22m$/);
     });
   });
 
