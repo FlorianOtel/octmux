@@ -505,7 +505,7 @@ The override affects only the `renderer.text` path — no changes to the marked 
 ### 2026-06-09--23-40 — Stage 10.8.4 — Close BBR Renderer interface gap: commitCompactionDivider + retagBlock
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-09--23-40
-**Commit(s):** `TBD` (pending)
+**Commit(s):** `5278e4c`
 
 #### Design and implementation
 
