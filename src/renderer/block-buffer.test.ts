@@ -43,6 +43,18 @@ function makeCommitPathMarked(): Marked {
     unescape: true,
     emoji: true,
   }) as any);
+  // Stage 10.8.3 — mirror the marked-terminal text-token override from
+  // BlockBufferRenderer's _makeMarkedInstance to preserve C1.4 byte-equality.
+  m.use({
+    renderer: {
+      text(token: any) {
+        if (token && typeof token === "object" && "tokens" in token && token.tokens) {
+          return (this as any).parser.parseInline(token.tokens);
+        }
+        return typeof token === "object" ? token.text : token;
+      },
+    },
+  } as any);
   return m;
 }
 
@@ -543,6 +555,34 @@ describe("BlockBufferRenderer", () => {
       // Stage 10.8.1: same messageID → NO 3-line demarcation block.
       // First new line is part-2's content (not the dim-timestamp pattern).
       expect(firstNewLine.ansi).not.toMatch(/^\x1b\[2m\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\x1b\[22m$/);
+    });
+  });
+
+  describe("Stage 10.8.3 — Tight-list bold rendering", () => {
+    test("Test A: tight list with **bold** renders ANSI bold (\\x1b[1m), zero literal **", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "tight-list-bold";
+      renderer.beginBlock(partID, "text");
+      renderer.appendToBlock(partID, "- **a:** x\n- **b:** y\n- **c:** z\n");
+      const ansi = renderer.getActiveBlockAnsi();
+      // Must contain at least one ANSI bold marker (\x1b[1m)
+      expect(ansi).toContain("\x1b[1m");
+      // Must NOT contain literal ** (the bug symptom)
+      expect(ansi).not.toContain("**");
+      renderer.endBlock(partID, "ok");
+    });
+
+    test("Test B: loose list with **bold** also renders ANSI bold, zero literal **", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "loose-list-bold";
+      renderer.beginBlock(partID, "text");
+      renderer.appendToBlock(partID, "- **a**\n\n- **b**\n");
+      const ansi = renderer.getActiveBlockAnsi();
+      // Must contain at least one ANSI bold marker (\x1b[1m)
+      expect(ansi).toContain("\x1b[1m");
+      // Must NOT contain literal ** (regression guard)
+      expect(ansi).not.toContain("**");
+      renderer.endBlock(partID, "ok");
     });
   });
 

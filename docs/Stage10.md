@@ -2,7 +2,7 @@
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-09--19-55
+updated_at: 2026-06-09--21-40
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -445,3 +445,57 @@ Bump `marked` dependency from `15.0.0` to `^17.0.1`. No source-code changes requ
 - Test suite: 111 pass / 0 fail (240 expect calls)
 
 No source code changed; no breaking API calls; test baseline unmodified and fully green.
+
+---
+
+### 2026-06-09--21-40 — Stage 10.8.3 — Fix bold inside tight list items (text-token override)
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-09--21-40
+**Commit(s):** `<pending>` (backfilled after commit)
+
+#### Problem statement
+
+With marked@17.0.6 + marked-terminal@7.3.0, inline formatting like `**bold**` inside tight list items (`- **item**` and `1. **item**`) renders as literal `**` with zero ANSI bold codes. The markdown is structurally correct but visually indistinguishable from plain text. Paragraphs and headings render bold correctly, isolating the bug to the list-item tokenization path.
+
+#### Root cause
+
+marked-terminal's `Renderer.prototype.text` (line 84-89 of marked-terminal 7.3.0 source) returns `token.text` (the raw source) instead of calling `parser.parseInline(token.tokens)` when the token carries sub-tokens. For tight list items, marked emits text-typed tokens with inline sub-tokens (like `**bold**` as a strong sub-token); for loose lists, marked promotes list-item content to paragraph tokens which already call `parseInline`. The mismatch leaves tight-list inline formatting unparsed.
+
+#### Solution
+
+Add a `renderer.text` override immediately **AFTER** the `m.use(markedTerminal({...}))` call in `BlockBufferRenderer._makeMarkedInstance()`. The override checks for the presence of `token.tokens`; if present, it calls `parser.parseInline(token.tokens)` (which handles the sub-token stream correctly). Otherwise, it returns the raw token text as a fallback.
+
+The override must be registered after markedTerminal's use-call so it shadows markedTerminal's text renderer. Order is load-bearing.
+
+**Compact override (4 lines of logic):**
+```ts
+m.use({
+  renderer: {
+    text(token: any) {
+      if (token && typeof token === "object" && "tokens" in token && token.tokens) {
+        return (this as any).parser.parseInline(token.tokens);
+      }
+      return typeof token === "object" ? token.text : token;
+    },
+  },
+} as any);
+```
+
+#### Mirror to test's `makeCommitPathMarked()`
+
+The test file defines `makeCommitPathMarked()` as the reference renderer for the C1.4 byte-equal invariant test. To preserve byte-equality, the same override must be applied there. No new test cases are required for the invariant — the existing C1.4 test (which parses `/var/tmp/render-this-as-markdown.md`) automatically validates that the renderer paths remain byte-equal post-override.
+
+#### Test additions
+
+Two new tests under `describe("Stage 10.8.3 — Tight-list bold rendering")`:
+- **Test A:** tight list `"- **a:** x\n- **b:** y\n- **c:** z\n"` produces ANSI bold (`\x1b[1m`) and zero literal `**`.
+- **Test B:** loose list `"- **a**\n\n- **b**\n"` also produces ANSI bold and no `**` (regression guard for the previously-working case).
+
+#### Test and build results
+
+- **Tests:** 114 baseline (pre-10.8.3) + 2 new = 116 pass / 0 fail, 260 expect calls.
+- **Build:** `dist/octmux` rebuilt at 2026-06-09--21-40 (833 modules; no new dependencies).
+
+#### Scope
+
+The override affects only the `renderer.text` path — no changes to the marked parser itself, no new dependencies, no multi-renderer sync issues (C1.4 still holds). The fix is surgical: tight-list inline markdown now parses correctly; all other renderer paths unchanged.

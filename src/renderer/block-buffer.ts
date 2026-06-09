@@ -70,6 +70,26 @@ function _makeMarkedInstance(): Marked {
     unescape: true,
     emoji: true,
   }) as any);
+  // Stage 10.8.3 — marked-terminal@7.3.0 bug: Renderer.prototype.text (line 84-89
+  // of marked-terminal's source) returns token.text (the raw source, containing
+  // literal `**`) instead of calling parser.parseInline(token.tokens) when the
+  // token carries sub-tokens. For tight list items, marked emits text-typed tokens
+  // with inline sub-tokens; for loose lists, it promotes them to paragraph tokens
+  // which DO call parseInline. This override re-routes the text token through
+  // parseInline when sub-tokens are present, fixing bold (and any other inline
+  // marker) inside tight list items without affecting any other renderer path.
+  // Override MUST come AFTER markedTerminal use-call (markedTerminal is registered
+  // first; this override shadows its text renderer).
+  m.use({
+    renderer: {
+      text(token: any) {
+        if (token && typeof token === "object" && "tokens" in token && token.tokens) {
+          return (this as any).parser.parseInline(token.tokens);
+        }
+        return typeof token === "object" ? token.text : token;
+      },
+    },
+  } as any);
   return m;
 }
 
