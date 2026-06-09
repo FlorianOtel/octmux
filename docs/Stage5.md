@@ -424,7 +424,7 @@ in the planner output.
 
 ### 2026-06-09--21-31 — Stage 5.7.1 — synchronous context-bar reset on /compact + remove Stage 5.7 sentinel
 **Implemented by:** OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: qwen3-4b-q6, Reviewer: claude-sonnet-4-6) — 2026-06-09--21-31
-**Commit(s):** <pending>
+**Commit(s):** `314a63b`
 
 **Problem:** After /compact completes, there was a race window where the status bar would briefly show a partial or stale token count until refreshTokenUsage() fetched the next post-summary assistant message. This created inconsistency between what the operator saw (compacted state) and what the bar displayed (potentially pre-compaction tokens or nothing if no new message had arrived).
 
