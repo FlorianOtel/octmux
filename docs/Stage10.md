@@ -1,8 +1,8 @@
 ---
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
-updated_by: Actor (Claude Haiku 4.5)
-updated_at: 2026-06-09--12-45
+updated_by: Claude Code (Claude Opus 4.7)
+updated_at: 2026-06-09--18-50
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -344,3 +344,67 @@ Bundled cleanup of stale source-code annotations (from a transient pre-consolida
 - **`<Static>` `fullStaticOutput` accumulation (inherited from Stage 10.7).** Surfaced blank lines that were previously zero-height are now visible in Ink's accumulation buffer. Any future overflow event will re-emit them. The Stage 10.7 cap math continues to be the primary overflow guard; this stage does not worsen the risk.
 - **User-message demarcation deferred.** Operator picked Q4=fine as-is.
 
+
+---
+
+### 2026-06-09--18-43 — Stage 10.8.1 — Inter-message dim-timestamp demarcation
+
+**Implemented by:** Claude Code (Claude Opus 4.7) — 2026-06-09--18-43
+**Commit(s):** `82c5a9b` (final form), `6602288` (3-line block), `ff4d006` (timestamp inject), `a35a360` (Box wrapper, vestigial), `3164f64` (OCTMUX_DEBUG_RENDER instrumentation, kept)
+
+#### Design
+
+Between consecutive assistant text parts (different `meta.messageID`), `BlockBufferRenderer.beginBlock` injects a **3-line demarcation block**:
+
+```
+<empty line>
+[YYYY-MM-DD HH:MM]      ← in dim ANSI (\x1b[2m … \x1b[22m), like marked-terminal's `hr` style
+<empty line>
+```
+
+All 3 `CommittedLine`s are pushed as ONE `array-replace` so the surrounding empty rows ride along with the timestamp in the same batch. This relies on the same mechanism that makes within-message blanks render correctly (the Static empty-line workaround at `src/app.tsx:1285` renders `ansi: ""` as `<Text>{" "}</Text>`, which Ink preserves when surrounding items in the same batch carry substantive content).
+
+Format:
+- **Timestamp**: local time, single-space `YYYY-MM-DD HH:MM` (NOT the project's doc-filename format `YYYY-MM-DD--HH-MM`).
+- **Brackets**: `[ … ]` around the timestamp.
+- **Dim styling**: `\x1b[2m[YYYY-MM-DD HH:MM]\x1b[22m` — the brackets are inside the dim wrap so the whole token reads as dim/grey.
+
+`Block.meta.messageID` threading (introduced in Stage 10.8) is unchanged — the messageID is what triggers the transition check. `_lastTextMessageID` is reset in `clearAll()` and `dispose()` for session-switch hygiene.
+
+`OCTMUX_DEBUG_RENDER=1` instrumentation (env-gated stderr lines printing `partID`, `meta.messageID`, `_lastTextMessageID`, `willInject`, and `INJECT FIRED + committed.length`) is **kept** at commit `3164f64`. Zero overhead when the env var is unset; useful for future diagnostic rounds.
+
+#### Problems faced and solved
+
+**Load-bearing finding: Ink/Yoga collapses standalone single-whitespace `<Text>` rows when they arrive as standalone Static appends.** When a `CommittedLine` with `ansi: " "` (or `ansi: ""` rendered via the Static workaround as `<Text>{" "}</Text>`) is pushed via a *single-item* `array-replace + emit("changed")`, Ink/Yoga measures the `<Text>` content as zero-width and drops the row from the layout entirely. Within-message blanks (also `ansi: ""`) render correctly because they are part of a *multi-item batch* from `_commitActiveText` (which splits `_activeBlockAnsi` on `\n` and pushes all lines together).
+
+This asymmetry was empirically established via the diagnostic chain:
+
+| Commit | Inject content | Operator-observed result |
+|---|---|---|
+| Stage 10.8 baseline (`85c3545`) | `" "` (single space) | No visible blanks between text parts |
+| `15d809a` (partID variant; reverted in `fda7db7`) | `" "` (single space) | No visible blanks |
+| `3164f64` | (added `OCTMUX_DEBUG_RENDER` instrumentation) | Log: 7 `INJECT FIRED` lines for 8 text parts; `committed.length` grew by 1 each time → **inject was firing correctly** |
+| `a35a360` (Box wrapper) | `" "` (single space) — STILL standalone | No visible blanks → **Box wrapper was not the fix** |
+| `3127a51` (visible marker) | `"··· · · ···  [Stage 10.8 demarcation marker]"` | Marker visible 4× in tmux pipe-pane capture → **content was the fix** |
+| `ff4d006` → `6602288` → `82c5a9b` (final) | `[dim YYYY-MM-DD HH:MM]` as 3-line batch | All 8 text-part transitions visible; operator-verified smoke test |
+
+Other lessons documented from the cycle:
+- **Static analysis was wrong twice in a row** before the diagnostic chain produced empirical evidence. Stage 10.8's messageID-based inject and the partID-based attempt (`15d809a`) both passed static review but failed empirically. The OCTMUX_DEBUG_RENDER + tmux pipe-pane methodology is the correct posture for this layer.
+- **The Edit tool silently converted literal `" "` (regular space) into `"\u00A0"` (non-breaking space) in two iterations of source edits.** Caught only when a Python `str.replace` literal-match couldn't find the expected `old_line`. Worth being suspicious of single-whitespace replacements via the Edit tool — for those, use `Bash` + Python's literal `str.replace` and verify byte-by-byte.
+
+#### Future issues / future work
+
+- The `<Box>` wrapper introduced in `a35a360` for `<Static>` items is **vestigial** — the empirical chain showed content (not layout) was the determining factor. Kept here as belt-and-suspenders; removable in a follow-up if minimum-churn is desired.
+- `Block.meta.messageID` threading (`src/blocks.ts`, `src/events.ts`, `src/app.tsx`) is **still required** — `messageID` is the demarcation trigger. Not dead code.
+- **Dim styling uses raw ANSI escapes** (`\x1b[2m … \x1b[22m`) inline. If the marked-terminal aesthetic later changes (e.g. via a different `chalk.dim` style), this inline sequence won't update with it. Consider centralising the dim sequence as a constant if more code paths need it.
+- **Timestamp uses local time** (`new Date()`). If the project moves to UTC display elsewhere, this is one place to update.
+- **Empty-line behaviour with `ansi: ""` depends on batch context** (the Static workaround + same-batch substantive content). If a future refactor changes how `<Static>` items are batched, this could regress silently. Two new tests in `src/renderer/block-buffer.test.ts` under the `Stage 10.8 — Inter-message demarcation` describe block guard the 3-line structure (`/^\x1b\[2m\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\x1b\[22m$/` regex) and the same-messageID negative case.
+- **Truly large modal stacks** (chrome ≥ 9 with K=44 on a 54-row pane) could still trigger the Stage 10.7 overflow guard. Unchanged from Stage 10.7; documented limitation.
+
+#### Test result
+
+All 111 tests pass / 0 fail (235 expects in baseline; 5 new expects in updated Stage 10.8 inter-message demarcation describe block bring total to 240).
+
+#### Build
+
+`dist/octmux` rebuilt at 18:43 (98,826,368 bytes — slightly larger than the previous Stage 10.8 binary due to the dim-ANSI string literal payload). Symlink `~/.local/bin/octmux.block-render` already points to it.
