@@ -131,43 +131,8 @@ export function pickPostSummaryAssistantTokenUsage(messages: MessageForUsageScan
   }
 
   if (latestIdx === -1) {
-    // All post-summary assistants are summaries — fall forward to most recent non-zero
-    // within post-summary region
-    let mostRecentNonZeroIdx = -1;
-    for (let i = postSummaryMessages.length - 1; i >= 0; i--) {
-      if (postSummaryMessages[i].info.summary !== true) {
-        mostRecentNonZeroIdx = i;
-        break;
-      }
-    }
-
-    if (mostRecentNonZeroIdx === -1) {
-      // No qualifying post-summary assistant exists — return null
-      return null;
-    }
-
-    const msg = postSummaryMessages[mostRecentNonZeroIdx];
-    const tokens = msg.info.tokens;
-    if (!tokens) return null;
-
-    let used = tokens.input + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0);
-
-    // If zero tokens, fall forward to most recent non-zero post-summary assistant
-    if (used === 0) {
-      for (let j = mostRecentNonZeroIdx - 1; j >= 0; j--) {
-        if (postSummaryMessages[j].info.summary === true) continue;
-        const ft = postSummaryMessages[j].info.tokens;
-        if (!ft) continue;
-        const fallbackUsed = ft.input + (ft.cache?.read ?? 0) + (ft.cache?.write ?? 0);
-        if (fallbackUsed > 0) {
-          used = fallbackUsed;
-          break;
-        }
-      }
-    }
-
-    const postSummaryModel = postSummaryMessages[mostRecentNonZeroIdx].info;
-    return { used, providerID: postSummaryModel.providerID, modelID: postSummaryModel.modelID };
+    // All post-summary assistants are summaries — return null
+    return null;
   }
 
   // Found a non-zero post-summary assistant
@@ -659,10 +624,10 @@ export function App(props: AppProps) {
       // Get context window and set active model
       const ctxWindow = await getContextWindow(
         props.client,
-        result.providerID,
-        result.modelID,
+        result.providerID ?? "",
+        result.modelID ?? "",
       );
-      setActiveModel({ providerID: result.providerID, modelID: result.modelID });
+      setActiveModel({ providerID: result.providerID ?? "", modelID: result.modelID ?? "" });
       setTokenUsage({ used: result.used, contextWindow: ctxWindow });
 
       // Compute running cost: sum all assistant messages in parent + children

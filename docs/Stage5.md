@@ -467,6 +467,9 @@ in the planner output.
 ---
 
 ### 2026-06-10--04-00 — Stage 5.7.2 — forward-from-summary scan in refreshTokenUsage, unified bar behaviour across entry points
+**Commit(s):** `1cffda2`
+
+**Supersedes:** Stage 5.7.1 commits: `314a63b` (feat on main), `ec3ae69` (docs backfill on main), `ae4ab90` (merge into block-renderer).
 **Implemented by:** Actor subagent (model from qwen3-4b-q6) — 2026-06-10--04-00
 **Commit(s):** `1cffda2`
 
