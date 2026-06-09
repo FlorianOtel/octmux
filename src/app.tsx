@@ -147,12 +147,12 @@ export function App(props: AppProps) {
   const projectName = path.basename(process.cwd());
 
   const { stdout } = useStdout();
-  // Stage 11.1: reserve = 10 rows. Breakdown: chrome (5) + Ink's inclusive
+  // Stage 10.7: reserve = 10 rows. Breakdown: chrome (5) + Ink's inclusive
   // `outputHeight >= stdout.rows` overflow check (1) + 4 rows of headroom for
   // transient chrome growth (multi-line PromptInput, modal, yoga-layout edge
   // rounding). With reserve=10 + K=44 on a 54-row pane, dynamic region tops out
   // at 53 even when chrome briefly grows to 9 — staying strictly below rows.
-  // Was 6 in Stage 11; bumped after three independent reproductions of
+  // Was 6 in earlier Stage 10.7 draft; bumped after three independent reproductions of
   // fullStaticOutput re-emission ("prior-turn content flashed on screen").
   const CHROME_ROWS = 10;
   const w = Math.max(80, stdout?.columns ?? 80);
@@ -585,7 +585,7 @@ export function App(props: AppProps) {
     for (const ev of evList) {
       try {
         if (ev.kind === "block-start") {
-          renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName });
+          renderer.beginBlock(ev.partID, ev.role, { toolName: ev.toolName, messageID: ev.messageID });
           // Notify parent activity on parent session blocks (text, thinking, tool-call, tool-result)
           if (ev.role === "text" || ev.role === "thinking" || ev.role === "tool-call" || ev.role === "tool-result") {
             watcherRef.current?.notifyParentActivity(Date.now());
@@ -1282,7 +1282,7 @@ export function App(props: AppProps) {
   return (
     <>
       <Static items={committed}>
-        {(item) => <Text key={item.id}>{item.ansi}</Text>}
+        {(item) => <Text key={item.id}>{item.ansi.length === 0 ? " " : item.ansi}</Text>}
       </Static>
       {activeBlock && <ActiveBlock role={activeBlock.role} ansi={activeBlockAnsi} width={w} maxRows={maxActiveRows} />}
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}

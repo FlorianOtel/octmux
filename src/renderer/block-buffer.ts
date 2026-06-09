@@ -98,7 +98,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   // `_activeBlockAnsi` that `_commitActiveText()` splits is the latest live ANSI.
   private _textDebounce: ReturnType<typeof setTimeout> | null = null;
 
-  // Stage 11.1 — render throttle clock. Tracks the wall-clock time of the
+  // Stage 10.7 — render throttle clock. Tracks the wall-clock time of the
   // most-recent immediate render (flush-on-\n branch) AND the trailing-edge
   // timer body so the two share one rate-limit budget. Bounds the immediate
   // render path to ~12 Hz max during high-rate token streams (model-generated
@@ -129,6 +129,13 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   // The _activeTextBuf value that was current when _activeBlockCache was built.
   // String identity (===) is the invalidation key.
   private _activeBlockCacheBuf: string | null = null;
+
+  // Stage 10.8 — per-message demarcation. Tracks the messageID of the most recently
+  // opened text block. When a new text block opens with a different messageID, one
+  // blank CommittedLine (" ") is injected before the block starts, producing a visible
+  // blank-line separator between consecutive assistant messages in the scrollback.
+  // Reset in clearAll() and dispose() for session-switch hygiene.
+  private _lastTextMessageID: string | null = null;
 
   constructor(visibility: Visibility) {
     super();
@@ -161,7 +168,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     return lines.map(line => formatLine(this._activeBlockRole!, line, false)).join("\n");
   }
 
-  beginBlock(partID: string, role: Role, _meta?: Block["meta"]): void {
+  beginBlock(partID: string, role: Role, meta?: Block["meta"]): void {
     if (!this.visibility.isVisible(role)) return;
     const _outKey = OUTPUT_KEY[role];
     if (_outKey && !this.isOutputEnabled(_outKey)) return;
@@ -174,6 +181,15 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
       // latest live ANSI.
       this._flushDebounce();
       this._commitActiveText();
+    }
+
+    // Stage 10.8 — inter-message blank line for text role.
+    if (role === "text" && meta?.messageID != null) {
+      if (this._lastTextMessageID !== null && this._lastTextMessageID !== meta.messageID) {
+        this._committed = [...this._committed, { id: this._nextId++, role: "text", ansi: " " }];
+        this.emit("changed");
+      }
+      this._lastTextMessageID = meta.messageID;
     }
   }
 
@@ -208,7 +224,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
       // requirement). Intra-line bursts (no \n in delta) skip this and rely
       // on the trailing-edge timer below.
       //
-      // Stage 11.1 — throttle. The unthrottled immediate path produced a
+      // Stage 10.7 — throttle. The unthrottled immediate path produced a
       // bursty visual cadence on high-rate token streams (model-generated
       // markdown): every \n-bearing delta drove a full-buffer re-parse +
       // emit, often dozens per second. Skip the immediate render when the
@@ -236,7 +252,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         // fires — but guard anyway in case of an unexpected ordering.
         if (this._activeBlockRole === null) return;
         this._activeBlockAnsi = this._renderActiveTextAnsi();
-        // Stage 11.1: share the throttle clock with the immediate path.
+        // Stage 10.7: share the throttle clock with the immediate path.
         this._lastEmitMs = Date.now();
         this.emit("changed");
       }, 100);
@@ -393,6 +409,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     this._activeBlockAnsi = "";
     this._nonTextTail = null;
     this._openBlocks.clear();
+    this._lastTextMessageID = null;
     this.emit("changed");
   }
 
@@ -403,6 +420,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
      if (this._activeTextPartID !== null) {
        this._commitActiveText();
      }
+     this._lastTextMessageID = null;
      return Promise.resolve();
    }
 
@@ -444,7 +462,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   }
   getActiveBlockAnsi(): string {
     if (this._activeTextPartID === null || this._activeBlockRole === null) return "";
-    // For text role, return the live-rendered ANSI. Stage 11.1 — force-flush
+    // For text role, return the live-rendered ANSI. Stage 10.7 — force-flush
     // any pending debounce timer here so the returned value is ALWAYS
     // synchronised with `_activeTextBuf`, regardless of whether the throttle
     // (immediate path) or the trailing-edge timer last won. `_flushDebounce`

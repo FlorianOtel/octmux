@@ -16,7 +16,7 @@ import type { Role } from "./blocks.ts";
 
 // Normalised events the REPL cares about; all others are dropped.
 export type ReplEvent =
-  | { kind: "block-start"; partID: string; role: Role; toolName?: string }
+  | { kind: "block-start"; partID: string; role: Role; toolName?: string; messageID?: string }
   | { kind: "block-delta"; partID: string; role: Role; text: string }
   | { kind: "block-end";   partID: string; role: Role; status?: "ok" | "error" }
   | { kind: "session-idle" }
@@ -253,7 +253,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
         for (const ev of events) openParts.delete(ev.partID);
         openParts.set(part.id, "text");
         events.push(
-          { kind: "block-start", partID: part.id, role: "text" },
+          { kind: "block-start", partID: part.id, role: "text", messageID: part.messageID },
           { kind: "generating" },
         );
         return events;

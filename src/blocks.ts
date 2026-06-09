@@ -7,6 +7,7 @@ export type Block = {
   meta?: {
     toolName?: string;
     toolStatus?: "running" | "ok" | "error";
+    messageID?: string;
   };
 };
 

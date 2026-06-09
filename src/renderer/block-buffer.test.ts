@@ -259,7 +259,7 @@ describe("BlockBufferRenderer", () => {
     test("100 ms trailing-edge debounce: non-newline delta defers emit until timer fires", async () => {
       const renderer = new BlockBufferRenderer(new Visibility());
       const partID = "debounce-part-1";
-      // Stage 11.1: getActiveBlockAnsi() lazy-flushes on read, so we
+      // Stage 10.7: getActiveBlockAnsi() lazy-flushes on read, so we
       // can't use it as a probe for "no automatic render happened yet".
       // Count `changed` emits instead — the underlying contract.
       let emitCount = 0;
@@ -340,7 +340,7 @@ describe("BlockBufferRenderer", () => {
         // debounce timer (no automatic flush-on-\n, no timer fire yet).
         renderer.appendToBlock(partID, "mid-debounce content");
 
-        // Stage 11.1: getActiveBlockAnsi() lazy-flushes on read, so a
+        // Stage 10.7: getActiveBlockAnsi() lazy-flushes on read, so a
         // consumer that calls it mid-debounce sees the up-to-date ANSI
         // (NOT "" as it returned pre-Stage-11.1). This is the explicit
         // call-time C1.4 freshness property.
@@ -471,7 +471,7 @@ describe("BlockBufferRenderer", () => {
     });
   });
 
-  describe("Stage 11 — _commitActiveText array-replace (Change 2)", () => {
+  describe("Stage 10.7 — _commitActiveText array-replace", () => {
     test("getCommitted() reference changes after _commitActiveText (array-replace identity)", () => {
       const renderer = new BlockBufferRenderer(new Visibility());
       renderer.beginBlock("p", "text");
@@ -494,6 +494,43 @@ describe("BlockBufferRenderer", () => {
       expect(joined).toContain("Heading");
       expect(joined).toContain("paragraph text");
       expect(committed.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Stage 10.8 — Inter-message demarcation", () => {
+    test("messageID transition: two text blocks with different messageIDs inject one blank CommittedLine between them", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("part-1", "text", { messageID: "msg-1" });
+      renderer.appendToBlock("part-1", "hello\n");
+      renderer.endBlock("part-1");
+      const afterFirst = renderer.getCommitted().length;
+
+      renderer.beginBlock("part-2", "text", { messageID: "msg-2" });
+      renderer.appendToBlock("part-2", "world\n");
+      renderer.endBlock("part-2");
+      const afterSecond = renderer.getCommitted();
+
+      const separatorLine = afterSecond[afterFirst];
+      expect(separatorLine).toBeDefined();
+      expect(separatorLine.ansi).toBe(" ");
+      expect(separatorLine.role).toBe("text");
+    });
+
+    test("same messageID across consecutive beginBlocks does NOT inject a blank CommittedLine", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("part-1", "text", { messageID: "msg-1" });
+      renderer.appendToBlock("part-1", "hello\n");
+      renderer.endBlock("part-1");
+      const afterFirst = renderer.getCommitted().length;
+
+      renderer.beginBlock("part-2", "text", { messageID: "msg-1" });
+      renderer.appendToBlock("part-2", "world\n");
+      renderer.endBlock("part-2");
+      const afterSecond = renderer.getCommitted();
+
+      const firstNewLine = afterSecond[afterFirst];
+      expect(firstNewLine).toBeDefined();
+      expect(firstNewLine.ansi).not.toBe(" ");
     });
   });
 
