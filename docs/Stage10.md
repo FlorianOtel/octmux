@@ -451,7 +451,7 @@ No source code changed; no breaking API calls; test baseline unmodified and full
 ### 2026-06-09--21-40 — Stage 10.8.3 — Fix bold inside tight list items (text-token override)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-09--21-40
-**Commit(s):** `<pending>` (backfilled after commit)
+**Commit(s):** `2ee48fb`
 
 #### Problem statement
 
