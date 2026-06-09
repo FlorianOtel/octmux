@@ -204,7 +204,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         const d = new Date();
         const pad = (n: number) => String(n).padStart(2, "0");
         const ts = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        const dimTs = `\x1b[2m${ts}\x1b[22m`;
+        const dimTs = `\x1b[2m[${ts}]\x1b[22m`;
         this._committed = [...this._committed,
           { id: this._nextId++, role: "text", ansi: "" },
           { id: this._nextId++, role: "text", ansi: dimTs },

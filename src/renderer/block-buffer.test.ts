@@ -520,7 +520,7 @@ describe("BlockBufferRenderer", () => {
       expect(tsLine).toBeDefined();
       // Timestamp wrapped in dim ANSI (\x1b[2m ... \x1b[22m); content matches
       // YYYY-MM-DD HH:MM (space-separated, single colon).
-      expect(tsLine.ansi).toMatch(/^\x1b\[2m\d{4}-\d{2}-\d{2} \d{2}:\d{2}\x1b\[22m$/);
+      expect(tsLine.ansi).toMatch(/^\x1b\[2m\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\x1b\[22m$/);
       expect(tsLine.role).toBe("text");
       expect(emptyBot).toBeDefined();
       expect(emptyBot.ansi).toBe("");
@@ -542,7 +542,7 @@ describe("BlockBufferRenderer", () => {
       expect(firstNewLine).toBeDefined();
       // Stage 10.8.1: same messageID → NO 3-line demarcation block.
       // First new line is part-2's content (not the dim-timestamp pattern).
-      expect(firstNewLine.ansi).not.toMatch(/^\x1b\[2m\d{4}-\d{2}-\d{2} \d{2}:\d{2}\x1b\[22m$/);
+      expect(firstNewLine.ansi).not.toMatch(/^\x1b\[2m\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\x1b\[22m$/);
     });
   });
 
