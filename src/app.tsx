@@ -47,6 +47,27 @@ function formatOptionsBlock(qs: QuestionType[]): string {
   }).join("\n\n");
 }
 
+function formatAnswerSummary(
+  q: QuestionType,
+  subIdx: number,
+  total: number,
+  rawText: string,
+): string {
+  const trimmed = rawText.trim();
+  const prefix = `▶ Answered Q${subIdx + 1}/${total}${q.header ? ` — ${q.header}` : ""}`;
+
+  const digitMatch = /^\d+$/.test(trimmed);
+  if (digitMatch) {
+    const n = parseInt(trimmed, 10);
+    if (n >= 1 && n <= q.options.length) {
+      const opt = q.options[n - 1];
+      return `${prefix}: ${n}. ${opt.label} — ${opt.description}`;
+    }
+  }
+
+  return `${prefix}: ${trimmed}`;
+}
+
 function commitOptionsBlock(renderer: Renderer, reqID: string, qs: QuestionType[], seen: Set<string>): void {
   if (seen.has(reqID)) return;
   seen.add(reqID);
@@ -949,7 +970,9 @@ export function App(props: AppProps) {
         const padded: string[][] = question.questions.map((_q, i) =>
           i === currentSubIdx ? [chosen] : []
         );
-        renderer.commitUserInput(text);
+        renderer.commitSystemMessage(
+          formatAnswerSummary(currentQ, currentSubIdx, question.questions.length, text)
+        );
         handleQuestion(padded);
         return;
       }
