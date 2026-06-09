@@ -4,11 +4,11 @@ import type { Role } from "../blocks.ts";
 export class Visibility extends EventEmitter {
   private state: Record<Role, boolean> = {
     user: true, text: true, thinking: true,
-    "tool-call": true, "tool-result": true, error: true,
+    "tool-call": true, "tool-result": true, error: true, summary: true,
   };
   private counts: Record<Role, number> = {
     user: 0, text: 0, thinking: 0,
-    "tool-call": 0, "tool-result": 0, error: 0,
+    "tool-call": 0, "tool-result": 0, error: 0, summary: 0,
   };
   // Cached snapshot — same reference between mutations so useSyncExternalStore
   // can compare with Object.is() without triggering a render loop.

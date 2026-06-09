@@ -106,6 +106,22 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
     ];
     this.emit("changed");
   }
+  commitCompactionDivider(auto: boolean): void {
+    const dividerText = "── compaction" + (auto ? " (auto)" : "") + " ──";
+    this._committed = [...this._committed,
+      { id: this._nextId++, role: "text", ansi: "\x1b[2m" + dividerText + "\x1b[0m" },
+      { id: this._nextId++, role: "text", ansi: formatLine("text", " ", true) },
+    ];
+    this.emit("changed");
+  }
+  retagBlock(partID: string, newRole: Role): void {
+    if (!this._openBlocks.has(partID)) return; // no-op if not in map
+    this._openBlocks.set(partID, newRole);
+    if (this._activePart?.partID === partID) {
+      this._activePart.role = newRole;
+    }
+    this.emit("changed");
+  }
 
   commitUserInput(text: string): void {
     this._committed = [...this._committed,

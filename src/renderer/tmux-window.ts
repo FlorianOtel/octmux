@@ -208,6 +208,20 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   commitUserInput(t: string):     void { this._main.commitUserInput(t); }
   commitSystemMessage(t: string): void { this._main.commitSystemMessage(t); }
   commitError(m: string):         void { this._main.commitError(m); }
+  commitCompactionDivider(auto: boolean): void {
+    this._main.commitCompactionDivider(auto);
+  }
+  retagBlock(partID: string, newRole: Role): void {
+    if (!this._openBlocks.has(partID)) return;
+    const oldRole = this._openBlocks.get(partID)!;
+    this._openBlocks.set(partID, newRole);
+    if (oldRole !== newRole) {
+      // _lineBufs is keyed by Role, so clear entry for the old role
+      this._lineBufs.delete(oldRole);
+    }
+    // Delegate to _main to keep main renderer state consistent
+    this._main.retagBlock(partID, newRole);
+  }
 
   clearAll(): void {
     this._openBlocks.clear();
