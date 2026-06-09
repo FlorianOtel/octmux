@@ -512,7 +512,8 @@ describe("BlockBufferRenderer", () => {
 
       const separatorLine = afterSecond[afterFirst];
       expect(separatorLine).toBeDefined();
-      expect(separatorLine.ansi).toBe(" ");
+      // Stage 10.8.1: inject content is a YYYY-MM-DD--HH-MM timestamp.
+      expect(separatorLine.ansi).toMatch(/^\d{4}-\d{2}-\d{2}--\d{2}-\d{2}$/);
       expect(separatorLine.role).toBe("text");
     });
 
@@ -530,7 +531,9 @@ describe("BlockBufferRenderer", () => {
 
       const firstNewLine = afterSecond[afterFirst];
       expect(firstNewLine).toBeDefined();
-      expect(firstNewLine.ansi).not.toBe(" ");
+      // Stage 10.8.1: if same messageID, no timestamp separator injected;
+      // first new line is part-2's content (which won't match the ts pattern).
+      expect(firstNewLine.ansi).not.toMatch(/^\d{4}-\d{2}-\d{2}--\d{2}-\d{2}$/);
     });
   });
 

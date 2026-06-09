@@ -193,12 +193,14 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         process.stderr.write(`[octmux-render] beginBlock TEXT  partID=${partID}  messageID=${meta.messageID}  _lastTextMessageID=${this._lastTextMessageID}  willInject=${willInject}\n`);
       }
       if (this._lastTextMessageID !== null && this._lastTextMessageID !== meta.messageID) {
-        // DIAGNOSTIC: use a visible marker so we can distinguish whether the
-        // row is being rendered (it'll show "·····" between text parts) or
-        // the row itself isn't being added/rendered. Will be reverted to " "
-        // once we know whether the issue is invisible-character collapse
-        // (copy-paste artifact) vs missing-row (real layout bug).
-        this._committed = [...this._committed, { id: this._nextId++, role: "text", ansi: "··· · · ···  [Stage 10.8 demarcation marker]" }];
+        // Stage 10.8.1: format local time YYYY-MM-DD--HH-MM and inject as
+        // the demarcation row. Substantive content is required because Ink
+        // collapses single-whitespace <Text> rows arriving as standalone
+        // Static appends (empirically verified at commit 3127a51).
+        const d = new Date();
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const ts = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}--${pad(d.getHours())}-${pad(d.getMinutes())}`;
+        this._committed = [...this._committed, { id: this._nextId++, role: "text", ansi: ts }];
         this.emit("changed");
         if (process.env.OCTMUX_DEBUG_RENDER === "1") {
           process.stderr.write(`[octmux-render]   → INJECT FIRED. committed.length now ${this._committed.length}\n`);
