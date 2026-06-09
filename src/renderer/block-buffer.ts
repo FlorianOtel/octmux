@@ -193,7 +193,12 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         process.stderr.write(`[octmux-render] beginBlock TEXT  partID=${partID}  messageID=${meta.messageID}  _lastTextMessageID=${this._lastTextMessageID}  willInject=${willInject}\n`);
       }
       if (this._lastTextMessageID !== null && this._lastTextMessageID !== meta.messageID) {
-        this._committed = [...this._committed, { id: this._nextId++, role: "text", ansi: " " }];
+        // DIAGNOSTIC: use a visible marker so we can distinguish whether the
+        // row is being rendered (it'll show "·····" between text parts) or
+        // the row itself isn't being added/rendered. Will be reverted to " "
+        // once we know whether the issue is invisible-character collapse
+        // (copy-paste artifact) vs missing-row (real layout bug).
+        this._committed = [...this._committed, { id: this._nextId++, role: "text", ansi: "··· · · ···  [Stage 10.8 demarcation marker]" }];
         this.emit("changed");
         if (process.env.OCTMUX_DEBUG_RENDER === "1") {
           process.stderr.write(`[octmux-render]   → INJECT FIRED. committed.length now ${this._committed.length}\n`);
