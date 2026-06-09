@@ -414,7 +414,7 @@ All 111 tests pass / 0 fail (235 expects in baseline; 5 new expects in updated S
 ### 2026-06-09--19-55 — Stage 10.8.2 — Bump marked 15→17 to fix list-item bold rendering
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-09--19-55
-**Commit(s):** `6568184`
+**Commit(s):** `0867597`
 
 #### Problem statement
 
