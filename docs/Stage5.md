@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: glm-5.1, Reviewer: claude-sonnet-4-6)
-updated_at: 2026-06-09--20-49
+updated_by: OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: qwen3-4b-q6, Reviewer: claude-sonnet-4-6)
+updated_at: 2026-06-09--21-31
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -421,6 +421,35 @@ in the planner output.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-06-09--21-31 — Stage 5.7.1 — synchronous context-bar reset on /compact + remove Stage 5.7 sentinel
+**Implemented by:** OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: qwen3-4b-q6, Reviewer: claude-sonnet-4-6) — 2026-06-09--21-31
+**Commit(s):** <pending>
+
+**Problem:** After /compact completes, there was a race window where the status bar would briefly show a partial or stale token count until refreshTokenUsage() fetched the next post-summary assistant message. This created inconsistency between what the operator saw (compacted state) and what the bar displayed (potentially pre-compaction tokens or nothing if no new message had arrived).
+
+**What changed:**
+1. session-compacted event handler now synchronously resets tokenUsage to `{ used: 0, contextWindow: prev.contextWindow }` immediately on modal close, before refreshTokenUsage() runs.
+2. Complete removal of the `compactedAwaitingTurn` sentinel state and its usage throughout app.tsx and StatusLine.tsx.
+3. StatusLine rendering simplified to always show the context bar (with 0% when no tokenUsage), removing the conditional "compacted (send next turn)" indicator.
+
+**Files modified:**
+- `src/app.tsx` (session-compacted handler add setTokenUsage, remove compactedAwaitingTurn state and all usages)
+- `src/components/StatusLine.tsx` (remove compactedAwaitingTurn prop, simplify rendering to bare context bar)
+- `docs/Stage5.md` (this entry, frontmatter refresh)
+
+**Impact:**
+- Instant 0% reset on /compact modal close; bar fills in on first regular reply.
+- Cleaner codebase with no sentinel state to manage.
+- No behavioural change for sessions that have never been compacted.
+
+**Out of scope:**
+- Deeper UX work on compaction feedback.
+- Block-renderer reconciliation concerns (separate Phase B work).
+
+**Note:** Stage 5.7's sentinel design is SUPERSEDED.
+
+---
 
 ### 2026-06-09--20-28 — Stage 5.7 — post-compaction token-count sentinel + summary-skip in refreshTokenUsage
 

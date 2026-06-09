@@ -20,7 +20,6 @@ export type StatusLineProps = {
   projectName: string;
   gitBranch: string;            // "" if not in git repo
   isCompacting?: boolean;
-  compactedAwaitingTurn?: boolean;
   runningCost: number;
   orchestraBadge?: OrchestraBadge;
   sseHealth?: "ok" | "reconnecting" | "silent";
@@ -37,7 +36,6 @@ export function StatusLine({
   projectName,
   gitBranch,
   isCompacting,
-  compactedAwaitingTurn,
   runningCost,
   orchestraBadge,
   sseHealth,
@@ -90,27 +88,15 @@ export function StatusLine({
   }
 
   // Full status line with downward-stacked orchestra rows
-  return (
-    <Box flexDirection="column">
-      {/* Main status row */}
-      <Text>
-        {`✦ ${modelLabel} | `}
-        {compactedAwaitingTurn ? (
-          <Text color="#d79921" bold>· compacted (send next turn)</Text>
-        ) : tokenUsage ? (
-          <>
-            {`ctx `}
-            <Text color={barColor}>{bar}</Text>
-            {` ${percentage}% ${usedStr}/${ctxStr}`}
-          </>
-        ) : (
-          <>
-            {`ctx `}
-            <Text color={barColor}>{bar}</Text>
-            {` ${percentage}% ${usedStr}/${ctxStr}`}
-          </>
-        )}
-        {` | Σ$${runningCost.toFixed(2)} | ◆ ${projectName}${gitSuffix}`}
+return (
+     <Box flexDirection="column">
+       {/* Main status row */}
+       <Text>
+         {`✦ ${modelLabel} | `}
+         {`ctx `}
+         <Text color={barColor}>{bar}</Text>
+         {` ${percentage}% ${usedStr}/${ctxStr}`}
+         {` | Σ$${runningCost.toFixed(2)} | ◆ ${projectName}${gitSuffix}`}
         {orchestraBadge && (
           <Text color="#d3869b">
             {` | ♪ ${orchestraBadge.title}`}
