@@ -130,17 +130,12 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   // String identity (===) is the invalidation key.
   private _activeBlockCacheBuf: string | null = null;
 
-  // Stage 10.8.1 — per-text-part demarcation. Tracks the partID of the most
-  // recently opened text block. Each text part (regardless of which assistant
-  // message it belongs to) is treated as a clear structural demarcation point:
-  // beginBlock unconditionally commits any prior active text content (so the
-  // previous block lands in <Static>) and, when the partID has changed from
-  // the last text block, injects one blank CommittedLine (" ") before opening
-  // the new one. Reset in commitTurnEnd, clearAll, dispose so the next user
-  // turn's first text part does not double up with the existing 2-row turn
-  // separator. (Previous Stage 10.8 used messageID — too coarse: multiple text
-  // parts within a single assistant message share the same messageID.)
-  private _lastTextPartID: string | null = null;
+  // Stage 10.8 — per-message demarcation. Tracks the messageID of the most recently
+  // opened text block. When a new text block opens with a different messageID, one
+  // blank CommittedLine (" ") is injected before the block starts, producing a visible
+  // blank-line separator between consecutive assistant messages in the scrollback.
+  // Reset in clearAll() and dispose() for session-switch hygiene.
+  private _lastTextMessageID: string | null = null;
 
   constructor(visibility: Visibility) {
     super();
@@ -179,25 +174,22 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     if (_outKey && !this.isOutputEnabled(_outKey)) return;
     this._openBlocks.set(partID, role);
 
-    // Stage 10.8.1 — every new text-part beginBlock is a structural
-    // demarcation point. Unconditionally:
-    //   (1) commit any prior active text content to <Static> (so each part
-    //       lands as a fully-committed block, not a hand-off via auto-flush
-    //       guard that depended on _activeTextPartID being set). The
-    //       _flushDebounce + _commitActiveText pair is a no-op when there
-    //       is no active text block (early-return guard inside
-    //       _commitActiveText), so the unconditional call is safe.
-    //   (2) inject one blank CommittedLine (" ") iff the new partID differs
-    //       from the last text part's partID.
-    //   (3) update _lastTextPartID.
-    if (role === "text") {
+    // Block transition: if we're entering a new text block while another is open,
+    // auto-flush the prior text block as a side-effect (defensive).
+    if (this._activeTextPartID !== null && this._activeTextPartID !== partID && role === "text") {
+      // Stage 10.4: pre-flush debounce so the prior block's commit uses its
+      // latest live ANSI.
       this._flushDebounce();
       this._commitActiveText();
-      if (this._lastTextPartID !== null && this._lastTextPartID !== partID) {
+    }
+
+    // Stage 10.8 — inter-message blank line for text role.
+    if (role === "text" && meta?.messageID != null) {
+      if (this._lastTextMessageID !== null && this._lastTextMessageID !== meta.messageID) {
         this._committed = [...this._committed, { id: this._nextId++, role: "text", ansi: " " }];
         this.emit("changed");
       }
-      this._lastTextPartID = partID;
+      this._lastTextMessageID = meta.messageID;
     }
   }
 
@@ -313,10 +305,6 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     this._activeBlockRole = null;
     this._activeTextBuf = "";
     this._activeBlockAnsi = "";
-    // Stage 10.8.1 — reset per-text-part demarcation tracker so the next
-    // user turn's first text part does not double up its leading blank
-    // with the 2-row turn separator pushed below.
-    this._lastTextPartID = null;
     this._committed = [...this._committed,
       { id: this._nextId++, role: "text", ansi: " " },
       { id: this._nextId++, role: "text", ansi: " " },
@@ -421,7 +409,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     this._activeBlockAnsi = "";
     this._nonTextTail = null;
     this._openBlocks.clear();
-    this._lastTextPartID = null;
+    this._lastTextMessageID = null;
     this.emit("changed");
   }
 
@@ -432,7 +420,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
      if (this._activeTextPartID !== null) {
        this._commitActiveText();
      }
-     this._lastTextPartID = null;
+     this._lastTextMessageID = null;
      return Promise.resolve();
    }
 
