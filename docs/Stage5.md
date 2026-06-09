@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: OpenCode (qwen3-4b-q6)
-updated_at: 2026-06-09--16-16
+updated_by: OpenCode (claude-opus-4-7)
+updated_at: 2026-06-09--18-24
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -422,9 +422,9 @@ in the planner output.
 
 ## Implementation log (reverse chronological — newest at top)
 
-### 2026-06-09--16-XX — Stage 5.6 — /compact UX fix: summary prefix + visible compaction divider
-**Implemented by:** OpenCode (qwen3-4b-q6) via /brain pipeline (Planner: minimax-m3, Actor: qwen3-4b-q6 + glm-5.1, Reviewer: claude-sonnet-4-6) — 2026-06-09--16-XX
-**Commit(s):** `<pending>`
+### 2026-06-09--16-15 — Stage 5.6 — /compact UX fix: summary prefix + visible compaction divider
+**Implemented by:** OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: qwen3-4b-q6 + glm-5.1, Reviewer: claude-sonnet-4-6) — 2026-06-09--16-15
+**Commit(s):** `2f641c8`
 
 **Problem:** During `/compact`, the modal appeared but the summary message streamed behind it into scrollback, creating a visual discontinuity. On modal close, the operator saw the summary in full, diverging from the LLM-view where it would be collapsed. Additionally, the pre-summary assistant messages remained visible in diverging operator-view from the LLM-view. The `session-compacting` ReplEvent (emitted when `session.updated` carried `time.compacting`) was dead — the server never wrote that field.
 
