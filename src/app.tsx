@@ -86,6 +86,7 @@ type AppProps = {
   cwd: string;
   onRedraw?: () => void;
   setPasteCallback?: (cb: (text: string) => void) => void;
+  singleMode: boolean;
 };
 
 export function App(props: AppProps) {
@@ -116,12 +117,12 @@ export function App(props: AppProps) {
   useEffect(() => {
     setCurrentSubIdx(0);
   }, [question?.reqID]);
-  const [permMode, setPermMode] = useState<"ask" | "allow" | "deny">("ask");
+  const [permMode, setPermMode] = useState<"ask" | "allow" | "deny">(props.singleMode ? "allow" : "ask");
   const [runningCost, setRunningCost] = useState<number>(0);
   const [orchestraBadge, setOrchestraBadge] = useState<OrchestraBadge>(null);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [gateStates, setGateStates] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(TOGGLES_CONFIG.bindings.map(b => [b.gate, b.default]))
+    Object.fromEntries(TOGGLES_CONFIG.bindings.map(b => [b.gate, props.singleMode ? false : b.default]))
   );
   const [pendingQueue, setPendingQueue] = useState<string[]>([]);
   const pendingQueueRef = useRef<string[]>([]);
@@ -758,7 +759,7 @@ export function App(props: AppProps) {
         // No model set on session yet; /model command will set activeModel
       }
       for (const [gate, val] of getToggleDefaults(TOGGLES_CONFIG)) {
-        renderer.setOutputEnabled(gate, val);
+        renderer.setOutputEnabled(gate, props.singleMode ? false : val);
       }
       await refreshTokenUsage(sessionID);
       await runReplay(sessionID);

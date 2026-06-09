@@ -335,6 +335,7 @@ const appElement = (
     cwd={cwd}
     onRedraw={() => onRedraw()}
     setPasteCallback={pasteFilter.setPasteCallback}
+    singleMode={single}
   />
 );
 const inkInstance = render(appElement, { exitOnCtrlC: false, stdin: pasteFilter.stream as unknown as NodeJS.ReadStream });
