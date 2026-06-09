@@ -1282,7 +1282,22 @@ export function App(props: AppProps) {
   return (
     <>
       <Static items={committed}>
-        {(item) => <Text key={item.id}>{item.ansi.length === 0 ? " " : item.ansi}</Text>}
+        {(item) => (
+          // Stage 10.8.1 — wrap each Static item in <Box> so Yoga lays each
+          // out as its own row regardless of whether the CommittedLine came
+          // in via a multi-line batch (within-message blank from
+          // _commitActiveText splitting on \n) or a single-item push
+          // (inter-message blank inject from beginBlock messageID transition).
+          // OCTMUX_DEBUG_RENDER=1 instrumentation confirmed the inject fires
+          // 7 times for 8 consecutive text parts in a brain pipeline, but
+          // the <Text>{" "}</Text> rows were not visible in the operator's
+          // render — Ink collapsed them when they arrived as separate
+          // single-item Static appends. The Box forces the row even then,
+          // mirroring the workaround already in src/components/ActiveBlock.tsx.
+          <Box key={item.id}>
+            <Text>{item.ansi.length === 0 ? " " : item.ansi}</Text>
+          </Box>
+        )}
       </Static>
       {activeBlock && <ActiveBlock role={activeBlock.role} ansi={activeBlockAnsi} width={w} maxRows={maxActiveRows} />}
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}
