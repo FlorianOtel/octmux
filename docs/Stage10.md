@@ -1,8 +1,8 @@
 ---
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
-updated_by: Claude Code (Claude Opus 4.7)
-updated_at: 2026-06-09--18-50
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-06-09--19-55
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -408,3 +408,40 @@ All 111 tests pass / 0 fail (235 expects in baseline; 5 new expects in updated S
 #### Build
 
 `dist/octmux` rebuilt at 18:43 (98,826,368 bytes — slightly larger than the previous Stage 10.8 binary due to the dim-ANSI string literal payload). Symlink `~/.local/bin/octmux.block-render` already points to it.
+
+---
+
+### 2026-06-09--19-55 — Stage 10.8.2 — Bump marked 15→17 to fix list-item bold rendering
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-09--19-55
+**Commit(s):** `6568184`
+
+#### Problem statement
+
+Stage 10.8.1 (and all prior stages) use `marked@15.0.0` with `marked-terminal@7.3.0`. In this configuration, inline formatting (like `**bold**`) inside list items (`1. ...` and `- ...`) renders as literal asterisks with no ANSI bold codes — the markdown is structurally correct but visually indistinguishable from plain text. Paragraphs and headings with bold rendered fine, isolating the defect to the list-item parser/renderer interaction.
+
+Empirical matrix (markdown source with various bold contexts, rendered via the current BlockBufferRenderer):
+
+| Content | marked 15.0.0 result | marked 17.0.1 result |
+|---------|-----|-----|
+| `**bold in text**` | ANSI bold | ANSI bold |
+| `# **bold in heading**` | ANSI bold | ANSI bold |
+| `> **bold in quote**` | ANSI bold | ANSI bold |
+| `1. **bold in list**` | Literal `**` (0 ANSI codes) | ANSI bold |
+| `- **bold in bullet**` | Literal `**` (0 ANSI codes) | ANSI bold |
+
+#### Root cause
+
+marked 15's parser interaction with marked-terminal's inline tokenizer disabled inline parsing for list-item content. By v17, this was fixed.
+
+#### Solution
+
+Bump `marked` dependency from `15.0.0` to `^17.0.1`. No source-code changes required — the `Marked` class constructor call and `m.use(markedTerminal({...}))` extension setup remain unchanged and compatible across the version range.
+
+#### Verification
+
+- `bun install`: installed `marked@17.0.6` (≥17.0.1, <18)
+- Binary build: exit 0, 833 modules
+- Test suite: 111 pass / 0 fail (240 expect calls)
+
+No source code changed; no breaking API calls; test baseline unmodified and fully green.
