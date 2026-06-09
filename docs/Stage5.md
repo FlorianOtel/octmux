@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: OpenCode (claude-opus-4-7)
-updated_at: 2026-06-09--18-24
+updated_by: OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: glm-5.1, Reviewer: claude-sonnet-4-6)
+updated_at: 2026-06-09--20-28
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -421,6 +421,35 @@ in the planner output.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-06-09--20-28 — Stage 5.7 — post-compaction token-count sentinel + summary-skip in refreshTokenUsage
+
+**Implemented by:** OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: glm-5.1, Reviewer: claude-sonnet-4-6) — 2026-06-09--20-28
+**Commit(s):** `98d137c`
+
+**Problem:** After /compact completes, the status bar continued to show the pre-compaction token count, because refreshTokenUsage() read tokens from the latest assistant message — which after compaction is the summary, whose `tokens.input` reflects the FULL pre-compaction context size (verified against OC server source: processor.ts:686-722 sets tokens unconditionally; compaction.ts:390-456 feeds the compaction agent the full pre-compaction history).
+
+**What changed:**
+1. refreshTokenUsage() now skips assistant messages where `info.summary === true` during both the primary latest-message scan AND the zero-tokens fallback scan.
+2. New `compactedAwaitingTurn: boolean` state slot tracks "session has been compacted but no regular post-summary assistant message exists yet."
+3. StatusLine gains optional `compactedAwaitingTurn?: boolean` prop. When true, displays yellow `· compacted (send next turn)` indicator INSTEAD of the percent/token-count block. Auto-clears when the next regular post-summary assistant message arrives with non-zero tokens (via refreshTokenUsage re-running on `message-completed` and `session-idle` events).
+
+**Files modified:**
+- `src/app.tsx` (refreshTokenUsage rewrite, compactedAwaitingTurn state, sentinel clear in switchSession, StatusLine prop wire-up)
+- `src/components/StatusLine.tsx` (compactedAwaitingTurn prop + sentinel render branch)
+- `docs/Stage5.md` (this entry, frontmatter refresh)
+
+**Impact:**
+- Post-compaction status bar accurately reflects "we just compacted, waiting for next turn to know new context" instead of showing stale pre-compaction number.
+- Bar updates to real post-compaction count automatically when the next regular reply arrives (server's filtered LLM-feed produces a small `tokens.input` on that reply).
+- No behavioural change for sessions that have never been compacted.
+
+**Out of scope:**
+- Removing CompactingModal.
+- Heuristic estimates from summary.tokens.output (rejected per RESEARCH.md alternative D).
+- Pre-existing renderer-interface concerns (separate bug; Phase B addresses them on feat/block-renderer).
+
+---
 
 ### 2026-06-09--16-15 — Stage 5.6 — /compact UX fix: summary prefix + visible compaction divider
 **Implemented by:** OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: qwen3-4b-q6 + glm-5.1, Reviewer: claude-sonnet-4-6) — 2026-06-09--16-15
