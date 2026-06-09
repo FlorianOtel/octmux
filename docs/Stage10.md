@@ -2,7 +2,7 @@
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
 updated_by: Actor (Claude Haiku 4.5)
-updated_at: 2026-06-09--12-43
+updated_at: 2026-06-09--12-45
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -325,7 +325,7 @@ Two coordinated edits fix observed real-model-output rendering defects.
 
 The renamed `meta?` parameter (was `_meta?`) of `beginBlock` in `block-buffer.ts` — implementations on `stdout.ts` and `tmux-window.ts` continue to ignore `meta` (`_meta?` there).
 
-Bundled cleanup: 9 stale "Stage 11" / "Stage 11.1" source-code annotations renamed to "Stage 10.7" (left over from the earlier Stage 10.7 consolidation that renamed commits/docs but missed source annotations). 2 stale refs in this very doc also cleaned up. Memory file refs similarly reframed (preserving the historical git tag `stage-11-as-implemented`).
+Bundled cleanup: 9 stale source-code annotations that referenced a transient pre-consolidation label were renamed to "Stage 10.7" (left over from the earlier Stage 10.7 consolidation that renamed commits/docs but missed source annotations). 2 stale refs in this very doc also cleaned up. Memory file refs similarly reframed (preserving the historical git tag `stage-11-as-implemented` as a literal commit-pinned tag name).
 
 #### Problems faced and solved
 
@@ -335,7 +335,7 @@ Ink Yoga's empty-text → zero-height quirk: confirmed by direct comparison with
 
 `Renderer.beginBlock(partID, role, meta?)` exposed an unused `meta?` hook — the natural place for messageID. No new API surface; the existing hook just started being used.
 
-Bundled cleanup of stale "Stage 11" / "Stage 11.1" source annotations addressed the operator-flagged version-numbering inconsistency in the same commit. (Third operator flag on version-inflation; updated `feedback-version-numbering` memory.)
+Bundled cleanup of stale source-code annotations (from a transient pre-consolidation label) addressed the operator-flagged version-numbering inconsistency in the same commit. (Third operator flag on version-inflation; updated `feedback-version-numbering` memory.)
 
 #### Future issues / future work
 
