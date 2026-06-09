@@ -110,7 +110,6 @@ export function App(props: AppProps) {
   } | null>(null);
   const [opencodeCommands, setOpencodeCommands] = useState<Map<string, OcCommand>>(new Map());
   const [isCompacting, setIsCompacting] = useState(false);
-  const [compactedAwaitingTurn, setCompactedAwaitingTurn] = useState<boolean>(false);
   const [sessionPicker, setSessionPicker] = useState<{ items: SessionPickerItem[]; idx: number } | null>(null);
   // Stage 9.1 (Piece 2B, revised): current sub-question index, owned by app.tsx
   // so handleSubmit can build the D4-α padded array. Modal is display-only.
@@ -523,11 +522,7 @@ export function App(props: AppProps) {
       if (latestIdx < 0) {
         // No non-summary assistant message exists — could be a fresh session
         // or a just-compacted session where the latest assistant IS the summary.
-        const hasSummary = messages.some(
-          m => m.info.role === "assistant" && (m.info as { summary?: boolean }).summary === true
-        );
         setTokenUsage(null);
-        setCompactedAwaitingTurn(hasSummary && !isCompacting);
       } else {
         const msg = messages[latestIdx].info;
         if (msg.role === "assistant") {
@@ -564,7 +559,6 @@ export function App(props: AppProps) {
             setTokenUsage({ used, contextWindow: ctxWindow });
           }
         }
-        setCompactedAwaitingTurn(false); // clear sentinel when we have a real count
       }
 
       // Compute running cost: sum all assistant messages in parent + children
@@ -666,6 +660,7 @@ export function App(props: AppProps) {
         else if (ev.kind === "session-compacted") {
           if (ev.sessionID === sessionIDRef.current) {
             setIsCompacting(false);
+            setTokenUsage(prev => prev ? { used: 0, contextWindow: prev.contextWindow } : null);
             refreshTokenUsage(sessionIDRef.current);
           }
         }
@@ -925,7 +920,6 @@ export function App(props: AppProps) {
     setLastSubmitted("");
     setIsCompacting(false);
     setTokenUsage(null);
-    setCompactedAwaitingTurn(false);
     setRunningCost(0);
     setSessionID(newID);
     try {
@@ -1395,7 +1389,6 @@ export function App(props: AppProps) {
           projectName={projectName}
           gitBranch={gitBranch}
           isCompacting={isCompacting}
-          compactedAwaitingTurn={compactedAwaitingTurn}
           runningCost={runningCost}
           orchestraBadge={orchestraBadge}
           sseHealth={sseHealth}
