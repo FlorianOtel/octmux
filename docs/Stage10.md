@@ -2,7 +2,7 @@
 created_at: 2026-06-08--00:00
 created_by: local/qwen3-4b-q6
 updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-09--21-40
+updated_at: 2026-06-09--23-40
 context: >
   This document tracks Stage 10 implementation progress for the block-renderer feature.
   The feature enables markdown rendering in the active output region using BlockBufferRenderer.
@@ -499,3 +499,75 @@ Two new tests under `describe("Stage 10.8.3 — Tight-list bold rendering")`:
 #### Scope
 
 The override affects only the `renderer.text` path — no changes to the marked parser itself, no new dependencies, no multi-renderer sync issues (C1.4 still holds). The fix is surgical: tight-list inline markdown now parses correctly; all other renderer paths unchanged.
+
+---
+
+### 2026-06-09--23-40 — Stage 10.8.4 — Close BBR Renderer interface gap: commitCompactionDivider + retagBlock
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-09--23-40
+**Commit(s):** `TBD` (pending)
+
+#### Design and implementation
+
+`BlockBufferRenderer` now fully implements the `Renderer` interface by adding two missing methods required for compaction workflows: `commitCompactionDivider(auto: boolean)` and `retagBlock(partID: string, newRole: Role)`.
+
+**`commitCompactionDivider(auto: boolean)`** (mirrors `StdoutRenderer:111-117`):
+
+Pushes two committed lines representing a compaction divider:
+1. **Divider line:** `{ id: this._nextId++, role: "text", ansi: "\x1b[2m" + dividerText + "\x1b[0m" }`
+   - `dividerText = "── compaction" + (auto ? " (auto)" : "") + " ──"`
+   - Dim ANSI styling (`\x1b[2m...\x1b[0m`), matching marked-terminal's `hr` aesthetic.
+2. **Spacer line:** `{ id: this._nextId++, role: "text", ansi: formatLine("text", " ", true) }`
+   - Single space, same pattern as `commitTurnEnd` separators.
+
+**BBR-specific defensive pre-flush:** If a text block is active (`_activeTextPartID !== null`), the method calls `_flushDebounce()` and `_commitActiveText()` before injecting the divider. This ensures the divider appears **after** the active text block's final content, mirroring `StdoutRenderer`'s contract. StdoutRenderer has no debounce timer, so no explicit pre-flush is needed there; BBR's trailing-edge debounce (100 ms) requires the flush to avoid stale final ANSI.
+
+**`retagBlock(partID: string, newRole: Role)`** (mirrors `StdoutRenderer:119-126` with BBR-specific cache logic):
+
+Reassigns a block's role during compaction. Used when a text part (e.g., `reasoning`) is converted to a different role (e.g., `summary`).
+
+1. **Guard:** If `partID` is not in `_openBlocks`, return (no-op).
+2. **Update map:** `_openBlocks.set(partID, newRole)`.
+3. **If the retagged block is the active text part** (`this._activeTextPartID === partID`):
+   - Update `_activeBlockRole = newRole`.
+   - Invalidate memoised cache: `_activeBlockCache = null` and `_activeBlockCacheBuf = null` (forces `getActiveBlock()` to rebuild with the new role on next call).
+   - Re-render active ANSI: `_activeBlockAnsi = this._renderActiveTextAnsi()` (applies the new role to the formatting logic, notably affecting non-text roles which use per-line `formatLine`).
+   - For non-text target roles, construct `_nonTextTail = { role: newRole, text: this._activeTextBuf }` so `getActiveBlock()` returns a wrapper with the updated role.
+4. **Emit changed signal.**
+
+**Note on scope:** block-retag is currently always emitted with `newRole = "summary"` for an active text part during compaction. Non-text-active retag (e.g., renaming a "tool-result" to something else) is out of scope and may leave `_nonTextTail.role` stale. A future stage can extend this if needed.
+
+#### Test additions (4 new tests)
+
+All tests in `src/renderer/block-buffer.test.ts` under a new `describe("Stage 10.8.4 — commitCompactionDivider + retagBlock")`:
+
+1. **Test 1 — `commitCompactionDivider(false)` pushes 2 lines:**
+   - Divider: `committed[N].ansi === "\x1b[2m── compaction ──\x1b[0m"`, `role === "text"`
+   - Spacer: `committed[N+1].ansi === formatLine("text", " ", true)`, `role === "text"`
+
+2. **Test 2 — `commitCompactionDivider(true)` includes "(auto)" in divider:**
+   - Divider: `committed[N].ansi === "\x1b[2m── compaction (auto) ──\x1b[0m"`
+
+3. **Test 3 — `retagBlock` updates active block role and invalidates cache:**
+   - Setup: `beginBlock(partID, "text", {messageID:"m1"})` + `appendToBlock(partID, "some content\n")`
+   - Verify: `getActiveBlock()?.role === "text"`
+   - Call: `retagBlock(partID, "summary")`
+   - Verify: `getActiveBlock()?.role === "summary"` AND the wrapper object is a **new instance** (cache invalidated).
+
+4. **Test 4 — `retagBlock` on nonexistent partID is no-op:**
+   - Call `retagBlock("nonexistent", "summary")` on fresh renderer.
+   - No exception; `getCommitted().length === 0`; `getActiveBlock() === null`.
+
+#### TS2739 clearance
+
+The interface mismatch at `src/index.tsx:285` (BlockBufferRenderer not implementing `commitCompactionDivider` and `retagBlock`) is now resolved. `tsc --noEmit` reports no TS2739 error at that line.
+
+#### Test and build results
+
+- **Tests:** 116 baseline (Stage 10.8.3) + 4 new = 120 pass / 0 fail, 296 expect calls.
+- **Build:** `dist/octmux` rebuilt (833 modules; no new dependencies).
+
+#### Files changed
+
+- `src/renderer/block-buffer.ts`: Added `commitCompactionDivider()` and `retagBlock()` methods.
+- `src/renderer/block-buffer.test.ts`: Added 4 new test cases in a new `describe("Stage 10.8.4 — commitCompactionDivider + retagBlock")` block.

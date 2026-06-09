@@ -586,4 +586,72 @@ describe("BlockBufferRenderer", () => {
     });
   });
 
+  describe("Stage 10.8.4 — commitCompactionDivider + retagBlock", () => {
+    test("commitCompactionDivider(false) pushes 2 lines: divider + spacer", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const beforeLength = renderer.getCommitted().length;
+      renderer.commitCompactionDivider(false);
+      const afterLength = renderer.getCommitted().length;
+
+      expect(afterLength).toBe(beforeLength + 2);
+      const committed = renderer.getCommitted();
+      const dividerLine = committed[beforeLength];
+      const spacerLine = committed[beforeLength + 1];
+
+      expect(dividerLine.ansi).toBe("\x1b[2m── compaction ──\x1b[0m");
+      expect(dividerLine.role).toBe("text");
+      expect(spacerLine.ansi).toBe(formatLine("text", " ", true));
+      expect(spacerLine.role).toBe("text");
+    });
+
+    test("commitCompactionDivider(true) includes '(auto)' in divider text", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const beforeLength = renderer.getCommitted().length;
+      renderer.commitCompactionDivider(true);
+
+      const committed = renderer.getCommitted();
+      const dividerLine = committed[beforeLength];
+      expect(dividerLine.ansi).toBe("\x1b[2m── compaction (auto) ──\x1b[0m");
+    });
+
+    test("retagBlock updates active block's role and invalidates memoised wrapper", async () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "retag-part-1";
+
+      renderer.beginBlock(partID, "text", { messageID: "m1" });
+      renderer.appendToBlock(partID, "some content\n");
+
+      // Wait briefly for debounce if needed (or we can check that getActiveBlock works)
+      const activeBefore = renderer.getActiveBlock();
+      expect(activeBefore).not.toBeNull();
+      expect(activeBefore!.role).toBe("text");
+
+      // Call retagBlock to change role
+      renderer.retagBlock(partID, "summary");
+
+      // After retag, getActiveBlock must return a NEW object (cache invalidated)
+      // with the new role.
+      const activeAfter = renderer.getActiveBlock();
+      expect(activeAfter).not.toBeNull();
+      expect(activeAfter!.role).toBe("summary");
+      // The wrapper object must be different (cache was invalidated)
+      expect(activeBefore === activeAfter).toBe(false);
+
+      renderer.endBlock(partID, "ok");
+    });
+
+    test("retagBlock on nonexistent partID is no-op (no exception, no changes)", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+
+      // Call retagBlock on a partID that was never beginBlock'd — should be no-op.
+      expect(() => {
+        renderer.retagBlock("nonexistent", "summary");
+      }).not.toThrow();
+
+      // State should be unchanged.
+      expect(renderer.getCommitted()).toHaveLength(0);
+      expect(renderer.getActiveBlock()).toBeNull();
+    });
+  });
+
 });

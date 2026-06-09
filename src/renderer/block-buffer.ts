@@ -360,6 +360,52 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     this.emit("changed");
   }
 
+  commitCompactionDivider(auto: boolean): void {
+    // Stage 10.8.4 — Push a compaction divider + spacer line.
+    // BBR-specific defensive pre-flush: if a text block is active with pending
+    // debounce, flush it first so the divider appears after the block's final
+    // content (matching StdoutRenderer behavior, which has no debounce timer).
+    this._flushDebounce();
+    if (this._activeTextPartID !== null) {
+      this._commitActiveText();
+    }
+    // EXACT divider format match to StdoutRenderer:112-114 for cross-renderer consistency.
+    const dividerText = "── compaction" + (auto ? " (auto)" : "") + " ──";
+    this._committed = [...this._committed,
+      { id: this._nextId++, role: "text", ansi: "\x1b[2m" + dividerText + "\x1b[0m" },
+      { id: this._nextId++, role: "text", ansi: formatLine("text", " ", true) },
+    ];
+    this.emit("changed");
+  }
+
+  retagBlock(partID: string, newRole: Role): void {
+    // Stage 10.8.4 — Reassign a block's role. Used during compaction to change
+    // a part's role (e.g., text → summary).
+    if (!this._openBlocks.has(partID)) return; // no-op if not in map
+    this._openBlocks.set(partID, newRole);
+    // If the retagged block is the active text part, update its role and
+    // invalidate the memoised wrapper so the next getActiveBlock() call
+    // returns a fresh object with the new role.
+    if (this._activeTextPartID === partID) {
+      this._activeBlockRole = newRole;
+      // Invalidate memoised cache to force getActiveBlock() to rebuild
+      this._activeBlockCache = null;
+      this._activeBlockCacheBuf = null;
+      // Re-render the active ANSI with the new role (affects non-text roles
+      // which use formatLine; text role would still use marked + marked-terminal).
+      this._activeBlockAnsi = this._renderActiveTextAnsi();
+      // For non-text roles, construct _nonTextTail so getActiveBlock() returns it.
+      // (Text role will use the cache above; non-text needs _nonTextTail populated.)
+      if (newRole !== "text") {
+        this._nonTextTail = { role: newRole, text: this._activeTextBuf };
+      }
+    }
+    this.emit("changed");
+    // Note: block-retag is currently always emitted with newRole "summary" for
+    // an active text part during compaction. Non-text-active retag is out of
+    // scope and may leave `_nonTextTail.role` stale.
+  }
+
   commitUserInput(text: string): void {
     // Stage 10.4: pre-flush debounce + flush active text block.
     this._flushDebounce();
