@@ -3,7 +3,7 @@ title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
 updated_by: OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: glm-5.1, Reviewer: claude-sonnet-4-6)
-updated_at: 2026-06-09--20-28
+updated_at: 2026-06-09--20-49
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -425,7 +425,7 @@ in the planner output.
 ### 2026-06-09--20-28 — Stage 5.7 — post-compaction token-count sentinel + summary-skip in refreshTokenUsage
 
 **Implemented by:** OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: glm-5.1, Reviewer: claude-sonnet-4-6) — 2026-06-09--20-28
-**Commit(s):** `98d137c`
+**Commit(s):** `b7d932d`
 
 **Problem:** After /compact completes, the status bar continued to show the pre-compaction token count, because refreshTokenUsage() read tokens from the latest assistant message — which after compaction is the summary, whose `tokens.input` reflects the FULL pre-compaction context size (verified against OC server source: processor.ts:686-722 sets tokens unconditionally; compaction.ts:390-456 feeds the compaction agent the full pre-compaction history).
 
