@@ -648,14 +648,17 @@ export function App(props: AppProps) {
           setProcTimes({ thinking: null, tools: null, generating: null });
           refreshTokenUsage(sessionIDRef.current);
         }
-        else if (ev.kind === "session-compacting") {
-          if (ev.sessionID === sessionIDRef.current) setIsCompacting(ev.compacting);
-        }
         else if (ev.kind === "session-compacted") {
           if (ev.sessionID === sessionIDRef.current) {
             setIsCompacting(false);
             refreshTokenUsage(sessionIDRef.current);
           }
+        }
+        else if (ev.kind === "block-retag") {
+          renderer.retagBlock(ev.partID, ev.newRole);
+        }
+        else if (ev.kind === "compaction-divider") {
+          renderer.commitCompactionDivider(ev.auto);
         }
         else if (ev.kind === "message-completed") {
           // One assistant message has fully completed. Refresh cost display so Σ$

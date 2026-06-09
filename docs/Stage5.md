@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-06-06--13-38
+updated_by: OpenCode (claude-opus-4-7)
+updated_at: 2026-06-09--18-24
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -248,20 +248,30 @@ combination is rejected at arg-parse time with exit code 2.
 
 #### How server-side compaction works (the bit that drives octmux's UX)
 
-The OpenCode server runs an `isOverflow()` check after each LLM step
-(`packages/opencode/src/session/processor.ts` upstream). The check is:
-`current_tokens > model.limit.context - COMPACTION_BUFFER` (where
-`COMPACTION_BUFFER = 20_000`). When true:
+**Phase 0 finding:** The `Session.time.compacting` field was declared in the
+OC server schema but **never written** by the server. The original Stage 5.1
+design assumption that the server sets `time.compacting` and fires
+`session.updated` with that field was incorrect.
 
-1. Server sets `Session.time.compacting = <unix-timestamp>` and emits
-   `session.updated` SSE carrying the full `Session` object.
-2. Server runs a hidden compaction agent that generates a structured
-   summary (using its `SUMMARY_TEMPLATE`: Goal / Constraints / Progress /
-   Key Decisions / Next Steps / Critical Context). The resulting
-   assistant message is marked `summary: true`.
-3. On completion: server clears `time.compacting`, emits
+**Actual server-side compaction flow:**
+
+1. The OpenCode server runs an `isOverflow()` check after each LLM step
+   (`packages/opencode/src/session/processor.ts` upstream). The check is:
+   `current_tokens > model.limit.context - COMPACTION_BUFFER` (where
+   `COMPACTION_BUFFER = 20_000`). When true:
+   - The server runs a hidden compaction agent that generates a structured
+     summary (using its `SUMMARY_TEMPLATE`: Goal / Constraints / Progress /
+     Key Decisions / Next Steps / Critical Context).
+   - The compaction agent's assistant message is marked with `info.summary === true`.
+   - The OC server fires a **`message.updated`** SSE for that summary message
+     carrying `info.summary === true`. This is the primary signal octmux uses
+     to identify summary text.
+   - Additionally, the compaction agent emits a **`CompactionPart`**
+     (`part.type === "compaction"`) via `message.part.updated` — this acts as
+     the in-band visual divider marker.
+2. On completion: the server clears the compaction flag, emits
    `session.compacted` SSE with `{ sessionID }`.
-4. If compaction was triggered by hard overflow (vs proactive), the
+3. If compaction was triggered by hard overflow (vs proactive), the
    server replays the last user message to restart the turn; otherwise
    it injects a synthetic "Continue if you have next steps" prompt.
 
@@ -270,30 +280,40 @@ flipped the switch: user vs `isOverflow()`. From octmux's perspective
 both look identical on the wire — the same two SSE events fire with the
 same shapes.
 
+**Summary routing mechanism:** octmux now tracks summary message IDs via
+`summaryMessageIDs` (a module-level Set). When `message.updated` arrives with
+`info.summary === true`, the message ID is added to this set. Subsequent
+`message.part.updated` events for text parts with that messageID get role
+`"summary"` instead of `"text"`, enabling the renderer to distinguish them
+visually with the `[compacted summary]` prefix.
+
 A server-side env knob exists to disable auto-compaction:
 `OPENCODE_DISABLE_AUTOCOMPACT=1` on the server process. octmux does not
 set or inspect this; it's a server administration concern.
 
 #### Status-line and modal: how octmux reflects compaction
 
-Two new `ReplEvent` kinds (`session-compacting`, `session-compacted`)
-were added to `src/events.ts`. They are emitted by `filterEvent` whenever
-the server's `session.updated` carries a non-null `time.compacting`
-(start) or whenever `session.compacted` arrives (end). The App handles
-them by toggling an `isCompacting: boolean` state.
+The `session-compacting` ReplEvent kind (emitted when `session.updated`
+carries `time.compacting`) was removed — the `time.compacting` field was
+never written by the server (Phase 0 finding).
 
-`isCompacting` drives **two** UI surfaces simultaneously:
+Instead, octmux now uses two new ReplEvent kinds:
 
-- `<CompactingModal>` — a full-attention overlay that disables the
-  PromptInput and hides the slash-completion overlay.
-- `<StatusLine isCompacting={…}>` — appends a yellow `· compacting…`
-  suffix to the existing model/context/cost line so the operator sees
-  the state in their normal scanning field.
+1. **`block-retag`** — emitted when `message.updated` arrives with
+   `info.summary === true` for a message whose text parts are already open.
+   This retroactively retags any open parts to role `"summary"` so the
+   renderer can apply the `[compacted summary]` prefix.
+2. **`compaction-divider`** — emitted when `message.part.updated` carries
+   `part.type === "compaction"` (the upstream CompactionPart). This renders
+   as `── compaction ──` in the renderer.
 
-When the operator triggers `/compact` manually, the handler also calls
-`setIsCompacting(true)` *before* the SDK call returns — so the modal
-appears immediately, not after the round-trip. Either path (manual or
-auto) clears via the same `session.compacted` event.
+The `isCompacting` state is still toggled by the `/compact` command handler
+calling `setIsCompacting(true)` *before* the SDK call returns — so the modal
+appears immediately, not after the round-trip. The modal also appears
+automatically when the server fires the compaction agent's assistant message
+with `info.summary === true` (octmux detects this via the `block-retag` path
+or by the summary message's first text part). Either path clears when
+`session.compacted` arrives.
 
 #### Why `/compact` blocks input — and why auto-compaction does too
 
@@ -401,6 +421,50 @@ in the planner output.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-06-09--16-15 — Stage 5.6 — /compact UX fix: summary prefix + visible compaction divider
+**Implemented by:** OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: qwen3-4b-q6 + glm-5.1, Reviewer: claude-sonnet-4-6) — 2026-06-09--16-15
+**Commit(s):** `2f641c8`
+
+**Problem:** During `/compact`, the modal appeared but the summary message streamed behind it into scrollback, creating a visual discontinuity. On modal close, the operator saw the summary in full, diverging from the LLM-view where it would be collapsed. Additionally, the pre-summary assistant messages remained visible in diverging operator-view from the LLM-view. The `session-compacting` ReplEvent (emitted when `session.updated` carried `time.compacting`) was dead — the server never wrote that field.
+
+**What changed:**
+
+1. **New `"summary"` Role variant:** Added a new Role value `"summary"` to distinguish summary text from regular text. When `message.updated` arrives with `info.summary === true`, the message ID is tracked in `summaryMessageIDs`. Subsequent `message.part.updated` events for text parts with that messageID get role `"summary"` instead of `"text"`.
+
+2. **`block-retag` event:** When `message.updated` with `info.summary === true` arrives for a message whose text parts are already open, octmux emits a `block-retag` event to retroactively retag those parts to role `"summary"`. This handles the case where the summary message arrives after its text parts have already started streaming.
+
+3. **`compaction-divider` event:** Added a new ReplEvent kind `compaction-divider` emitted when `message.part.updated` carries `part.type === "compaction"` (the upstream CompactionPart). This renders as `── compaction ──` in the renderer, providing a visible separator between the summary and the following content.
+
+4. **Dead path removal:** The `session-compacting` ReplEvent path was removed from `filterEvent` — the `time.compacting` field was never written by the server (Phase 0 finding).
+
+5. **Replay handling:** `src/replay.ts` was updated to collapse pre-summary assistant messages to a single indicator line, so the operator sees the summary correctly on resume.
+
+**Files modified:**
+- `src/blocks.ts` (new `"summary"` Role variant)
+- `src/events.ts` (summaryMessageIDs Set, partIDToMessageID Map, block-retag event, compaction-divider event, removed session-compacting path)
+- `src/events.test.ts` (three new regression tests)
+- `src/renderer/types.ts` (new Role variant)
+- `src/renderer/stdout.ts` (render summary role with `[compacted summary]` prefix)
+- `src/renderer/tmux-window.ts` (render summary role with `[compacted summary]` prefix)
+- `src/renderer/visibility.ts` (handle summary role visibility)
+- `src/replay.ts` (collapse pre-summary assistant messages)
+- `src/app.tsx` (handle block-retag event)
+- `docs/Stage5.md` (corrected compaction documentation, added implementation log entry)
+
+**Impact:**
+- During `/compact`, the modal blocks input as before. The summary message streams behind it with the `[compacted summary]` prefix per line, so the operator sees the same prefixed summary in scrollback (no surprise).
+- On modal close, pre-summary assistant messages are collapsed to a single indicator line in the replay, matching the LLM-view behavior.
+- The CompactionPart renders as a visible divider `── compaction ──`, providing clear visual separation between the summary and subsequent content.
+- The dead `session-compacting` path is removed, simplifying the event handling logic.
+
+**Out of scope:**
+- Removing the CompactingModal (Alternative B rejected; the modal is still needed for the blocking UX).
+- Auto-compaction modal (server-side concern; `time.compacting` is dead).
+- Memory-file write-back.
+- OC server-side changes.
+
+---
 
 ### 2026-06-02--19-17 — Stage 5.5 — slash autocomplete: sort candidates + dismiss on space
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-02--19-17

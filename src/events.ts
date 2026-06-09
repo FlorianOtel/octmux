@@ -25,13 +25,14 @@ export type ReplEvent =
   | { kind: "session-status"; status: "idle" | "busy" | "retry" }
   | { kind: "part-removed"; partId: string }
   | { kind: "permission-asked"; permID: string; sessionID: string; title: string; permType: string }
-  | { kind: "question-asked"; reqID: string; sessionID: string; questions: Array<{
+ | { kind: "question-asked"; reqID: string; sessionID: string; questions: Array<{
       question: string; header: string; options: Array<{ label: string; description: string }>;
       multiple?: boolean; custom?: boolean;
     }> }
   | { kind: "question-tool-detected"; sessionID: string; callID: string }
-  | { kind: "session-compacting"; sessionID: string; compacting: boolean }
   | { kind: "session-compacted"; sessionID: string }
+  | { kind: "block-retag"; partID: string; newRole: "summary" }
+  | { kind: "compaction-divider"; sessionID: string; auto: boolean }
   | { kind: "message-completed"; messageID: string }
   | { kind: "subagent-detected"; sessionID: string; agent: string; model: string; description?: string }
   | { kind: "subagent-ended"; sessionID: string }
@@ -80,6 +81,16 @@ const taskToChild = new Map<string, string>();
 // insertion-ordered Set).
 const unpairedChildren = new Set<string>();
 
+// Summary message IDs: set of assistant message IDs whose info.summary === true.
+// Used to tag text parts belonging to summary messages with role "summary"
+// instead of "text", so the renderer can distinguish them visually.
+const summaryMessageIDs = new Set<string>();
+
+// Maps partID → messageID so that when a message.updated arrives with
+// info.summary === true, we can retroactively retag any already-open part
+// that belongs to that message (block-retag event).
+const partIDToMessageID = new Map<string, string>();
+
 // Reset event tracking state on session switch.
 export function resetEventState(): void {
   userMessageIDs.clear();
@@ -91,6 +102,8 @@ export function resetEventState(): void {
   openTaskPartIDs.clear();
   taskToChild.clear();
   unpairedChildren.clear();
+  summaryMessageIDs.clear();
+  partIDToMessageID.clear();
 }
 
 // Attempt to pair pending task parts with unmatched children.
@@ -175,11 +188,25 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       userMessageIDs.add(info.id);
     }
     if (info.sessionID === sessionID && info.role === "assistant") {
+      const events: ReplEvent[] = [];
+      // Summary detection: if this assistant message is marked summary=true,
+      // retag any already-open text parts to role "summary".
+      if (info.summary === true && !summaryMessageIDs.has(info.id)) {
+        summaryMessageIDs.add(info.id);
+        for (const [partID, msgID] of partIDToMessageID) {
+          if (msgID === info.id && openParts.has(partID)) {
+            events.push({ kind: "block-retag", partID, newRole: "summary" });
+          }
+        }
+      }
+      // Existing message-completed logic.
       const completed = (info as { time?: { completed?: number | null } }).time?.completed;
       if (completed != null && !completedAssistantMessageIDs.has(info.id)) {
         completedAssistantMessageIDs.add(info.id);
-        return { kind: "message-completed", messageID: info.id };
+        events.push({ kind: "message-completed", messageID: info.id });
       }
+      if (events.length === 1) return events[0];
+      if (events.length > 1) return events;
     }
     return null;
   }
@@ -188,6 +215,9 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
   // incremental text. EventMessagePartDelta is defined in the v2 SDK types but
   // not in the v1 Event union — cast via unknown since the server emits it
   // regardless of which SDK version the client uses.
+  // Role has been pre-selected at block-start time (see message.part.updated
+  // text/reasoning/tool branches); this branch trusts openParts.get(partID)
+  // without re-evaluating summary status.
   if (event.type === "message.part.delta") {
     const e = event as unknown as {
       properties: { sessionID: string; messageID: string; partID: string; field: string; delta: string };
@@ -236,11 +266,18 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       return null;
     }
 
+    // --- compaction parts ---
+    if (part.type === "compaction") {
+      const compPart = part as unknown as { auto?: boolean };
+      return { kind: "compaction-divider", sessionID, auto: !!compPart.auto };
+    }
+
     // --- text parts ---
     if (part.type === "text") {
       if (userMessageIDs.has(part.messageID)) return null;
       // First time (len=0 creation): open block and emit generating.
       if (part.text.length === 0 && !seenPartIDs.has(part.id)) {
+        partIDToMessageID.set(part.id, part.messageID);
         seenPartIDs.add(part.id);
         // Text starting means reasoning is done — close any open thinking blocks first
         // so app.tsx clears the thinking timer before text streaming begins.
@@ -251,9 +288,10 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
           }
         }
         for (const ev of events) openParts.delete(ev.partID);
-        openParts.set(part.id, "text");
+        const role: Role = summaryMessageIDs.has(part.messageID) ? "summary" : "text";
+        openParts.set(part.id, role);
         events.push(
-          { kind: "block-start", partID: part.id, role: "text", messageID: part.messageID },
+          { kind: "block-start", partID: part.id, role, messageID: part.messageID },
           { kind: "generating" },
         );
         return events;
@@ -265,6 +303,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     if (part.type === "reasoning") {
       if (userMessageIDs.has(part.messageID)) return null;
       if (!openParts.has(part.id)) {
+        partIDToMessageID.set(part.id, part.messageID);
         openParts.set(part.id, "thinking");
         return { kind: "block-start", partID: part.id, role: "thinking" };
       }
@@ -285,6 +324,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
 
       // First time (pending state): open tool-call block.
       if (state.status === "pending" && !openParts.has(toolPart.id)) {
+        partIDToMessageID.set(toolPart.id, toolPart.messageID);
         openParts.set(toolPart.id, "tool-call");
         if (toolPart.tool === "task") {
           openTaskPartIDs.add(toolPart.id);
@@ -453,9 +493,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     if (trackedChildSessions.has(updatedID)) {
       return { kind: "subagent-activity", sessionID: updatedID, ts: Date.now() };
     }
-    if (updatedID !== sessionID) return null;
-    const compacting = typeof e.properties.info.time.compacting === "number";
-    return { kind: "session-compacting", sessionID, compacting };
+    return null;
   }
 
   if (event.type === "session.compacted") {

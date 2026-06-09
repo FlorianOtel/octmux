@@ -11,7 +11,11 @@ export interface Renderer {
   commitSystemMessage(text: string): void;
   commitError(message: string): void;
   // Called by app.tsx on session-idle: flush open tail + push 2-blank turn separator.
-  commitTurnEnd(): void;
+   commitTurnEnd(): void;
+   // Called during compaction to register a divider line; mutates committed buffer.
+   commitCompactionDivider(auto: boolean): void;
+   // Called during compaction to reassign a block's role; mutates committed buffer.
+   retagBlock(partID: string, newRole: Role): void;
   // Clear all committed lines and the active tail. Used on session switch.
   clearAll(): void;
   dispose(): Promise<void>;

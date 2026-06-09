@@ -295,15 +295,14 @@ describe("filterEvent — session.updated activity routing", () => {
     expect(typeof (out as any).ts).toBe("number");
   });
 
-  test("session.updated for parent (harness) returns session-compacting", () => {
+  test("session.updated for parent (harness) returns null (time.compacting was removed in step 8)", () => {
     const out = filterEvent({
       type: "session.updated",
       properties: {
-        info: { ...sessionInfo({ id: PARENT_SID }), time: { created: 1, updated: 2, compacting: 100 } },
+        info: { ...sessionInfo({ id: PARENT_SID }), time: { created: 1, updated: 2 } },
       },
     } as any, PARENT_SID);
-    expect(out).not.toBeNull();
-    expect((out as any).kind).toBe("session-compacting");
+    expect(out).toBeNull();
   });
 
   test("session.updated for unrelated session returns null", () => {
@@ -312,6 +311,134 @@ describe("filterEvent — session.updated activity routing", () => {
       properties: { info: sessionInfo({ id: OTHER_SID }) },
     } as any, PARENT_SID);
     expect(out).toBeNull();
+  });
+
+  describe("message.updated / message.part.updated routing (Step 15 regression tests)", () => {
+    test("message.updated with info.summary === true emits block-retag for already-open parts", () => {
+      // Set up: create a text part first (populates openParts and partIDToMessageID)
+      const partID = "prt_text_1";
+      filterEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: partID,
+            sessionID: PARENT_SID,
+            messageID: "msg_1",
+            type: "text",
+            text: "",
+          },
+        },
+      } as any, PARENT_SID);
+
+      // Now send message.updated with info.summary === true
+      const msgUpdated = {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg_1",
+            sessionID: PARENT_SID,
+            role: "assistant",
+            summary: true,
+            time: { created: 1, updated: 2 },
+          },
+        },
+      } as any;
+
+      const out = filterEvent(msgUpdated, PARENT_SID);
+      expect(out).not.toBeNull();
+      expect((out as any).kind).toBe("block-retag");
+      expect((out as any).partID).toBe(partID);
+      expect((out as any).newRole).toBe("summary");
+    });
+
+    test("message.part.updated text part for already-known summary message gets role summary", () => {
+      // Set up: message.updated with info.summary === true records messageID in summaryMessageIDs
+      filterEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg_2",
+            sessionID: PARENT_SID,
+            role: "assistant",
+            summary: true,
+            time: { created: 1, updated: 2 },
+          },
+        },
+      } as any, PARENT_SID);
+
+      // Now send message.part.updated for a text part with the same messageID, length 0 (creation)
+      const partID = "prt_text_2";
+      const out = filterEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: partID,
+            sessionID: PARENT_SID,
+            messageID: "msg_2",
+            type: "text",
+            text: "",
+          },
+        },
+      } as any, PARENT_SID);
+
+      expect(out).not.toBeNull();
+      expect(Array.isArray(out)).toBe(true);
+      const blockStart = (out as any[]).find((e: any) => e.kind === "block-start");
+      expect(blockStart).not.toBeNull();
+      expect(blockStart.role).toBe("summary");
+    });
+
+    test("message.part.updated with part.type === compaction emits compaction-divider", () => {
+      // Test auto: true
+      const autoTrue = filterEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "prt_comp_1",
+            sessionID: PARENT_SID,
+            messageID: "msg_3",
+            type: "compaction",
+            auto: true,
+          },
+        },
+      } as any, PARENT_SID);
+      expect(autoTrue).not.toBeNull();
+      expect((autoTrue as any).kind).toBe("compaction-divider");
+      expect((autoTrue as any).auto).toBe(true);
+
+      // Test auto: false (explicit)
+      const autoFalse = filterEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "prt_comp_2",
+            sessionID: PARENT_SID,
+            messageID: "msg_4",
+            type: "compaction",
+            auto: false,
+          },
+        },
+      } as any, PARENT_SID);
+      expect(autoFalse).not.toBeNull();
+      expect((autoFalse as any).kind).toBe("compaction-divider");
+      expect((autoFalse as any).auto).toBe(false);
+
+      // Test auto: undefined (defaults to false)
+      const autoUnset = filterEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "prt_comp_3",
+            sessionID: PARENT_SID,
+            messageID: "msg_5",
+            type: "compaction",
+          },
+        },
+      } as any, PARENT_SID);
+      expect(autoUnset).not.toBeNull();
+      expect((autoUnset as any).kind).toBe("compaction-divider");
+      expect((autoUnset as any).auto).toBe(false);
+    });
   });
 });
 
