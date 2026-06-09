@@ -184,12 +184,24 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     }
 
     // Stage 10.8 — inter-message blank line for text role.
+    // OCTMUX_DEBUG_RENDER=1 instrumentation: prints to stderr at every text-role
+    // beginBlock — distinguishes Hypothesis A (messageID undefined at runtime →
+    // GUARD-FAILED) from Hypothesis B (inject fires but Ink does not render it).
     if (role === "text" && meta?.messageID != null) {
+      if (process.env.OCTMUX_DEBUG_RENDER === "1") {
+        const willInject = this._lastTextMessageID !== null && this._lastTextMessageID !== meta.messageID;
+        process.stderr.write(`[octmux-render] beginBlock TEXT  partID=${partID}  messageID=${meta.messageID}  _lastTextMessageID=${this._lastTextMessageID}  willInject=${willInject}\n`);
+      }
       if (this._lastTextMessageID !== null && this._lastTextMessageID !== meta.messageID) {
         this._committed = [...this._committed, { id: this._nextId++, role: "text", ansi: " " }];
         this.emit("changed");
+        if (process.env.OCTMUX_DEBUG_RENDER === "1") {
+          process.stderr.write(`[octmux-render]   → INJECT FIRED. committed.length now ${this._committed.length}\n`);
+        }
       }
       this._lastTextMessageID = meta.messageID;
+    } else if (role === "text" && process.env.OCTMUX_DEBUG_RENDER === "1") {
+      process.stderr.write(`[octmux-render] beginBlock TEXT  partID=${partID}  meta=${JSON.stringify(meta)}  messageID-GUARD-FAILED (meta?.messageID was null/undef)\n`);
     }
   }
 
