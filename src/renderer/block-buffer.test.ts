@@ -497,15 +497,15 @@ describe("BlockBufferRenderer", () => {
     });
   });
 
-  describe("Stage 10.8 — Inter-message demarcation", () => {
-    test("messageID transition: two text blocks with different messageIDs inject one blank CommittedLine between them", () => {
+  describe("Stage 10.8.1 — Per-text-part demarcation", () => {
+    test("partID transition: two text blocks with different partIDs inject one blank CommittedLine between them", () => {
       const renderer = new BlockBufferRenderer(new Visibility());
-      renderer.beginBlock("part-1", "text", { messageID: "msg-1" });
+      renderer.beginBlock("part-1", "text");
       renderer.appendToBlock("part-1", "hello\n");
       renderer.endBlock("part-1");
       const afterFirst = renderer.getCommitted().length;
 
-      renderer.beginBlock("part-2", "text", { messageID: "msg-2" });
+      renderer.beginBlock("part-2", "text");
       renderer.appendToBlock("part-2", "world\n");
       renderer.endBlock("part-2");
       const afterSecond = renderer.getCommitted();
@@ -516,19 +516,26 @@ describe("BlockBufferRenderer", () => {
       expect(separatorLine.role).toBe("text");
     });
 
-    test("same messageID across consecutive beginBlocks does NOT inject a blank CommittedLine", () => {
+    test("commitTurnEnd resets _lastTextPartID — next turn's first text part does NOT inject", () => {
       const renderer = new BlockBufferRenderer(new Visibility());
-      renderer.beginBlock("part-1", "text", { messageID: "msg-1" });
+      // Turn 1: one text part
+      renderer.beginBlock("part-1", "text");
       renderer.appendToBlock("part-1", "hello\n");
       renderer.endBlock("part-1");
-      const afterFirst = renderer.getCommitted().length;
+      // End of turn 1 — pushes 2 blank lines AND resets _lastTextPartID
+      renderer.commitTurnEnd();
+      const afterTurn1 = renderer.getCommitted().length;
 
-      renderer.beginBlock("part-2", "text", { messageID: "msg-1" });
+      // Turn 2: first text part. Should NOT inject a leading blank (the
+      // commitTurnEnd above already created visible separation).
+      renderer.beginBlock("part-2", "text");
       renderer.appendToBlock("part-2", "world\n");
       renderer.endBlock("part-2");
-      const afterSecond = renderer.getCommitted();
+      const afterTurn2 = renderer.getCommitted();
 
-      const firstNewLine = afterSecond[afterFirst];
+      // The first new CommittedLine after commitTurnEnd must NOT be a blank
+      // separator (it must be the first line of part-2's content).
+      const firstNewLine = afterTurn2[afterTurn1];
       expect(firstNewLine).toBeDefined();
       expect(firstNewLine.ansi).not.toBe(" ");
     });
