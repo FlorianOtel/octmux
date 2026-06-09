@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: qwen3-4b-q6, Reviewer: claude-sonnet-4-6)
-updated_at: 2026-06-09--21-31
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-06-10--00-00
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -421,6 +421,21 @@ in the planner output.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-06-10--00-00 — Stage 5.8 — --single mode startup defaults: tools/thinking off + permissions allow
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-10--00-00
+**Commit(s):** `75ff7ca`
+
+**Motivation:** In `--single` mode, the operator is in a compact single-pane REPL — seeing raw tool call and thinking output by default is noisy and rarely useful. Auto-allowing permissions removes the modal interrupt for every tool invocation. `--multi-window` mode retains the current defaults (tools ON, thinking ON, permissions ask) where side windows absorb the extra output and the operator is explicitly in a multi-pane workflow.
+
+**Default behavior:** In `--single` mode, startup state is: `/tools-output off`, `/thinking-output off`, `Permissions: allow`. Toggles and permission mode remain fully interactive at runtime (Ctrl-T, Ctrl-Shift-T, Shift-TAB).
+
+**Files changed:**
+- `src/app.tsx` — `singleMode: boolean` added to `AppProps`; `permMode` init, `gateStates` init, and renderer gate seeding all check `props.singleMode`
+- `src/index.tsx` — `singleMode={single}` passed to `<App>`
+
+---
 
 ### 2026-06-09--21-31 — Stage 5.7.1 — synchronous context-bar reset on /compact + remove Stage 5.7 sentinel
 **Implemented by:** OpenCode (claude-opus-4-7) via /brain pipeline (Planner: minimax-m3, Actor: qwen3-4b-q6, Reviewer: claude-sonnet-4-6) — 2026-06-09--21-31
