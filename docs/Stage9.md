@@ -20,7 +20,7 @@ context: >
 
 ### 2026-06-10--04-34 — Stage 9.2.1 — Prose answer inverted-text rendering
 **Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-06-10--04-34
-**Commit(s):** `TBD`
+**Commit(s):** `e5e01e5`
 
 `formatAnswerSummary` in `src/app.tsx` previously returned `` `${prefix}: ${trimmed}` `` for prose (non-digit or out-of-range digit answers), rendering the operator's prose identically to surrounding system narration. Stage 9.2 had replaced `commitUserInput(text)` (which applied the `"user"` role → `ANSI.invert`) with `commitSystemMessage(formatAnswerSummary(...))`, losing the inversion styling for prose.
 
