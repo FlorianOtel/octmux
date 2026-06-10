@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Actor subagent (model from qwen3-4b-q6)
-updated_at: 2026-06-10--04-00
+updated_by: Claude Code (Claude Haiku 4.5)
+updated_at: 2026-06-10--10-05
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -463,6 +463,23 @@ in the planner output.
 - Block-renderer reconciliation concerns (separate Phase B work).
 
 **Note:** Stage 5.7's sentinel design is SUPERSEDED.
+
+---
+
+### 2026-06-10--10-05 — Stage 5.7.3 — post-compact UX: clear generating spinner + preserve ctx window
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-10--10-05
+**Commit(s):** `3d2f734`
+
+Two targeted fixes for UX regressions after `/compact`:
+
+**Fix 1 — generating spinner** (`src/app.tsx` session-compacted handler): Added `setIsGenerating(false)` so the existing useEffect clears `procTimes.generating`, hiding the spinner immediately after compaction.
+
+**Fix 2 — context window "?"** (`src/app.tsx` refreshTokenUsage): When `pickPostSummaryAssistantTokenUsage` returns null (no post-summary messages), preserve the previous context window value instead of nulling tokenUsage entirely. Status bar now shows `0K/200K` rather than `0K/?`.
+
+**Files modified:**
+- `src/app.tsx` (two targeted mutations)
+- `docs/Stage5.md` (this entry, frontmatter refresh)
 
 ---
 
