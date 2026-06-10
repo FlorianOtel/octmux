@@ -619,7 +619,10 @@ export function App(props: AppProps) {
       // Use the pure helper for token usage scanning
       const result = pickPostSummaryAssistantTokenUsage(messages as MessageForUsageScan[]);
       if (!result) {
-        setTokenUsage(null);
+        // No post-summary assistant messages (e.g. immediately after /compact).
+        // Preserve the known context window so the bar shows "0K/200K" rather
+        // than "0K/?". If there was no prior value, fall through to null.
+        setTokenUsage(prev => prev ? { used: 0, contextWindow: prev.contextWindow } : null);
         return;
       }
 
@@ -731,6 +734,7 @@ export function App(props: AppProps) {
         else if (ev.kind === "session-compacted") {
           if (ev.sessionID === sessionIDRef.current) {
             setIsCompacting(false);
+            setIsGenerating(false);
             refreshTokenUsage(sessionIDRef.current);
           }
         }
