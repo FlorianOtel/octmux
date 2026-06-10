@@ -186,7 +186,9 @@ function formatAnswerSummary(
     }
   }
 
-  return `${prefix}: ${trimmed}`;
+  // Prose: put on its own line in inverted video so it's visually distinct from system narration
+  // (\x1b[7m = ANSI.invert from blocks.ts, not exported hence inlined)
+  return `${prefix}:\n\x1b[7m${trimmed}\x1b[0m`;
 }
 
 function commitOptionsBlock(renderer: Renderer, reqID: string, qs: QuestionType[], seen: Set<string>): void {
