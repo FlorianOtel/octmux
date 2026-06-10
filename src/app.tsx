@@ -30,6 +30,21 @@ import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, 
 
 const TOGGLES_CONFIG = loadTogglesConfig();
 
+type MessageForUsageScan = {
+  info: {
+    role?: string;
+    summary?: boolean | unknown;
+    providerID?: string;
+    modelID?: string;
+    tokens?: {
+      input: number;
+      output?: number;
+      reasoning?: number;
+      cache?: { read?: number; write?: number };
+    };
+  };
+};
+
 type QuestionType = {
   question: string;
   header: string;
@@ -37,6 +52,113 @@ type QuestionType = {
   multiple?: boolean;
   custom?: boolean;
 };
+
+/**
+ * Stage 5.7.2: Pure helper for token usage scanning with forward-from-summary semantics.
+ * Finds the last assistant message with info.summary === true, then scans forward
+ * from that boundary for the latest non-summary assistant message with non-zero tokens.
+ * If no post-summary assistant exists, falls back to the latest non-summary assistant
+ * (mirroring pre-summary backward-walk behavior).
+ *
+ * @param messages Flat message list shaped after OC SDK Message type
+ * @returns { used, providerID, modelID } | null
+ */
+export function pickPostSummaryAssistantTokenUsage(messages: MessageForUsageScan[]): { used: number; providerID: string | undefined; modelID: string | undefined } | null {
+  const assistantMessages = messages.filter(m => m.info.role === "assistant");
+  if (assistantMessages.length === 0) return null;
+
+  // Find the last assistant message with summary === true
+  let summaryIdx = -1;
+  for (let i = assistantMessages.length - 1; i >= 0; i--) {
+    const info = assistantMessages[i].info;
+    if (info.summary === true) {
+      summaryIdx = i;
+      break;
+    }
+  }
+
+  // No summary exists — use backward-walk semantics (existing behavior)
+  if (summaryIdx === -1) {
+    // Find latest non-summary assistant message
+    let latestIdx = -1;
+    for (let i = assistantMessages.length - 1; i >= 0; i--) {
+      if (assistantMessages[i].info.summary !== true) {
+        latestIdx = i;
+        break;
+      }
+    }
+
+    if (latestIdx === -1) {
+      // All assistants are summaries — return null
+      return null;
+    }
+
+    // Get tokens from latest non-summary assistant
+    const msg = assistantMessages[latestIdx];
+    const tokens = msg.info.tokens;
+    if (!tokens) return null;
+
+    let used = tokens.input + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0);
+    // If zero tokens, scan backwards for most recent non-zero non-summary assistant
+    if (used === 0) {
+      for (let j = latestIdx - 1; j >= 0; j--) {
+        const fallback = assistantMessages[j];
+        if (fallback.info.summary === true) continue;
+        const ft = fallback.info.tokens;
+        if (!ft) continue;
+        const fallbackUsed = ft.input + (ft.cache?.read ?? 0) + (ft.cache?.write ?? 0);
+        if (fallbackUsed > 0) {
+          used = fallbackUsed;
+          break;
+        }
+      }
+    }
+
+    const fallbackModel = assistantMessages[latestIdx].info;
+    return { used, providerID: fallbackModel.providerID, modelID: fallbackModel.modelID };
+  }
+
+  // Summary exists — scan forward from summaryIdx + 1
+  const postSummaryMessages = assistantMessages.slice(summaryIdx + 1);
+  if (postSummaryMessages.length === 0) return null;
+
+  // Find the latest non-summary assistant in post-summary region
+  let latestIdx = -1;
+  for (let i = postSummaryMessages.length - 1; i >= 0; i--) {
+    if (postSummaryMessages[i].info.summary !== true) {
+      latestIdx = i;
+      break;
+    }
+  }
+
+  if (latestIdx === -1) {
+    // All post-summary assistants are summaries — return null
+    return null;
+  }
+
+  // Found a non-zero post-summary assistant
+  const msg = postSummaryMessages[latestIdx];
+  const tokens = msg.info.tokens;
+  if (!tokens) return null;
+
+  let used = tokens.input + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0);
+  // If zero tokens, fall forward to most recent non-zero post-summary assistant
+  if (used === 0) {
+    for (let j = latestIdx - 1; j >= 0; j--) {
+      if (postSummaryMessages[j].info.summary === true) continue;
+      const ft = postSummaryMessages[j].info.tokens;
+      if (!ft) continue;
+      const fallbackUsed = ft.input + (ft.cache?.read ?? 0) + (ft.cache?.write ?? 0);
+      if (fallbackUsed > 0) {
+        used = fallbackUsed;
+        break;
+      }
+    }
+  }
+
+  const postSummaryModel = postSummaryMessages[latestIdx].info;
+  return { used, providerID: postSummaryModel.providerID, modelID: postSummaryModel.modelID };
+}
 
 function formatOptionsBlock(qs: QuestionType[]): string {
   return qs.map((q, qi) => {
@@ -65,7 +187,9 @@ function formatAnswerSummary(
     }
   }
 
-  return `${prefix}: ${trimmed}`;
+  // Prose: put on its own line in inverted video so it's visually distinct from system narration
+  // (\x1b[7m = ANSI.invert from blocks.ts, not exported hence inlined)
+  return `${prefix}:\n\x1b[7m${trimmed}\x1b[0m`;
 }
 
 function commitOptionsBlock(renderer: Renderer, reqID: string, qs: QuestionType[], seen: Set<string>): void {
@@ -502,65 +626,30 @@ export function App(props: AppProps) {
 
   // Fetch and update token usage from the latest assistant message in a session,
   // and sum running cost from all assistant messages in the session + child sessions.
-  // Skips assistant messages with info.summary === true (compaction summaries) so
-  // that the post-compaction status bar doesn't show the stale pre-compaction count.
+  // Uses forward-from-summary scan: finds last assistant with info.summary === true,
+  // then scans forward from that boundary for the latest non-summary assistant
+  // with non-zero tokens. If no post-summary assistant exists, falls back to
+  // the latest non-summary assistant (mirroring pre-summary backward-walk behavior).
   const refreshTokenUsage = useCallback(async (sid: string) => {
     try {
       const messagesResp = await props.client.session.messages({ path: { id: sid } });
       const messages = messagesResp.data ?? [];
 
-      // PRIMARY scan: find latest assistant message that is NOT a summary.
-      // (info.summary is an undocumented server field; defensive cast for UserMessage.)
-      let latestIdx = -1;
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const info = messages[i].info;
-        if (info.role === "assistant" && (info as { summary?: boolean }).summary !== true) {
-          latestIdx = i;
-          break;
-        }
-      }
-
-      if (latestIdx < 0) {
-        // No non-summary assistant message exists — could be a fresh session
-        // or a just-compacted session where the latest assistant IS the summary.
+      // Use the pure helper for token usage scanning
+      const result = pickPostSummaryAssistantTokenUsage(messages as MessageForUsageScan[]);
+      if (!result) {
         setTokenUsage(null);
-      } else {
-        const msg = messages[latestIdx].info;
-        if (msg.role === "assistant") {
-          const tokens = msg.tokens;
-          // Guard: non-Anthropic providers may not populate tokens
-          if (tokens) {
-            let used = tokens.input
-              + (tokens.cache?.read ?? 0)
-              + (tokens.cache?.write ?? 0);
-
-            // If latest non-summary assistant message has zero tokens (e.g., intermediate tool-call frame),
-            // scan backwards for the most recent non-summary non-zero assistant message.
-            if (used === 0) {
-              for (let j = latestIdx - 1; j >= 0; j--) {
-                const fallback = messages[j].info;
-                if (fallback.role !== "assistant" || (fallback as { summary?: boolean }).summary === true) continue;
-                const ft = fallback.tokens;
-                if (!ft) continue;
-                const fallbackUsed = ft.input + (ft.cache?.read ?? 0) + (ft.cache?.write ?? 0);
-                if (fallbackUsed > 0) {
-                  used = fallbackUsed;
-                  break;
-                }
-              }
-            }
-
-            const ctxWindow = await getContextWindow(
-              props.client,
-              msg.providerID,
-              msg.modelID,
-            );
-            // Always use latest message's model, even if tokens fell back to an earlier message
-            setActiveModel({ providerID: msg.providerID, modelID: msg.modelID });
-            setTokenUsage({ used, contextWindow: ctxWindow });
-          }
-        }
+        return;
       }
+
+      // Get context window and set active model
+      const ctxWindow = await getContextWindow(
+        props.client,
+        result.providerID ?? "",
+        result.modelID ?? "",
+      );
+      setActiveModel({ providerID: result.providerID ?? "", modelID: result.modelID ?? "" });
+      setTokenUsage({ used: result.used, contextWindow: ctxWindow });
 
       // Compute running cost: sum all assistant messages in parent + children
       let totalCost = 0;
@@ -661,7 +750,6 @@ export function App(props: AppProps) {
         else if (ev.kind === "session-compacted") {
           if (ev.sessionID === sessionIDRef.current) {
             setIsCompacting(false);
-            setTokenUsage(prev => prev ? { used: 0, contextWindow: prev.contextWindow } : null);
             refreshTokenUsage(sessionIDRef.current);
           }
         }

@@ -2,8 +2,8 @@
 title: "Stage 9 — Question Deliberation Flow (Piece 2)"
 created_at: 2026-06-07--17-23
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-08--08-34
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-06-10--04-34
 context: >
   Stage 9 implements Piece 2 of the octmux UI architecture redesign: the AskUserQuestion tool's options are committed to scrollback (Piece 2A) and the operator can answer with prose in addition to digit selection (Piece 2B). Piece 2 is renderer-independent and works identically under both --single (StdoutRenderer) and --multi-window (TmuxWindowRenderer) modes.
 ---
@@ -17,6 +17,14 @@ context: >
 ---
 
 ## Implementation log
+
+### 2026-06-10--04-34 — Stage 9.2.1 — Prose answer inverted-text rendering
+**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-06-10--04-34
+**Commit(s):** `e5e01e5`
+
+`formatAnswerSummary` in `src/app.tsx` previously returned `` `${prefix}: ${trimmed}` `` for prose (non-digit or out-of-range digit answers), rendering the operator's prose identically to surrounding system narration. Stage 9.2 had replaced `commitUserInput(text)` (which applied the `"user"` role → `ANSI.invert`) with `commitSystemMessage(formatAnswerSummary(...))`, losing the inversion styling for prose.
+
+Fix: change the prose-case return to `` `${prefix}:\n\x1b[7m${trimmed}\x1b[0m` ``. The `▶ Answered` header stays on one line; the operator's prose appears on the next line in ANSI reverse-video (`\x1b[7m` = `ANSI.invert` from `blocks.ts`, inlined since `ANSI` is not exported). Digit-selected case (lines 180–185) is unchanged. Multi-line prose is handled correctly: the invert state persists across embedded newlines until the terminal `\x1b[0m` reset.
 
 ### 2026-06-07--17-23 — Stage 9.0 — Piece 2A: options-to-transcript persistence
 **Implemented by:** OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/qwen3-4b-q6 Actors) — 2026-06-07--17-23

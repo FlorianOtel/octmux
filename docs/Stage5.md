@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-10--00-00
+updated_by: Actor subagent (model from qwen3-4b-q6)
+updated_at: 2026-06-10--04-00
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -463,6 +463,34 @@ in the planner output.
 - Block-renderer reconciliation concerns (separate Phase B work).
 
 **Note:** Stage 5.7's sentinel design is SUPERSEDED.
+
+---
+
+### 2026-06-10--04-00 — Stage 5.7.2 — forward-from-summary scan in refreshTokenUsage, unified bar behaviour across entry points
+**Implemented by:** Actor subagent (model from qwen3-4b-q6) — 2026-06-10--04-00
+**Commit(s):** `1cffda2`
+
+**Supersedes:** Stage 5.7.1 commits: `314a63b` (feat on main), `ec3ae69` (docs backfill on main), `ae4ab90` (merge into block-renderer).
+
+**Problem:** Stage 5.7.1's synchronous `setTokenUsage` reset in the `session-compacted` SSE handler was clobbered by `refreshTokenUsage` within milliseconds of running (fire-and-forget HTTP round-trip). This meant the bar only ever showed a brief `0%` flash before settling back on stale pre-summary tokens.
+
+**What changed:**
+1. Extracted a pure module-scope helper `pickPostSummaryAssistantTokenUsage(messages)` that implements forward-from-summary scanning: finds the last assistant message with `info.summary === true`, then scans forward from that boundary for the latest non-summary assistant with non-zero tokens. Falls back to backward-walk semantics when no summary exists.
+2. `refreshTokenUsage` now delegates token usage selection to the helper, removing the inline backward-walk code.
+3. Removed the synchronous `setTokenUsage` reset from the `session-compacted` handler; the helper now correctly returns `null` (rendering as `0% 0K/?`) until the first post-summary reply lands.
+
+**Files modified:**
+- `src/app.tsx` (extract helper, update refreshTokenUsage, remove sync reset in session-compacted)
+- `src/refresh-token-usage.test.ts` (new file, 7 tests covering forward-from-summary, zero-token fallback, multiple summaries, etc.)
+- `docs/Stage5.md` (this entry, frontmatter refresh)
+
+**Impact:**
+- Unified token bar behavior across all entry points (original, --resume, --fork, post-compaction).
+- Correct token display after compaction: bar shows `0% 0K/?` until first post-summary reply, then fills correctly.
+- Cleaner codebase with pure helper for token scanning logic.
+
+**Out of scope:**
+- Block-renderer reconciliation concerns (separate Phase B work).
 
 ---
 
