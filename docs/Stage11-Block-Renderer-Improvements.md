@@ -525,6 +525,6 @@ maxRows=2) confirming truncation behavior and bounds.
 ### 2026-06-11--15-41 — B: table wrapping (A2 content-preserving, live-width, resize-refit)
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-11--15-41
-**Commit(s):** `_pending — backfill after commit_`
+**Commit(s):** `9bafdce`
 
 New `src/renderer/table-layout.ts` (pure: `naturalWidths`, `computeColWidths`, `wrapCell`). A custom marked `table(token)` override in `_makeMarkedInstance` (block-buffer.ts): renders cells via `parser.parseInline`, computes per-column widths against the live terminal width (`getWidth()` closure over `_width`), pre-wraps each cell with `wrapAnsi(…, colWidths[i]−2, {hard:true, trim:false})`, and builds a cli-table3 table with `wordWrap:false` so the box fits the terminal and content wraps without truncation. `setWidth` now re-renders the active text block + emits on change (active table re-fits on resize, incl. during pauses). `app.tsx` feeds the real terminal `columns` to the renderer (B.0). cli-table3/string-width/wrap-ansi promoted to direct deps. Unit tests (table-layout) + a real-renderer integration test asserting a 100-char token wraps within width 60 with full content preserved (no `…`). See "Decisions & deferrals (11.2)" for A2/B1/C1 and the width-discipline invariant.
