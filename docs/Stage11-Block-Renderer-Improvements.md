@@ -3,9 +3,9 @@ title: "octmux block-renderer — Brain series handover (live document)"
 branch: "main"
 head_at_handover: "85b2414 (feat/block-renderer merged to main)"
 created: 2026-06-08
-revised: 2026-06-11 (rev 3 — corrected paths/line offsets, retired C-4, marked shape-stable note, Part 0 re-verified @85b2414, A.1+A.2 shipped)
-updated_by: "Claude Code (Claude Haiku 4.5)"
-updated_at: 2026-06-11--13-09
+revised: 2026-06-11 (rev 4 — implementation log lives in this doc (§ Implementation log); rev 3 corrected paths/line offsets, retired C-4, marked shape-stable note, Part 0 re-verified @85b2414, A.1+A.2 shipped)
+updated_by: "Claude Code (Claude Opus 4.8)"
+updated_at: 2026-06-11--13-24
 maintained_as: "LIVE DOCUMENT — update the Status Tracker and per-WP status as the series progresses"
 authored_by: "External analysis session (Claude), grounded in the feat/block-renderer tree + Ink 5.2.1 / marked-terminal 7.3.0 source"
 how_to_use: >
@@ -457,3 +457,34 @@ missing; prefer it over static reasoning for any "still happening" report.
 states (streaming, paused, idle, resized)** — no flash, no overflow, on any pane; wide-cell
 tables render within the real terminal width and the active table re-fits on resize including
 during pauses; and the [HIGH-CONF] tags are retired by their named tests.
+
+---
+
+## Implementation log
+
+Per-session record of what shipped. Each entry carries the two mandatory metadata lines
+(`Implemented by` / `Commit(s)`) per the project's build-discipline rule.
+
+### 2026-06-11--13-09 — A.1: consolidate OCTMUX_DEBUG_RENDER writes behind `_dbg()` helper
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-11--13-09
+**Commit(s):** `fd3e3a6`
+
+Three inline env-gated `process.stderr.write` calls in `src/renderer/block-buffer.ts:beginBlock`
+route through one private `_dbg(msg)` helper (lines 197–201), so the `OCTMUX_DEBUG_RENDER` check
+lives in a single place and the hot path is de-noised. The three `this._dbg(...)` callsites in
+`beginBlock` (lines 224, 244, 248) keep their original message strings. WP-C's structured-trace
+capability is retained.
+
+### 2026-06-11--13-09 — A.2: `useTerminalSize()` hook for live terminal geometry
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-11--13-09
+**Commit(s):** `fd3e3a6`
+
+`src/app.tsx` carries a `useTerminalSize()` hook (lines 227–240) that subscribes to `stdout`
+resize events and lifts terminal dimensions into React state. `w` and `maxActiveRows` derive
+from that state (lines 320, 332–333), so a terminal resize forces a re-render and the geometry
+recomputes in all states (streaming, paused, idle) — not only while deltas flow. The re-render
+is cheap: the dynamic region only; `<Static>` history is not re-emitted. The `setWidth` effect
+fires on resize for free. This removes the resize-during-pause flash. `CHROME_ROWS` and the cap
+formula are unchanged — A.2 makes the geometry live; A.3 (measured chrome) makes the cap airtight.
