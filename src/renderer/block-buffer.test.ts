@@ -8,6 +8,7 @@ process.env.FORCE_COLOR = "1";
 
 import { test, expect, describe } from "bun:test";
 import { EventEmitter } from "node:events";
+import stringWidth from "string-width";
 import { formatLine } from "../blocks.ts";
 import { Visibility } from "./visibility.ts";
 import type { CommittedLine } from "./types.ts";
@@ -651,6 +652,88 @@ describe("BlockBufferRenderer", () => {
       // State should be unchanged.
       expect(renderer.getCommitted()).toHaveLength(0);
       expect(renderer.getActiveBlock()).toBeNull();
+    });
+  });
+
+  describe("table wrapping", () => {
+    test("content preservation: long no-space token in table wraps fully without truncation", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "table-content-preservation";
+
+      // A 100-character token with no spaces that will FORCE wrapping in the Value column
+      // At width 60 with 2 columns, each gets ~27 chars of content, so the 100-char token
+      // MUST wrap across multiple visual rows.
+      const longToken = "x".repeat(100);
+      const tableMarkdown = `| Name | Value |
+|------|-------|
+| A    | ${longToken} |`;
+
+      // Test at width 60
+      renderer.setWidth(60);
+      renderer.beginBlock(partID, "text");
+      renderer.appendToBlock(partID, tableMarkdown);
+      renderer.endBlock(partID, "ok");
+
+      const committed60 = renderer.getCommitted();
+      const lines60 = committed60.map(l => l.ansi);
+
+      // (a) assert every committed table line fits within 60
+      for (const line of lines60) {
+        const visibleWidth = stringWidth(line.replace(/\x1b\[[0-9;]*m/g, ""));
+        expect(visibleWidth).toBeLessThanOrEqual(60);
+      }
+
+      // (b) assert the full token is preserved: join lines, strip ANSI and table chars,
+      // and verify all 100 x's are present (possibly across wrapped lines)
+      const joined = lines60.join("\n");
+      const stripped = joined
+        .replace(/\x1b\[[0-9;]*m/g, "")  // strip ANSI
+        .replace(/[│┌─┐┘└├┤┬┴┼─]/g, "")    // strip table border chars
+        .replace(/\n/g, "")                // remove newlines
+        .replace(/\s/g, "");               // remove all whitespace
+      expect(stripped).toContain(longToken);
+      expect(joined).not.toContain("…");  // no ellipsis truncation
+
+      // (d) NEW: assert that wrapping actually occurred — the 100-char token
+      // must occupy multiple visual rows. Count lines containing "x" characters
+      // and verify at least 2 (evidence that the token spilled across rows).
+      const xLines = lines60.filter(line => line.includes("x")).length;
+      expect(xLines).toBeGreaterThanOrEqual(2);
+    });
+
+    test("content preservation at width 120 also preserves long token without truncation", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      const partID = "table-content-preservation-120";
+
+      const longToken = "x".repeat(100);
+      const tableMarkdown = `| Name | Value |
+|------|-------|
+| A    | ${longToken} |`;
+
+      renderer.setWidth(120);
+      renderer.beginBlock(partID, "text");
+      renderer.appendToBlock(partID, tableMarkdown);
+      renderer.endBlock(partID, "ok");
+
+      const committed = renderer.getCommitted();
+      const lines = committed.map(l => l.ansi);
+
+      // (a) every line fits within 120
+      for (const line of lines) {
+        const visibleWidth = stringWidth(line.replace(/\x1b\[[0-9;]*m/g, ""));
+        expect(visibleWidth).toBeLessThanOrEqual(120);
+      }
+
+      // (b) full token preserved, no truncation (at width 120, the 100-char token fits on one line,
+      // so no wrapping is needed or expected; this test verifies no "…" truncation occurs)
+      const joined = lines.join("\n");
+      const stripped = joined
+        .replace(/\x1b\[[0-9;]*m/g, "")
+        .replace(/[│┌─┐┘└├┤┬┴┼─]/g, "")
+        .replace(/\n/g, "")
+        .replace(/\s/g, "");
+      expect(stripped).toContain(longToken);
+      expect(joined).not.toContain("…");
     });
   });
 

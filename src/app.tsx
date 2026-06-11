@@ -336,8 +336,8 @@ export function App(props: AppProps) {
 
   // Thread column width into the renderer for markdown wrap
   useEffect(() => {
-    renderer.setWidth(w);
-  }, [w, renderer]);
+    renderer.setWidth(columns ?? 80);
+  }, [columns, renderer]);
 
   // Subscribe to renderer state — new array reference on every commit means React detects changes.
   const committed = useSyncExternalStore(

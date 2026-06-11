@@ -2,6 +2,9 @@ import { EventEmitter } from "node:events";
 import { Marked } from "marked";
 import { markedTerminal } from "marked-terminal";
 import chalk from "chalk";
+import Table from "cli-table3";
+import stringWidth from "string-width";
+import { computeColWidths, wrapCell, naturalWidths } from "./table-layout.ts";
 import type { Block, Role } from "../blocks.ts";
 import { formatLine } from "../blocks.ts";
 import { Visibility } from "./visibility.ts";
@@ -47,7 +50,7 @@ function _setupChalkLevel(): void {
   }
 }
 
-function _makeMarkedInstance(): Marked {
+function _makeMarkedInstance(getWidth: () => number): Marked {
   const m = new Marked();
   // NB: chalk.level MUST be set BEFORE markedTerminal({...}) is called.
   // markedTerminal captures chalk-styled functions at construction time;
@@ -87,6 +90,31 @@ function _makeMarkedInstance(): Marked {
           return (this as any).parser.parseInline(token.tokens);
         }
         return typeof token === "object" ? token.text : token;
+      },
+      table(token: any) {
+        if (!token || !Array.isArray(token.header) || !Array.isArray(token.rows)) return false;
+        const N = token.header.length;
+        if (N === 0) return false;
+        const parser = (this as any).parser;
+        if (!parser || typeof parser.parseInline !== "function") {
+          return "[ table parse error ]\n\n";
+        }
+        const parseCell = (cell: any): string => {
+          try {
+            const result = parser.parseInline(cell.tokens ?? []);
+            return typeof result === "string" ? result : String(result ?? "");
+          } catch (e) {
+            return typeof cell.text === "string" ? cell.text : String(cell.text ?? "");
+          }
+        };
+        const natural = naturalWidths(token.header, token.rows, parseCell);
+        const colWidths = computeColWidths(natural, getWidth());
+        const wrappedHead = token.header.map((c: any, i: number) => wrapCell(parseCell(c), colWidths[i] - 2));
+        const table = new (Table as any)({ head: wrappedHead, colWidths, wordWrap: false });
+        for (const row of token.rows) {
+          table.push(row.map((c: any, i: number) => wrapCell(parseCell(c), colWidths[i] - 2)));
+        }
+        return table.toString() + "\n\n";
       },
     },
   } as any);
@@ -166,7 +194,7 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     // C1.4 prerequisite: chalk.level must be pinned BEFORE _makeMarkedInstance
     // so the captured chalk-styled functions in markedTerminal use the right level.
     _setupChalkLevel();
-    this._marked = _makeMarkedInstance();
+    this._marked = _makeMarkedInstance(() => this._width);
   }
 
   private _renderActiveTextAnsi(): string {
@@ -583,5 +611,12 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     }
     return "";
   }
-  setWidth(width: number): void { this._width = width; }
+  setWidth(width: number): void {
+    if (this._width === width) return;
+    this._width = width;
+    if (this._activeBlockRole === "text") {
+      this._activeBlockAnsi = this._renderActiveTextAnsi();
+      this.emit("changed");
+    }
+  }
 }

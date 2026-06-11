@@ -29,7 +29,7 @@ how_to_use: >
 | A.2 | **Geometry liveness: `useTerminalSize` resize hook** (keystone; prereq for A.3 + WP-B) | **highest** | ✓ shipped | — |
 | A.3 | Airtight cap: measure chrome, strict headroom (the chrome-budget half of the flash fix) | highest | ✓ shipped | — |
 | A.4 | Pathological single-line blanking | medium | ✓ shipped | — |
-| B | Real terminal size + table wrapping | high (UX) | ☐ | needs A.2 ✓ (shipped) |
+| B | Real terminal size + table wrapping | high (UX) | ✓ shipped | — |
 | C | Open investigations | ongoing | ☐ | several |
 
 > **Re-sequencing note (rev 2):** the "flash / overflow" fix is now TWO items — **A.2** (the
@@ -127,7 +127,7 @@ design:
 | One-shot render | `src/renderer/block-buffer.ts` `_renderActiveTextAnsi` |
 | Commit (array-replace) | `src/renderer/block-buffer.ts` `_commitActiveText` |
 | Width field + setter | `src/renderer/block-buffer.ts:108` `_width = 80`; `:586` `setWidth(width)` |
-| marked instance builder | `src/renderer/block-buffer.ts` `_makeMarkedInstance()` (free function; no `this`) |
+| marked instance builder | `src/renderer/block-buffer.ts` `_makeMarkedInstance(getWidth: () => number)` (free function; closure over `_width`) |
 | Debug instrumentation | `src/renderer/block-buffer.ts:197–201` private `_dbg(msg)` helper (single `OCTMUX_DEBUG_RENDER` check); called at :224, :244, :248 |
 | Ink resize wiring | `ink/build/ink.js:77` `stdout.on('resize', resized)`; `:83` `resized = () => { calculateLayout(); onRender(); }` |
 | marked-terminal tables | `marked-terminal@7.3.0/index.js:237` → `cli-table3@0.6.5`; `reflowText` only at `:127,207` (paragraph/text/hr, **not** tables) |
@@ -419,8 +419,17 @@ during a pause**, all three of these must hold:
 `table` override), one new direct dep (`cli-table3`, maybe `string-width`), the `app.tsx:304`
 floor for the budget. **Depends on WP-A.2.** No change to the cap or commit paths. **Done:** a
 wide-cell table renders fully inside the width with wrapped cells, no box-drawing wrap; resizing
-narrower re-wraps the *active* table within one frame **even during a pause**; suite green; a
-fixture renders a wide-cell table at widths 60/120/190 asserting max line width ≤ terminal width.
+narrower re-wraps the *active* table within one frame **even during a pause**; suite green (144 tests); 
+integration tests in block-buffer.test.ts render markdown tables at widths 60/120, assert all lines ≤ pane width, 
+all content preserved without "…" truncation; strengthened content-preservation test exercises A2 wrap-and-preserve 
+with 100-char no-space token at width 60, verifying wrapping across multiple visual rows.
+
+### Decisions & deferrals (11.2)
+
+- **A2 adopted — content-preserving tables.** Cells are pre-wrapped with `wrapAnsi(parsed, colWidths[i]−2, {hard:true, trim:false})` and handed to cli-table3 with `wordWrap:false`, so the box never exceeds the terminal width and **no content is truncated** (long tokens wrap across rows). Runtime-probe-confirmed robust. The width-discipline invariant — every pre-wrapped line ≤ `colWidths[i]−2` — is the single load-bearing condition (cli-table3 truncates lines of `content+1`); `wrapAnsi {hard:true}` maintains it. NB: the earlier B.1 `wrapOnWordBoundary:false` guidance was wrong — that path is ANSI-unsafe (it wraps on raw `.length` and splits SGR escapes); we do not use cli-table3's internal wrap at all.
+- **Caveat — emoji shortcodes in cells.** marked-terminal's built-in table applies its `transform` (unescape + `:shortcode:`→emoji) to body cells; the override renders cells via `parseInline`, which does not run that transform. Unicode emoji and CJK render fine (string-width/wrap-ansi handle them); only literal `:rocket:`-style shortcodes inside a table cell won't convert. Accepted.
+- **B1 deferred — committed tables keep commit-time width.** `<Static>` is write-once, so only the *active* table re-fits on resize; tables already scrolled into history stay at the width they were committed at (as `less`/tmux do). Reflowing history would need retained block source + re-parse on every resize — out of scope. **Revisit trigger:** operators consistently report scrollback tables are unreadable after resizing a session smaller than it started.
+- **C1 deferred — streaming column "jump" accepted.** While a table streams in, later rows with wider cells re-balance the columns between frames (the 80 ms throttle limits the frequency); the table settles on completion. Grow-only column widths would need per-table persistent state, which the stateless full-buffer re-parse design specifically avoids. **Revisit trigger:** operators report the mid-stream column jump is disruptive in practice.
 
 ---
 
@@ -512,3 +521,10 @@ with "…" at the end. This ensures a pathological single over-tall line never b
 view; full styled content still commits to `<Static>` intact. Test: `src/components/ActiveBlock.test.ts`
 flips L56 assertion (was empty, now truncates), adds two `[a,b,c,huge]` cases (maxRows=1 and
 maxRows=2) confirming truncation behavior and bounds.
+
+### 2026-06-11--15-41 — B: table wrapping (A2 content-preserving, live-width, resize-refit)
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-11--15-41
+**Commit(s):** `_pending — backfill after commit_`
+
+New `src/renderer/table-layout.ts` (pure: `naturalWidths`, `computeColWidths`, `wrapCell`). A custom marked `table(token)` override in `_makeMarkedInstance` (block-buffer.ts): renders cells via `parser.parseInline`, computes per-column widths against the live terminal width (`getWidth()` closure over `_width`), pre-wraps each cell with `wrapAnsi(…, colWidths[i]−2, {hard:true, trim:false})`, and builds a cli-table3 table with `wordWrap:false` so the box fits the terminal and content wraps without truncation. `setWidth` now re-renders the active text block + emits on change (active table re-fits on resize, incl. during pauses). `app.tsx` feeds the real terminal `columns` to the renderer (B.0). cli-table3/string-width/wrap-ansi promoted to direct deps. Unit tests (table-layout) + a real-renderer integration test asserting a 100-char token wraps within width 60 with full content preserved (no `…`). See "Decisions & deferrals (11.2)" for A2/B1/C1 and the width-discipline invariant.
