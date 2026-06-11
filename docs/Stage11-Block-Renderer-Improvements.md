@@ -1,9 +1,11 @@
 ---
 title: "octmux block-renderer — Brain series handover (live document)"
-branch: "feat/block-renderer"
-head_at_handover: "ac06077 (merge: Stage 9 into feat/block-renderer)"
+branch: "main"
+head_at_handover: "85b2414 (feat/block-renderer merged to main)"
 created: 2026-06-08
-revised: 2026-06-08 (rev 2 — folded in geometry-liveness finding; re-sequenced WP-A; rewired WP-B resize path)
+revised: 2026-06-11 (rev 3 — corrected paths/line offsets, retired C-4, marked shape-stable note, Part 0 re-verified @85b2414, A.1+A.2 shipped)
+updated_by: "Claude Code (Claude Haiku 4.5)"
+updated_at: 2026-06-11--13-09
 maintained_as: "LIVE DOCUMENT — update the Status Tracker and per-WP status as the series progresses"
 authored_by: "External analysis session (Claude), grounded in the feat/block-renderer tree + Ink 5.2.1 / marked-terminal 7.3.0 source"
 how_to_use: >
@@ -23,11 +25,11 @@ how_to_use: >
 | WP | Topic | Priority | Status | Gating unknown |
 |----|-------|----------|--------|----------------|
 | A.0 | Flash cause — already attributed in-tree; conservative-cap as regression check | DONE-ish | ☐ confirm | none material — see 0.5 |
-| A.1 | Hygiene: debug instrumentation cleanup | high (quick) | ☐ | — |
-| A.2 | **Geometry liveness: `useTerminalSize` resize hook** (keystone; prereq for A.3 + WP-B) | **highest** | ☐ | — |
+| A.1 | Hygiene: debug instrumentation cleanup | high (quick) | ✓ shipped | — |
+| A.2 | **Geometry liveness: `useTerminalSize` resize hook** (keystone; prereq for A.3 + WP-B) | **highest** | ✓ shipped | — |
 | A.3 | Airtight cap: measure chrome, strict headroom (the chrome-budget half of the flash fix) | highest | ☐ | depends on A.2 |
 | A.4 | Pathological single-line blanking | medium | ☐ | — |
-| B | Real terminal size + table wrapping | high (UX) | ☐ | marked v15 table token shape (C-4); needs A.2 |
+| B | Real terminal size + table wrapping | high (UX) | ☐ | needs A.2 ✓ (shipped) |
 | C | Open investigations | ongoing | ☐ | several |
 
 > **Re-sequencing note (rev 2):** the "flash / overflow" fix is now TWO items — **A.2** (the
@@ -43,6 +45,10 @@ how_to_use: >
 These are the facts that took ~8 data points and 6 failed fixes to establish on this
 branch. A Brain session that re-derives them wastes the budget; a session that
 contradicts them is wrong. Treat as ground truth unless a [HIGH-CONF] test overturns it.
+
+> **Verified at HEAD `85b2414` (2026-06-11):** all [VERIFIED] tags below hold against the live
+> tree on `main`. block-buffer lives at `src/renderer/block-buffer.ts`; the §0.4 line references
+> are current as of this HEAD. A.1 (debug hygiene) and A.2 (geometry-liveness hook) are shipped.
 
 ### 0.1 The master fact — Ink's dynamic-region height ceiling [VERIFIED]
 
@@ -106,22 +112,23 @@ design:
   trailing-edge timer is the safety net; every lifecycle commit pre-flushes via
   `_flushDebounce()` (which re-renders). No final-render gap.
 
-### 0.4 Verified file/line map (at HEAD `ac06077`)
+### 0.4 Verified file/line map (at HEAD `85b2414`)
 
 | Thing | Location |
 |-------|----------|
-| Cap math | `app.tsx:303` `CHROME_ROWS = 10`; `:305` `maxActiveRows = max(16, (stdout?.rows ?? 24) - CHROME_ROWS)` |
-| Width into renderer | `app.tsx:304` `w = max(80, stdout?.columns ?? 80)`; `:309` `useEffect(() => renderer.setWidth(w), [w, renderer])` |
-| `<Static>` + Box-per-item workaround | `app.tsx:1409` |
-| `<ActiveBlock ... maxRows={maxActiveRows}>` | `app.tsx:1427` |
-| Chrome composition (dynamic, below ActiveBlock) | `app.tsx:1467+` SubprocessStatus, pendingQueue?, Rule(sessionLabel), PromptInput, Rule, StatusLine, `marginBottom={2}` |
-| ctrlcPending (dynamic, above chrome box) | `app.tsx` near `:1428` |
-| Cap slice helpers | `components/ActiveBlock.tsx` `stripAnsi`, `visualRows`, `tailSliceByVisualRows` |
-| One-shot render | `block-buffer.ts` `_renderActiveTextAnsi` |
-| Commit (array-replace) | `block-buffer.ts` `_commitActiveText` |
-| Width field + setter | `block-buffer.ts:108` `_width = 80`; `:578` `setWidth(width)` |
-| marked instance builder | `block-buffer.ts` `_makeMarkedInstance()` (free function; no `this`) |
-| Debug instrumentation | `block-buffer.ts` `beginBlock` — `OCTMUX_DEBUG_RENDER` stderr writes + `[octmux-render] → INJECT FIRED` |
+| Cap math | `src/app.tsx:328` `CHROME_ROWS = 10`; `:333` `maxActiveRows = max(16, rows - CHROME_ROWS)` |
+| Width into renderer | `src/app.tsx:332` `w = max(80, columns ?? 80)`; `:336–338` `useEffect(() => renderer.setWidth(w), [w, renderer])` |
+| `<Static>` + Box-per-item workaround | `src/app.tsx:1441–1458` (Box wrapper at :1455) |
+| `<ActiveBlock ... maxRows={maxActiveRows}>` | `src/app.tsx:1459` |
+| Chrome composition (dynamic, below ActiveBlock) | `src/app.tsx:1493–1520` (single `<Box flexDirection="column" marginBottom={2}>` with SubprocessStatus, pendingQueue?, Rule(sessionLabel), PromptInput, Rule, StatusLine, PermissionStatusLine, ToggleStatusLine) |
+| ctrlcPending (dynamic, above chrome box) | `src/app.tsx:1460` |
+| `useTerminalSize()` hook | `src/app.tsx:227–240` (subscribes to stdout resize, returns live size state) |
+| Cap slice helpers | `src/components/ActiveBlock.tsx` `stripAnsi`, `visualRows`, `tailSliceByVisualRows` |
+| One-shot render | `src/renderer/block-buffer.ts` `_renderActiveTextAnsi` |
+| Commit (array-replace) | `src/renderer/block-buffer.ts` `_commitActiveText` |
+| Width field + setter | `src/renderer/block-buffer.ts:108` `_width = 80`; `:586` `setWidth(width)` |
+| marked instance builder | `src/renderer/block-buffer.ts` `_makeMarkedInstance()` (free function; no `this`) |
+| Debug instrumentation | `src/renderer/block-buffer.ts:197–201` private `_dbg(msg)` helper (single `OCTMUX_DEBUG_RENDER` check); called at :224, :244, :248 |
 | Ink resize wiring | `ink/build/ink.js:77` `stdout.on('resize', resized)`; `:83` `resized = () => { calculateLayout(); onRender(); }` |
 | marked-terminal tables | `marked-terminal@7.3.0/index.js:237` → `cli-table3@0.6.5`; `reflowText` only at `:127,207` (paragraph/text/hr, **not** tables) |
 
@@ -424,7 +431,7 @@ fixture renders a wide-cell table at widths 60/120/190 asserting max line width 
 | C-1 | The screen flash IS the Ink overflow branch (0.1/0.2). | **VERIFIED** (in-tree comment, 0.5) | A.0 conservative-cap regression check. | A.2/A.3 framing |
 | C-2 | The child session in the SSE log (`match=false`, `isTrackedChild=false`, ~88/142 deltas) routes content in/out of the renderer unexpectedly. | UNKNOWN | Re-run a multi-step turn with `OCTMUX_DEBUG_SSE`; diff what reaches `appendToBlock` vs what the model emitted. | possible 2nd content/flash cause |
 | C-3 | Box-per-Static-item adds measurable layout cost at >150-turn scrollback. | LOW | Time a render at ~200 committed lines vs without the wrapper (keep wrapper regardless). | A.5 note only |
-| C-4 | marked v15 `table(token)` shape: `token.header[i].{text,tokens,align}`, `token.rows[r][c].{text,tokens}`. | MED | `m.use({renderer:{table(t){console.error(Object.keys(t)); return ""}}})` on a sample table; confirm cell token path. | B.1 (write override only after) |
+| C-4 | marked v15 `table(token)` shape: `token.header[i].{text,tokens,align}`, `token.rows[r][c].{text,tokens}`. | **VERIFIED / SHAPE-STABLE** | v15→v18 token shape marked `.header[i].{text,tokens,align}`, `.rows[r][c].{text,tokens}`; table override returns `string`. | B.1 may proceed without further shape investigation. |
 | C-5 | O(N²) re-parse shows CPU on a huge single text block. | LOW | Stream ~50 KB single text part; sample CPU; if flat, close. | A.5 note only |
 | C-6 | Resize re-runs React. | **VERIFIED FALSE** (0.6) — resize re-flows Yoga + re-serializes, no `updateContainer`; `setWidth` is not called on a paused resize and does not re-parse the active block. | none — folded into 0.6; addressed by A.2 + B.2 gaps 2/3. | closed |
 | C-7 | The cap's `visualRows` count matches Yoga's actual `outputHeight` (wide chars/tabs not underestimated). | MED | With A.3's `measureElement` in place, log measured ActiveBlock height vs `maxRows`; should track. | A.3 robustness |
@@ -443,7 +450,7 @@ missing; prefer it over static reasoning for any "still happening" report.
 2. **A.2** (resize hook) — the keystone; makes geometry live in all states and unblocks A.3 + WP-B.
 3. **A.3** (measureElement cap) — airtight `outputHeight < rows`; resolves the chrome-budget flash, the floor, and modal counting. Run C-7 alongside.
 4. **A.4** (single-line blank) — small; ship with/after A.3.
-5. **WP-B** — after **A.2** is in and **C-4** confirms the table token shape. Independent of the cap; can run in a separate session, but its resize-during-pause re-fit depends on A.2.
+5. **WP-B** — after **A.2** is in (shipped). Independent of the cap; can run in a separate session, but its resize-during-pause re-fit depends on A.2.
 6. **WP-C** items as gates/closeouts throughout.
 
 **Series-done:** the dynamic-region invariant (0.1) provably holds at all sizes **and in all

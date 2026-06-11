@@ -214,6 +214,31 @@ type AppProps = {
   singleMode: boolean;
 };
 
+/**
+ * Subscribes to terminal resize events and returns live terminal dimensions
+ * as React state. Each resize calls setSize with the current stdout.rows/columns,
+ * forcing a re-render that recomputes maxActiveRows and w — making geometry live
+ * in ALL states (streaming, paused, idle). Without this, geometry only refreshes
+ * on re-renders from other causes (deltas, input) and goes stale during pauses,
+ * which can push the dynamic region over stdout.rows (Ink's overflow flash).
+ * The re-render is cheap: <Static> is index-tracked, so unchanged history is not
+ * re-emitted — cost ≈ one streaming delta frame.
+ */
+function useTerminalSize() {
+  const { stdout } = useStdout();
+  const [size, setSize] = useState({
+    rows: stdout?.rows ?? 24,
+    columns: stdout?.columns ?? 80,
+  });
+  useEffect(() => {
+    if (!stdout) return;
+    const onResize = () => setSize({ rows: stdout.rows, columns: stdout.columns });
+    stdout.on("resize", onResize);
+    return () => stdout.off("resize", onResize);
+  }, [stdout]);
+  return size;
+}
+
 export function App(props: AppProps) {
   const { renderer } = props;
   const [editor] = useState(() => new LineEditor());
@@ -292,7 +317,7 @@ export function App(props: AppProps) {
   // Project name: basename of current working directory
   const projectName = path.basename(process.cwd());
 
-  const { stdout } = useStdout();
+  const { rows, columns } = useTerminalSize();
   // Stage 10.7: reserve = 10 rows. Breakdown: chrome (5) + Ink's inclusive
   // `outputHeight >= stdout.rows` overflow check (1) + 4 rows of headroom for
   // transient chrome growth (multi-line PromptInput, modal, yoga-layout edge
@@ -301,8 +326,11 @@ export function App(props: AppProps) {
   // Was 6 in earlier Stage 10.7 draft; bumped after three independent reproductions of
   // fullStaticOutput re-emission ("prior-turn content flashed on screen").
   const CHROME_ROWS = 10;
-  const w = Math.max(80, stdout?.columns ?? 80);
-  const maxActiveRows = Math.max(16, (stdout?.rows ?? 24) - CHROME_ROWS);
+  // AFTER — geometry derives from live React state; recomputes on every resize.
+  // CHROME_ROWS budget and cap formula are UNCHANGED from Stage 10.7; A.3 will
+  // replace the fixed budget with a measured chrome height.
+  const w = Math.max(80, columns ?? 80);
+  const maxActiveRows = Math.max(16, rows - CHROME_ROWS);
 
   // Thread column width into the renderer for markdown wrap
   useEffect(() => {

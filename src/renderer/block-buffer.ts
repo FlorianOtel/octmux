@@ -188,6 +188,18 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     return lines.map(line => formatLine(this._activeBlockRole!, line, false)).join("\n");
   }
 
+  /**
+   * Debug helper — writes msg to stderr when OCTMUX_DEBUG_RENDER=1 is set.
+   * All debug instrumentation in this class routes through here so the env
+   * check is done exactly once rather than inlined at every callsite.
+   * WP-C relies on this trace being available; do NOT delete.
+   */
+  private _dbg(msg: string): void {
+    if (process.env.OCTMUX_DEBUG_RENDER === "1") {
+      process.stderr.write(msg);
+    }
+  }
+
   beginBlock(partID: string, role: Role, meta?: Block["meta"]): void {
     if (!this.visibility.isVisible(role)) return;
     const _outKey = OUTPUT_KEY[role];
@@ -208,10 +220,8 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     // beginBlock — distinguishes Hypothesis A (messageID undefined at runtime →
     // GUARD-FAILED) from Hypothesis B (inject fires but Ink does not render it).
     if (role === "text" && meta?.messageID != null) {
-      if (process.env.OCTMUX_DEBUG_RENDER === "1") {
-        const willInject = this._lastTextMessageID !== null && this._lastTextMessageID !== meta.messageID;
-        process.stderr.write(`[octmux-render] beginBlock TEXT  partID=${partID}  messageID=${meta.messageID}  _lastTextMessageID=${this._lastTextMessageID}  willInject=${willInject}\n`);
-      }
+      const willInject = this._lastTextMessageID !== null && this._lastTextMessageID !== meta.messageID;
+      this._dbg(`[octmux-render] beginBlock TEXT  partID=${partID}  messageID=${meta.messageID}  _lastTextMessageID=${this._lastTextMessageID}  willInject=${willInject}\n`);
       if (this._lastTextMessageID !== null && this._lastTextMessageID !== meta.messageID) {
         // Stage 10.8.1: inject a 3-line demarcation block — empty line,
         // a dim "YYYY-MM-DD HH:MM" timestamp, empty line — pushed as ONE
@@ -231,13 +241,11 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
           { id: this._nextId++, role: "text", ansi: "" },
         ];
         this.emit("changed");
-        if (process.env.OCTMUX_DEBUG_RENDER === "1") {
-          process.stderr.write(`[octmux-render]   → INJECT FIRED. committed.length now ${this._committed.length}\n`);
-        }
+        this._dbg(`[octmux-render]   → INJECT FIRED. committed.length now ${this._committed.length}\n`);
       }
       this._lastTextMessageID = meta.messageID;
-    } else if (role === "text" && process.env.OCTMUX_DEBUG_RENDER === "1") {
-      process.stderr.write(`[octmux-render] beginBlock TEXT  partID=${partID}  meta=${JSON.stringify(meta)}  messageID-GUARD-FAILED (meta?.messageID was null/undef)\n`);
+    } else if (role === "text") {
+      this._dbg(`[octmux-render] beginBlock TEXT  partID=${partID}  meta=${JSON.stringify(meta)}  messageID-GUARD-FAILED (meta?.messageID was null/undef)\n`);
     }
   }
 
