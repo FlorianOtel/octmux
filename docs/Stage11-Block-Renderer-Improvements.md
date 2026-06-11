@@ -492,7 +492,7 @@ formula are unchanged — A.2 makes the geometry live; A.3 (measured chrome) mak
 ### 2026-06-11--13-42 — A.3+A.4: measured chrome cap + single-line truncation
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-11--13-42
-**Commit(s):** _pending — backfill after commit_
+**Commit(s):** `293f0c5`
 
 **A.3 — measured chrome cap:** `src/app.tsx` adds `restRef` + `restRows` state (lines 321–328),
 a no-deps `useLayoutEffect` measuring the non-ActiveBlock dynamic region (ctrlcPending through
