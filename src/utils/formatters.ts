@@ -50,6 +50,7 @@ export const MODEL_CONTEXT_FALLBACK: Record<string, number> = {
   "claude-sonnet-4-5-20241022": 200_000,
   "claude-haiku-4-5-20241001": 200_000,
   "claude-opus-4-7-20250219": 1_000_000,
+  "claude-fable-5": 1_000_000,
 };
 
 /**
@@ -221,6 +222,7 @@ export function prettyModelName(modelID: string): string {
     "claude-sonnet-4-5-20241022": "Sonnet 4.5",
     "claude-haiku-4-5-20241001": "Haiku 4.5",
     "claude-opus-4-7-20250219": "Opus 4.7",
+    "claude-fable-5": "Fable 5",
   };
   return mapping[modelID] ?? modelID;
 }
