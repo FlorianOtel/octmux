@@ -1,0 +1,9 @@
+{
+  "plan_ref": "PLAN.md (last written 2026-06-09T16:15:37Z)",
+  "tasks": [
+    {"id": 1, "summary": "Add 'summary' role variant to blocks.ts Role union and formatLine case arm", "status": "done", "notes": ""},
+    {"id": 2, "summary": "Register 'summary' role in visibility.ts state and counts records", "status": "done", "notes": ""},
+    {"id": 4, "summary": "Extend ReplEvent union in events.ts with block-retag and compaction-divider variants", "status": "done", "notes": ""},
+    {"id": 9, "summary": "Add commitCompactionDivider and retagBlock methods to Renderer interface", "status": "done", "notes": "Added temporary stub implementations throwing Error to StdoutRenderer and TmuxWindowRenderer for Group C to replace"}
+  ]
+}
