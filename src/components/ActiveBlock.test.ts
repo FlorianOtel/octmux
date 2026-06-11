@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import stringWidth from "string-width";
 import { stripAnsi, visualRows, tailSliceByVisualRows } from "./ActiveBlock.tsx";
 
 describe("ActiveBlock helpers", () => {
@@ -82,5 +83,48 @@ describe("ActiveBlock helpers", () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toEndWith("…");
     expect(stripAnsi(result[0]).length).toBeLessThanOrEqual(160);
+  });
+
+  test("visualRows with CJK characters (日) — 10 chars @ width 10 → 2 rows", () => {
+    // CJK character "日" has width 2, so 10 chars = 20 columns
+    // 20 columns / 10 width = 2 rows
+    const result = visualRows("日".repeat(10), 10);
+    expect(result).toBe(2);
+  });
+
+  test("visualRows with emoji — 5 emoji @ width 10 → 1 row", () => {
+    // "🚀" has width 2, so 5 emoji = 10 columns
+    // 10 columns / 10 width = 1 row
+    const result = visualRows("🚀".repeat(5), 10);
+    expect(result).toBe(1);
+  });
+
+  test("visualRows with emoji — 6 emoji @ width 10 → 2 rows", () => {
+    // "🚀" has width 2, so 6 emoji = 12 columns
+    // 12 columns / 10 width = 2 rows (ceil(12/10) = 2)
+    const result = visualRows("🚀".repeat(6), 10);
+    expect(result).toBe(2);
+  });
+
+  test("tailSliceByVisualRows with CJK truncation — 20 CJK @ width 10, maxRows=1", () => {
+    // "日" has width 2, so 20 chars = 40 columns
+    // With width=10 and maxRows=1, budget = 1*10-1 = 9 columns
+    // Should fit 4 chars (8 columns) before exceeding budget
+    const input = ["日".repeat(20)];
+    const result = tailSliceByVisualRows(input, 10, 1);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEndWith("…");
+    expect(stringWidth(result[0])).toBeLessThanOrEqual(10);
+  });
+
+  test("tailSliceByVisualRows with CJK truncation — 40 CJK @ width 10, maxRows=2", () => {
+    // "日" has width 2, so 40 chars = 80 columns
+    // With width=10 and maxRows=2, budget = 2*10-1 = 19 columns
+    // Should fit 9 chars (18 columns) before exceeding budget
+    const input = ["日".repeat(40)];
+    const result = tailSliceByVisualRows(input, 10, 2);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEndWith("…");
+    expect(stringWidth(result[0])).toBeLessThanOrEqual(20);
   });
 });

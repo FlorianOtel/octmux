@@ -13,7 +13,7 @@ import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
 
 // Stage 10.2 — Markdown engine integration.
 //
-// API notes verified empirically against marked@15.0.0 + marked-terminal@7.3.0:
+// API notes verified against marked@17 (token shape stable v15→v18) + marked-terminal@7.3.0:
 //   - `marked.parse(text)` and `Marked#parse(text)` are SYNCHRONOUS by default
 //     in v15+ (no need to pass `{ async: false }`). They return a `string`.
 //   - `markedTerminal` is a NAMED export (factory) — `import { markedTerminal }`.
@@ -303,6 +303,16 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
       }
       // Append to the FULL buffer — do NOT split or commit during appendToBlock
       this._activeTextBuf += text;
+      // Per-delta render trace — fires only when OCTMUX_DEBUG_RENDER=1.
+      // renderedLines reflects _activeBlockAnsi as of the last flush (may lag ≤1 throttle
+      // tick); buf is the NEW buffer length after this delta. The string is built only
+      // when the flag is on (direct guard — this is the hot path; do not route via _dbg).
+      if (process.env.OCTMUX_DEBUG_RENDER === "1") {
+        const renderedLines = this._activeBlockAnsi.split("\n").length;
+        process.stderr.write(
+          `[octmux-render] delta part=${partID} len=${text.length} buf=${this._activeTextBuf.length} lines=${renderedLines} committed=${this._committed.length}\n`,
+        );
+      }
       // Flush-on-\n: if this delta completes one or more lines, render + emit
       // so operators see new lines as soon as they complete (C1.8 + UX
       // requirement). Intra-line bursts (no \n in delta) skip this and rely

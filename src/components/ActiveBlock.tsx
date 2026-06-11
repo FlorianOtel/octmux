@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 import type { Role } from "../blocks.ts";
+import stringWidth from "string-width";
 
 // Strip ANSI escape sequences to get the plain-text length for wrapped-row counting.
 export function stripAnsi(s: string): string {
@@ -10,7 +11,7 @@ export function stripAnsi(s: string): string {
 // A line of printable length 0 still occupies 1 row (the empty row).
 // A line longer than `width` wraps: ceil(length / width) rows.
 export function visualRows(line: string, width: number): number {
-  const len = stripAnsi(line).length;
+  const len = stringWidth(line);
   return Math.max(1, Math.ceil(len / Math.max(1, width)));
 }
 
@@ -27,8 +28,18 @@ export function tailSliceByVisualRows(all: string[], width: number, maxRows: num
   if (start < all.length) return all.slice(start);          // ≥1 line fits — unchanged behaviour
   if (all.length > 0) {                                      // pathological: last line alone > maxRows
     const plain = stripAnsi(all[all.length - 1]);
-    const maxChars = Math.max(1, maxRows * Math.max(1, width) - 1); // reserve 1 for the marker
-    return [plain.slice(0, maxChars) + "…"];                 // keep head; never blank
+    // Column-budget walk: accumulate visible width per code point (Array.from avoids
+    // splitting surrogate pairs) so a CJK/emoji line cannot exceed the row budget.
+    const budget = Math.max(1, maxRows * Math.max(1, width) - 1); // reserve 1 col for the marker
+    let used = 0;
+    let out = "";
+    for (const ch of Array.from(plain)) {
+      const cw = stringWidth(ch);
+      if (used + cw > budget) break;
+      out += ch;
+      used += cw;
+    }
+    return [out + "…"];
   }
   return [];
 }
