@@ -427,7 +427,7 @@ The Stage 11 block-renderer series is closed. All items shipped:
 - **Stage 11.0** (commit `fd3e3a6`): A.1 (debug hygiene), A.2 (useTerminalSize hook).
 - **Stage 11.1** (commit `293f0c5`): A.3 (measured chrome cap), A.4 (pathological single-line truncation).
 - **Stage 11.2** (commit `9bafdce`): WP-B (table wrapping — measured `table(token)` override, live width threading, content-preserving pre-wrap + cli-table3 wordWrap:false).
-- **Stage 11.3** (_pending — backfill after commit_): C-7 fix (string-width in visualRows), per-delta instrumentation (OCTMUX_DEBUG_RENDER=1), marked-comment update, doc closure.
+- **Stage 11.3** (`274b6b6`): C-7 fix (string-width in visualRows), per-delta instrumentation (OCTMUX_DEBUG_RENDER=1), marked-comment update, doc closure.
 
 ### Watch list (field triggers + capture procedures)
 
@@ -578,7 +578,7 @@ New `src/renderer/table-layout.ts` (pure: `naturalWidths`, `computeColWidths`, `
 ### 2026-06-11--19-42 — C: series closeout — C-7 string-width fix, per-delta instrumentation, doc closure
 
 **Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-11--19-42
-**Commit(s):** `_pending — backfill after commit_`
+**Commit(s):** `274b6b6`
 
 **C-7 string-width fix:** `src/components/ActiveBlock.tsx` `visualRows` (line 12) now uses
 `stringWidth(line)` instead of `plain.length` so wide characters (emoji, CJK) are counted
