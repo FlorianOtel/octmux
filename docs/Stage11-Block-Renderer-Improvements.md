@@ -3,9 +3,9 @@ title: "octmux block-renderer — Brain series handover (live document)"
 branch: "main"
 head_at_handover: "85b2414 (feat/block-renderer merged to main)"
 created: 2026-06-08
-revised: 2026-06-11 (rev 4 — implementation log lives in this doc (§ Implementation log); rev 3 corrected paths/line offsets, retired C-4, marked shape-stable note, Part 0 re-verified @85b2414, A.1+A.2 shipped)
-updated_by: "Claude Code (Claude Opus 4.8)"
-updated_at: 2026-06-11--13-24
+revised: 2026-06-11 (rev 5 — A.3+A.4 shipped; rev 4 — implementation log lives in this doc (§ Implementation log); rev 3 corrected paths/line offsets, retired C-4, marked shape-stable note, Part 0 re-verified @85b2414, A.1+A.2 shipped)
+updated_by: "Claude Code (Claude Haiku 4.5)"
+updated_at: 2026-06-11--13-42
 maintained_as: "LIVE DOCUMENT — update the Status Tracker and per-WP status as the series progresses"
 authored_by: "External analysis session (Claude), grounded in the feat/block-renderer tree + Ink 5.2.1 / marked-terminal 7.3.0 source"
 how_to_use: >
@@ -27,8 +27,8 @@ how_to_use: >
 | A.0 | Flash cause — already attributed in-tree; conservative-cap as regression check | DONE-ish | ☐ confirm | none material — see 0.5 |
 | A.1 | Hygiene: debug instrumentation cleanup | high (quick) | ✓ shipped | — |
 | A.2 | **Geometry liveness: `useTerminalSize` resize hook** (keystone; prereq for A.3 + WP-B) | **highest** | ✓ shipped | — |
-| A.3 | Airtight cap: measure chrome, strict headroom (the chrome-budget half of the flash fix) | highest | ☐ | depends on A.2 |
-| A.4 | Pathological single-line blanking | medium | ☐ | — |
+| A.3 | Airtight cap: measure chrome, strict headroom (the chrome-budget half of the flash fix) | highest | ✓ shipped | — |
+| A.4 | Pathological single-line blanking | medium | ✓ shipped | — |
 | B | Real terminal size + table wrapping | high (UX) | ☐ | needs A.2 ✓ (shipped) |
 | C | Open investigations | ongoing | ☐ | several |
 
@@ -488,3 +488,27 @@ recomputes in all states (streaming, paused, idle) — not only while deltas flo
 is cheap: the dynamic region only; `<Static>` history is not re-emitted. The `setWidth` effect
 fires on resize for free. This removes the resize-during-pause flash. `CHROME_ROWS` and the cap
 formula are unchanged — A.2 makes the geometry live; A.3 (measured chrome) makes the cap airtight.
+
+### 2026-06-11--13-42 — A.3+A.4: measured chrome cap + single-line truncation
+
+**Implemented by:** Claude Code (Claude Haiku 4.5) — 2026-06-11--13-42
+**Commit(s):** _pending — backfill after commit_
+
+**A.3 — measured chrome cap:** `src/app.tsx` adds `restRef` + `restRows` state (lines 321–328),
+a no-deps `useLayoutEffect` measuring the non-ActiveBlock dynamic region (ctrlcPending through
+chrome box closing tag, lines 1461–1523). The cap formula becomes `maxActiveRows = Math.max(1,
+rows - restRows - 1)` — exact measurement replacing the fixed `CHROME_ROWS = 10` budget. The
+`CHROME_ROWS` const is removed. The measured region wraps L1460-1520 inside `<Box ref={restRef}
+flexDirection="column">` immediately after the `ActiveBlock` line and closing after the chrome
+box. Imports: `measureElement` added to ink import (line 1), `useLayoutEffect` to react import
+(line 2). This closes the overflow boundary on any pane size, counts modal height automatically,
+and adapts to transient chrome growth (multi-line PromptInput, wrapped StatusLine).
+
+**A.4 — single-line truncation:** `src/components/ActiveBlock.tsx` `tailSliceByVisualRows`
+(lines 18–28) now guards against blanking: if `start >= all.length` (slice would be empty) and
+`all.length > 0`, return a single truncated line — the plain text of the last line (ANSI
+stripped), capped to `Math.max(1, maxRows * Math.max(1, width) - 1)` visible characters, marked
+with "…" at the end. This ensures a pathological single over-tall line never blanks the live
+view; full styled content still commits to `<Static>` intact. Test: `src/components/ActiveBlock.test.ts`
+flips L56 assertion (was empty, now truncates), adds two `[a,b,c,huge]` cases (maxRows=1 and
+maxRows=2) confirming truncation behavior and bounds.

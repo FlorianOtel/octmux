@@ -1,5 +1,5 @@
-import { Box, Static, Text, useStdout, useInput } from "ink";
-import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react";
+import { Box, Static, Text, useStdout, useInput, measureElement } from "ink";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 import type { Command as OcCommand } from "@opencode-ai/sdk/client";
 import * as path from "path";
@@ -318,19 +318,21 @@ export function App(props: AppProps) {
   const projectName = path.basename(process.cwd());
 
   const { rows, columns } = useTerminalSize();
-  // Stage 10.7: reserve = 10 rows. Breakdown: chrome (5) + Ink's inclusive
-  // `outputHeight >= stdout.rows` overflow check (1) + 4 rows of headroom for
-  // transient chrome growth (multi-line PromptInput, modal, yoga-layout edge
-  // rounding). With reserve=10 + K=44 on a 54-row pane, dynamic region tops out
-  // at 53 even when chrome briefly grows to 9 — staying strictly below rows.
-  // Was 6 in earlier Stage 10.7 draft; bumped after three independent reproductions of
-  // fullStaticOutput re-emission ("prior-turn content flashed on screen").
-  const CHROME_ROWS = 10;
-  // AFTER — geometry derives from live React state; recomputes on every resize.
-  // CHROME_ROWS budget and cap formula are UNCHANGED from Stage 10.7; A.3 will
-  // replace the fixed budget with a measured chrome height.
+  // A.3: measure the actual non-ActiveBlock dynamic region (chrome + any mounted modal).
+  // restRows starts at 10 (conservative fallback ~ old CHROME_ROWS) to cover the one-frame
+  // lag before the first measureElement; the no-deps useLayoutEffect keeps it live every render.
+  const restRef = useRef<any>(null);
+  const [restRows, setRestRows] = useState(10);
+  useLayoutEffect(() => {
+    if (restRef.current) {
+      const { height } = measureElement(restRef.current);
+      if (height > 0 && height !== restRows) setRestRows(height); // guard: avoid render thrash
+    }
+  });
   const w = Math.max(80, columns ?? 80);
-  const maxActiveRows = Math.max(16, rows - CHROME_ROWS);
+  // Exact headroom: rows (live from A.2) − measured rest − 1 (closes Ink's >= boundary).
+  // max(1,…) replaces the old max(16,…) floor (which could itself force overflow on small panes).
+  const maxActiveRows = Math.max(1, rows - restRows - 1);
 
   // Thread column width into the renderer for markdown wrap
   useEffect(() => {
@@ -1457,6 +1459,7 @@ export function App(props: AppProps) {
         )}
       </Static>
       {activeBlock && <ActiveBlock role={activeBlock.role} ansi={activeBlockAnsi} width={w} maxRows={maxActiveRows} />}
+      <Box ref={restRef} flexDirection="column">
       {ctrlcPending && <Text color="yellow">Press Ctrl-C again to exit</Text>}
       {/* Modal-bearing events (permission, question) bypass the renderer's output
           gates by design — interactive prompts must always surface to the operator
@@ -1517,6 +1520,7 @@ export function App(props: AppProps) {
         />
         <PermissionStatusLine permMode={permMode} />
         <ToggleStatusLine bindings={TOGGLES_CONFIG.bindings} gateStates={gateStates} />
+      </Box>
       </Box>
     </>
   );

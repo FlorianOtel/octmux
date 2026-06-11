@@ -24,7 +24,13 @@ export function tailSliceByVisualRows(all: string[], width: number, maxRows: num
     used += r;
     start = i;
   }
-  return all.slice(start);
+  if (start < all.length) return all.slice(start);          // ≥1 line fits — unchanged behaviour
+  if (all.length > 0) {                                      // pathological: last line alone > maxRows
+    const plain = stripAnsi(all[all.length - 1]);
+    const maxChars = Math.max(1, maxRows * Math.max(1, width) - 1); // reserve 1 for the marker
+    return [plain.slice(0, maxChars) + "…"];                 // keep head; never blank
+  }
+  return [];
 }
 
 export function ActiveBlock({ role, ansi, width, maxRows }:

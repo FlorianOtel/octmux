@@ -53,11 +53,34 @@ describe("ActiveBlock helpers", () => {
     expect(result).toEqual(["a".repeat(240), "tail"]);
   });
 
-  test("tailSliceByVisualRows returns empty when single line exceeds maxRows", () => {
+  test("tailSliceByVisualRows truncates when single line exceeds maxRows", () => {
     const input = ["a".repeat(240)];
     // 240 chars = 3 rows, but maxRows=1
-    // returns []
+    // returns truncated line ending with …
     const result = tailSliceByVisualRows(input, 80, 1);
-    expect(result).toEqual([]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEndWith("…");
+    expect(stripAnsi(result[0]).length).toBeLessThanOrEqual(80);
+    expect(result[0]).not.toBe("");
+  });
+
+  test("tailSliceByVisualRows with [a,b,c,huge] maxRows=1 truncates", () => {
+    const input = ["a", "b", "c", "x".repeat(300)];
+    // huge line alone = 300/80 = 3.75 ≈ 4 rows, exceeds maxRows=1
+    // returns truncated huge ending with …
+    const result = tailSliceByVisualRows(input, 80, 1);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEndWith("…");
+    expect(stripAnsi(result[0]).length).toBeLessThanOrEqual(80);
+  });
+
+  test("tailSliceByVisualRows with [a,b,c,huge] maxRows=2 truncates", () => {
+    const input = ["a", "b", "c", "z".repeat(250)];
+    // huge line alone = 250/80 = 3.125 ≈ 4 rows, exceeds maxRows=2
+    // returns truncated huge ending with …
+    const result = tailSliceByVisualRows(input, 80, 2);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEndWith("…");
+    expect(stripAnsi(result[0]).length).toBeLessThanOrEqual(160);
   });
 });
