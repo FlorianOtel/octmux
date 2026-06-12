@@ -730,15 +730,16 @@ describe("block-aware paste (Stage 12)", () => {
     editor.insert("h"); editor.insert("i");
     editor.insertText(FIVE_LINE);          // unsubmitted buffer now contains a block
     const draftText = editor.getText();
+    const draftLines = editor.getLines();
     // Enter history, then return — the restore must emit "redraw".
     editor.histPrev();
     let redraws = 0;
     editor.on("redraw", () => { redraws++; });
     editor.histNext();                      // restores the draft
     expect(redraws).toBeGreaterThan(0);
-    // Draft restored in full (expanded plain text), matching the agreed behavior.
+    // Draft restored EXACTLY (block re-collapsed, not expanded) — Stage 12.3.
     expect(editor.getText()).toBe(draftText);
-    expect(editor.getBlockAt(0)).toBeNull();  // recalled as plain rows
+    expect(editor.getLines()).toEqual(draftLines);
   });
 
   test("bug2: paste, clearBuffer, and loadText all emit a redraw event", () => {
@@ -749,5 +750,57 @@ describe("block-aware paste (Stage 12)", () => {
     editor.clearBuffer();          // wholesale replace → redraw
     editor.loadText("a\nb\nc");    // wholesale replace → redraw
     expect(redraws).toBeGreaterThanOrEqual(3);
+  });
+
+  // --- Stage 12.3: draft recall preserves the collapsed block ---
+
+  test("12.3: an UNSUBMITTED draft containing a block comes back RE-COLLAPSED after history scroll (block preserved, not expanded)", () => {
+    const editor = new LineEditor();
+    editor.seedHistory(["previous message"]);
+    editor.insert("h"); editor.insert("i");   // some typed text
+    editor.insertText(FIVE_LINE);             // collapsed block in the unsubmitted draft
+    const draftLines = editor.getLines();
+    const blockBefore = editor.getBlockAt(1);
+    expect(blockBefore).not.toBeNull();        // block is on row 1
+    // Scroll up into history, then back down to the draft.
+    editor.histPrev();
+    expect(editor.getText()).toBe("previous message");  // viewing history
+    editor.histNext();                          // return to draft
+    // Draft restored EXACTLY, with the block still collapsed (same id).
+    expect(editor.getLines()).toEqual(draftLines);
+    const blockAfter = editor.getBlockAt(1);
+    expect(blockAfter).not.toBeNull();
+    expect(blockAfter?.id).toBe(blockBefore?.id);
+    expect(blockAfter?.content).toBe(FIVE_LINE);
+  });
+
+  test("12.3: a SUBMITTED history entry containing a block comes back EXPANDED as plain text (no block metadata persisted in history)", () => {
+    const editor = new LineEditor();
+    editor.insertText(FIVE_LINE);   // [block, ""]
+    editor.enterOnLastRow();        // submit → history stores expanded text
+    // Recall the submitted entry.
+    editor.histPrev();
+    expect(editor.getBlockAt(0)).toBeNull();          // plain rows, NOT a block
+    expect(editor.getText()).toBe(FIVE_LINE);
+    expect(editor.getLines()).toHaveLength(5);
+  });
+
+  test("12.3: draft snapshot shares the immutable block reference but restore is a fresh array (mutating the buffer after restore doesn't corrupt a re-entered draft)", () => {
+    const editor = new LineEditor();
+    editor.seedHistory(["h1"]);
+    editor.insertText(FIVE_LINE);   // block draft
+    editor.histPrev();              // snapshot draft
+    editor.histNext();              // restore draft (fresh array)
+    const linesAfterFirstRestore = editor.getLines();
+    // Mutate the restored buffer (delete the block), then re-enter/return.
+    editor.moveUpRow();             // onto the block row
+    editor.backspace();             // remove the block
+    expect(editor.getBlockAt(0)).toBeNull();
+    // The previously-captured snapshot must not have been mutated in place:
+    // re-entering history and returning should reflect the CURRENT buffer, not
+    // the stale one. (Sanity: no crash, buffer consistent.)
+    editor.histPrev();
+    editor.histNext();
+    expect(editor.getBlockAt(0)).toBeNull();  // still no block (current state preserved)
   });
 });

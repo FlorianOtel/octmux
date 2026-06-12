@@ -28,7 +28,13 @@ export class LineEditor extends EventEmitter {
   private history: string[] = [];
   private histIdx = -1;
   // Unsaved draft saved when user starts navigating history; restored on return to present.
-  private _draft: string | null = null;
+  // Unsubmitted draft, saved when the user starts navigating history and
+  // restored on return to the present. Stored as a Line[] snapshot (not a
+  // flattened string) so a collapsed PastedBlock comes back re-collapsed, not
+  // expanded. PastedBlock objects are readonly/immutable, so sharing references
+  // in the shallow copy is safe. (Submitted command history, by contrast,
+  // stores plain expanded strings — see _loadHistory / seedHistory.)
+  private _draft: Line[] | null = null;
   private _queueMode = false;
   private _pendingEntry: string | null = null;
   private _viewingPending = false;
@@ -445,7 +451,7 @@ export class LineEditor extends EventEmitter {
   // History navigation
   histPrev(): void {
     if (this.histIdx === -1 && !this._viewingPending) {
-      this._draft = this.getText();
+      this._snapshotDraft();   // preserve blocks in the draft (re-collapsed on return)
       if (this._pendingEntry !== null) {
         this._viewingPending = true;
         this.lines = this._pendingEntry.split("\n");
@@ -474,12 +480,8 @@ export class LineEditor extends EventEmitter {
     if (this.histIdx === -1 && !this._viewingPending) return;
     if (this._viewingPending) {
       this._viewingPending = false;
-      const draft = this._draft ?? "";
-      this._draft = null;
       this.histIdx = -1;
-      this.lines = draft ? draft.split("\n") : [""];
-      this.row = this.lines.length - 1;
-      this.col = this.lines[this.row].length;
+      this._restoreDraft();
       this._emitChangedAndRedraw();
       return;
     }
@@ -495,11 +497,7 @@ export class LineEditor extends EventEmitter {
         this.col = this.lines[this.row].length;
         this._emitChangedAndRedraw();
       } else {
-        const draft = this._draft ?? "";
-        this._draft = null;
-        this.lines = draft ? draft.split("\n") : [""];
-        this.row = this.lines.length - 1;
-        this.col = this.lines[this.row].length;
+        this._restoreDraft();
         this._emitChangedAndRedraw();
       }
     }
@@ -548,11 +546,7 @@ export class LineEditor extends EventEmitter {
     if (text === null && this._viewingPending) {
       this._viewingPending = false;
       this.histIdx = -1;
-      const draft = this._draft ?? "";
-      this._draft = null;
-      this.lines = draft ? draft.split("\n") : [""];
-      this.row = this.lines.length - 1;
-      this.col = this.lines[this.row].length;
+      this._restoreDraft();
       this._emitChangedAndRedraw();
     }
   }
@@ -585,5 +579,21 @@ export class LineEditor extends EventEmitter {
   private _emitChangedAndRedraw(): void {
     this.emit("changed");
     this.emit("redraw");
+  }
+
+  // Snapshot the current buffer as the unsubmitted draft, preserving any
+  // collapsed PastedBlock rows (shallow copy; blocks are immutable).
+  private _snapshotDraft(): void {
+    this._draft = [...this.lines];
+  }
+
+  // Restore the draft buffer (or an empty buffer if none), placing the cursor
+  // at the end of the last row. A trailing block row is col-invariant (0).
+  private _restoreDraft(): void {
+    const draft = this._draft;
+    this._draft = null;
+    this.lines = draft && draft.length > 0 ? [...draft] : [""];
+    this.row = this.lines.length - 1;
+    this.col = this._isBlock(this.row) ? 0 : (this.lines[this.row] as string).length;
   }
 }

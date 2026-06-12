@@ -2,8 +2,8 @@
 title: "Stage 12 — Block-aware input buffer with collapsed-paste handling"
 created_at: 2026-06-12--15-59
 created_by: Actor (sohoai/qwen3-4b-q6)
-updated_by: Brain (anthropic/claude-opus-4-8) via direct fix — 2026-06-12--20-16
-updated_at: 2026-06-12--20-16
+updated_by: Brain (anthropic/claude-opus-4-8) via direct fix — 2026-06-12--20-29
+updated_at: 2026-06-12--20-29
 context: >
   Stage 12 — block-aware input buffer with Claude-Code-style collapsed-paste handling (paste >=5 lines renders as a one-line placeholder, atomic for cursor/delete, expands inline on byte-identical re-paste, expands fully on submit).
 ---
@@ -13,6 +13,21 @@ context: >
 This feature implements Claude-Code-style collapsed-paste handling. When the user pastes 5 or more lines, the editor renders a single collapsed placeholder row instead of expanding inline. The internal buffer uses a discriminated-union type `Line = string | PastedBlock` where one `PastedBlock` occupies exactly one row. The canonical entry points are `src/editor.ts` (model + `insertText` threshold/expand logic) and `src/components/PromptInput.tsx` (placeholder render). Note that history/draft/SDK-send all see fully-expanded plain text (no block state persisted).
 
 ## Implementation log
+
+### 2026-06-12--20-29 — Stage 12.3 — Draft recall preserves the collapsed block
+**Implemented by:** Brain (anthropic/claude-opus-4-8) — direct fix — 2026-06-12--20-29
+**Commit(s):** `PENDING-12.3`
+
+Operator decision on the two history-recall forms (the questions deferred during 12.2):
+
+- **Unsubmitted DRAFT recall** (type/paste, scroll up into history, scroll back down to the draft) → the draft now comes back **re-collapsed** with the `PastedBlock` intact, not flattened to expanded plain text.
+- **Submitted command-history recall** (Up-arrow recalls a previously-sent message) → stays **full expanded plain text** (unchanged; history stores only the final sent string, no block metadata).
+
+Implementation: `_draft` changed from `string | null` to `Line[] | null`. New private helpers `_snapshotDraft()` (shallow-copies `this.lines`; `PastedBlock` objects are `readonly`/immutable so sharing references is safe) and `_restoreDraft()` (copies the snapshot back into a fresh array and places the cursor at the end of the last row, col 0 if that row is a block). The capture site in `histPrev` now calls `_snapshotDraft()` instead of `this._draft = this.getText()`; the three draft-restore sites (`histNext` viewing-pending branch, `histNext` return-to-present branch, `setPendingEntry` clear branch) now call `_restoreDraft()`. The submitted-history path (`_loadHistory`, `seedHistory`) is untouched — it continues to split plain strings, so recalled sent messages stay expanded.
+
+Tests: src/editor.test.ts 45 → 48 (added: draft recall re-collapses block with same id; submitted-history recall stays expanded as plain rows; snapshot/restore array-isolation). Updated the existing 12.2 bug2 history-redraw test, whose assertion had wrongly expected the recalled draft to be plain rows. Full suite 194 pass / 0 fail. Binary rebuilt.
+
+Pending operator re-verification: paste a block (don't submit), scroll up into history, scroll back down — the buffer should show the `[pasted text N lines …]` placeholder again, not the expanded text.
 
 ### 2026-06-12--20-16 — Stage 12.2 — Paste-UX bug fixes (cursor placement + history repaint)
 **Implemented by:** Brain (anthropic/claude-opus-4-8) — direct fix after operator manual verification — 2026-06-12--20-16
