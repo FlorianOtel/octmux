@@ -16,7 +16,7 @@ This feature implements Claude-Code-style collapsed-paste handling. When the use
 
 ### 2026-06-12--20-16 — Stage 12.2 — Paste-UX bug fixes (cursor placement + history repaint)
 **Implemented by:** Brain (anthropic/claude-opus-4-8) — direct fix after operator manual verification — 2026-06-12--20-16
-**Commit(s):** `PENDING-12.2`
+**Commit(s):** `4b3a88f`
 
 Two operator-reported bugs from manual verification of Stage 12.1, both fixed:
 
