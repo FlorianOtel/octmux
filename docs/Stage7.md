@@ -201,7 +201,7 @@ Added implementation log entry for claude-fable-5 model metadata addition to Sta
 
 ### 2026-06-12--15-59 — Reduce status area from 6 to 4 lines
 **Implemented by:** actor (claude-sonnet-4-6) — 2026-06-12--15-59
-**Commit(s):** `<hash>`
+**Commit(s):** `b880be0`
 
 **Summary of changes:**
 - Changed `marginBottom={2}` to `marginBottom={0}` on the outer status Box in `src/app.tsx` (line 1496).
