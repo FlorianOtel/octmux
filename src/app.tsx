@@ -1493,7 +1493,7 @@ export function App(props: AppProps) {
           onMoveDown={handleSlashMoveDown}
         />
       )}
-      <Box flexDirection="column" marginBottom={2}>
+      <Box flexDirection="column" marginBottom={0}>
         <SubprocessStatus thinking={procTimes.thinking} tools={procTimes.tools} generating={procTimes.generating} />
         {pendingQueue.length > 0 && (
           <Text color="yellow" dimColor>

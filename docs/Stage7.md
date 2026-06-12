@@ -2,8 +2,8 @@
 title: "Stage 7 — Native opencode /rag command + discovery and forwarding"
 created_at: 2026-05-26--18-41
 created_by: Claude Code (Claude Haiku 4.5)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-06-02--21-23
+updated_by: Actor (local/qwen3-4b-q6)
+updated_at: 2026-06-12--15-59
 context: >
   Stage 6 shipped a broken client-side TypeScript `/rag` implementation that suffered
   from a hardcoded 0.45 score-filter strangling all hits and architectural mismatch
@@ -176,6 +176,41 @@ warning won't fire and the underlying model misbehavior recurs silently.
 **Commit(s):** `274a1b4`
 
 Fixed three autocomplete UX bugs in `recompute()` (`src/app.tsx`):
+
+---
+
+### 2026-06-11--21-17 — Add claude-fable-5 model metadata
+**Implemented by:** Actor (local/qwen3-4b-q6) — 2026-06-11--21-17
+**Commit(s):** `b3d3c1b`
+
+**Summary of changes:**
+- Added `"claude-fable-5": 1_000_000` to `MODEL_CONTEXT_FALLBACK` in `src/utils/formatters.ts` for correct context-window fallback when the live provider API is unreachable.
+- Added `"claude-fable-5": "Fable 5"` to `prettyModelName()` display map in `src/utils/formatters.ts` for human-readable status bar display.
+
+**Note:** Token costs flow automatically from models.dev via opencode server — no pricing code needed in octmux.
+
+---
+
+### 2026-06-11--21-17 — docs: log Stage 7.x fable-5 entry
+**Implemented by:** Actor (local/qwen3-4b-q6) — 2026-06-11--21-17
+**Commit(s):** `b3d3c1b`
+
+Added implementation log entry for claude-fable-5 model metadata addition to Stage 7.x.
+
+---
+
+### 2026-06-12--15-59 — Reduce status area from 6 to 4 lines
+**Implemented by:** actor (claude-sonnet-4-6) — 2026-06-12--15-59
+**Commit(s):** `<hash>`
+
+**Summary of changes:**
+- Changed `marginBottom={2}` to `marginBottom={0}` on the outer status Box in `src/app.tsx` (line 1496).
+- This reduces the blank-line padding below the status area from 6 rendered rows to 4 (3 content lines + 1 empty line).
+- Does not affect dynamic orchestra model-stack rows rendered inside `StatusLine`.
+
+---
+
+## Implementation log
 
 1. **TAB selected wrong command** — `/brain-abandon` was winning over `/brain` on TAB because `expandCommands()` returns external `.md` commands in filesystem inode order (not alphabetical). Fixed by sorting filtered candidates before passing to state: exact token match pinned first, then `localeCompare` alphabetical.
 
