@@ -16,7 +16,7 @@ This feature implements Claude-Code-style collapsed-paste handling. When the use
 
 ### 2026-06-12--20-29 — Stage 12.3 — Draft recall preserves the collapsed block
 **Implemented by:** Brain (anthropic/claude-opus-4-8) — direct fix — 2026-06-12--20-29
-**Commit(s):** `PENDING-12.3`
+**Commit(s):** `458537f`
 
 Operator decision on the two history-recall forms (the questions deferred during 12.2):
 
