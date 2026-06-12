@@ -905,6 +905,8 @@ Replaced the basic `[idle] hidden: ...` status line with an orchestra-style stat
 - New `src/components/StatusLine.tsx`: single `<Text>` line component (preserves fixed height). Accepts `modelLabel`, `tokenUsage`, `projectName`, `gitBranch` props. Bar fill uses `▓`/`░` glyphs with three-stop gruvbox color gradient: green <50%, yellow 50–79%, red ≥80%.
 - `src/app.tsx` wired: new `gitBranch` + `tokenUsage` state; mount effects (git fetch, session init); `session-idle` IIFE updates token counts; StatusLine invocation with new props.
 
+**Ink root-element trailing newline (observed 2026-06-12):** Ink 5.2.1 appears to emit one trailing blank line after the root element regardless of `marginBottom`. When the outer status-area `<Box marginBottom={2}>` was changed to `marginBottom={0}` (Stage 7 fix to reduce status area from 6 to 4 lines), the result was 3 content lines + 1 blank — confirming Ink itself contributes 1 extra line below the root. Consequence: to achieve N blank lines below the last status row, set `marginBottom={N-1}` (not `N`), because Ink already provides 1. At `marginBottom={0}` you still get exactly 1 blank line at the bottom.
+
 **Dropped:**
 - The `[idle]` indicator and hidden-role badges are no longer displayed (operator accepted).
 

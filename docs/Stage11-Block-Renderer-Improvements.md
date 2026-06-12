@@ -73,7 +73,7 @@ Ink 5.2.1 renders the tree as two streams (`ink/build/renderer.js`): the **dynam
 output is built with `renderNodeToOutput(node, output, { skipStaticElements: true })` —
 it *excludes* `<Static>`. The dynamic region in octmux is `ActiveBlock` + `ctrlcPending` +
 any mounted modal + the bottom chrome `<Box>` (SubprocessStatus, Rules, PromptInput,
-StatusLine, `marginBottom={2}`). Its height is `outputHeight`.
+StatusLine, `marginBottom={0}` — reduced from `{2}` in Stage 7 fix 2026-06-12; Ink contributes 1 trailing blank regardless). Its height is `outputHeight`.
 
 In `ink/build/ink.js:121`:
 
@@ -138,7 +138,7 @@ design:
 | `<Static>` + Box-per-item workaround | `src/app.tsx:1441–1458` (Box wrapper at :1455) |
 | Measured chrome wrapper | `src/app.tsx:1462-1523` `<Box ref={restRef} flexDirection="column">` wraps ctrlcPending through chrome box; `:1463` ctrlcPending inside wrapper |
 | `<ActiveBlock ... maxRows={maxActiveRows}>` | `src/app.tsx:1461` |
-| Chrome composition (dynamic, below restRef wrapper) | `src/app.tsx:1496–1523` (nested `<Box flexDirection="column" marginBottom={2}>` with SubprocessStatus, pendingQueue?, Rule(sessionLabel), PromptInput, Rule, StatusLine, PermissionStatusLine, ToggleStatusLine) |
+| Chrome composition (dynamic, below restRef wrapper) | `src/app.tsx:1496–1523` (nested `<Box flexDirection="column" marginBottom={0}>` with SubprocessStatus, pendingQueue?, Rule(sessionLabel), PromptInput, Rule, StatusLine, PermissionStatusLine, ToggleStatusLine — `marginBottom` reduced from `{2}` to `{0}` in Stage 7 fix 2026-06-12; Ink 5.2.1 contributes 1 trailing blank below root regardless of `marginBottom`) |
 | `useTerminalSize()` hook | `src/app.tsx:227–240` (subscribes to stdout resize, returns live size state) |
 | Cap slice helpers | `src/components/ActiveBlock.tsx` `stripAnsi`, `visualRows`, `tailSliceByVisualRows` |
 | One-shot render | `src/renderer/block-buffer.ts:200` `private _renderActiveTextAnsi()` |
