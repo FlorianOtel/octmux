@@ -1,6 +1,6 @@
 import { useInput, Text, Box } from "ink";
 import { useReducer, useEffect, useRef } from "react";
-import type { LineEditor } from "../editor.ts";
+import type { LineEditor, Line, PastedBlock } from "../editor.ts";
 import { handleKey } from "../keybindings.ts";
 import { expandCommands } from "../command-registry.ts";
 
@@ -75,7 +75,8 @@ export function PromptInput({ editor, disabled = false, overlayOpen = false, onS
 
   // Determine if line 0's slash token matches a known command exactly.
   // The highlight is render-only; expandCommands() call is O(commands) ≈ O(10).
-  const firstLine = lines[0] ?? "";
+  // Coerce firstLine to string, since lines[0] may be a PastedBlock.
+  const firstLine = typeof lines[0] === "string" ? lines[0] : "";
   let highlightEnd = 0; // how many characters of line 0 to render bold-cyan
   if (firstLine.startsWith("/")) {
     const token = firstLine.split(/\s/)[0];
@@ -88,6 +89,28 @@ export function PromptInput({ editor, disabled = false, overlayOpen = false, onS
   return (
     <Box flexDirection="column">
       {lines.map((line, i) => {
+        // Type guard: if line is a PastedBlock, render placeholder instead of string logic
+        if (typeof line !== "string") {
+          const block = line as PastedBlock;
+          const prefix = i === 0 ? "> " : "  ";
+          if (i === cursorRow) {
+            const placeholder = `[pasted text ${block.lineCount} lines — paste again to expand]`;
+            return (
+              <Text key={i}>
+                {prefix}
+                <Text inverse>{placeholder[0]}</Text>
+                <Text dimColor>{placeholder.slice(1)}</Text>
+              </Text>
+            );
+          }
+          // Cursor not on block row: render whole placeholder dim
+          return (
+            <Text key={i}>
+              {prefix}
+              <Text dimColor>[pasted text {block.lineCount} lines — paste again to expand]</Text>
+            </Text>
+          );
+        }
         const prefix = i === 0 ? "> " : "  ";
         if (i === cursorRow) {
           const before = line.slice(0, cursorCol);
