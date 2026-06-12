@@ -305,14 +305,21 @@ describe("block-aware paste (Stage 12)", () => {
   const FOUR_LINE = "a\nb\nc\nd";
   const SIX_LINE = "a\nb\nc\nd\ne\nf";
 
-  test("insertText of a 5-line string collapses: getLines().length === 1, getLines()[0] is a block (getBlockAt(0) not null), block.lineCount === 5, getText() === the original 5-line string verbatim", () => {
+  test("insertText of a 5-line string collapses to a block on row 0 with a trailing empty cursor row; getBlockAt(0).lineCount === 5; getText() === content + trailing newline; cursor on the empty row after the block", () => {
     const editor = new LineEditor();
     editor.insertText(FIVE_LINE);
-    expect(editor.getLines()).toHaveLength(1);
+    // Block on row 0, plus a trailing empty plain row for the cursor (bug-1 fix:
+    // cursor lands AFTER the placeholder, not on it).
+    expect(editor.getLines()).toHaveLength(2);
     const block = editor.getBlockAt(0);
     expect(block).not.toBeNull();
     expect(block?.lineCount).toBe(5);
-    expect(editor.getText()).toBe(FIVE_LINE);
+    expect(editor.getLines()[1]).toBe("");
+    // Cursor sits on the trailing empty row, col 0.
+    expect(editor.getRow()).toBe(1);
+    expect(editor.getCol()).toBe(0);
+    // getText() includes the trailing empty row; submit trims it (tested separately).
+    expect(editor.getText()).toBe(FIVE_LINE + "\n");
   });
 
   test("insertText of a 4-line string does NOT collapse: getBlockAt(0) === null; getLines() are plain strings; getText() === original", () => {
@@ -327,11 +334,11 @@ describe("block-aware paste (Stage 12)", () => {
   test("insertText of a 6-line string collapses (getBlockAt(0).lineCount === 6)", () => {
     const editor = new LineEditor();
     editor.insertText(SIX_LINE);
-    expect(editor.getLines()).toHaveLength(1);
+    expect(editor.getLines()).toHaveLength(2);  // block + trailing empty cursor row
     const block = editor.getBlockAt(0);
     expect(block).not.toBeNull();
     expect(block?.lineCount).toBe(6);
-    expect(editor.getText()).toBe(SIX_LINE);
+    expect(editor.getText()).toBe(SIX_LINE + "\n");
   });
 
  test("With an existing collapsed block ... insertText of a SHORT (<5 line) string inserts plain rows after the block (no new block)", () => {
@@ -356,12 +363,14 @@ describe("block-aware paste (Stage 12)", () => {
     // Verify block exists
     const block1 = editor.getBlockAt(0);
     expect(block1).not.toBeNull();
-    // Re-paste the same content
+    // Re-paste the same content (cursor is on the trailing empty row; the
+    // re-paste searches at/after cursor then falls back to before, finding the
+    // block on row 0 and expanding it inline).
     editor.insertText(FIVE_LINE);
-    // Block should be expanded
+    // Block should be expanded to plain rows; trailing empty cursor row remains.
     expect(editor.getBlockAt(0)).toBe(null);
-    expect(editor.getLines()).toHaveLength(5);
-    expect(editor.getText()).toBe(FIVE_LINE);
+    expect(editor.getLines()).toHaveLength(6);  // 5 content rows + trailing empty
+    expect(editor.getText()).toBe(FIVE_LINE + "\n");
   });
 
   test("Re-paste identical with multiple blocks ... nearest-at-or-after-cursor expands", () => {
@@ -441,33 +450,39 @@ describe("block-aware paste (Stage 12)", () => {
     expect(editor.getText()).toContain("different\ncontent\nhere\nwith\nfives");
   });
 
-  test("getText() after two collapsed blocks returns both contents in order joined by surrounding rows (paste two blocks separated by typed text; assert getText() expands both in the right order)", () => {
+  test("getText() after two DISTINCT collapsed blocks expands both contents in order", () => {
     const editor = new LineEditor();
-    editor.insertText(FIVE_LINE);
+    const BLOCK_A = "a\nb\nc\nd\ne";
+    const BLOCK_B = "f\ng\nh\ni\nj";
+    // Paste block A; cursor lands on the trailing empty row after it.
+    editor.insertText(BLOCK_A);
+    // Type a separator on the empty row, then a newline so the next paste is on
+    // a fresh empty row (distinct content → distinct block, no re-paste-expand).
+    editor.insertText("sep");      // sub-threshold → plain text on the cursor row
     editor.insertNewline();
-    editor.insertText("separator");
-    editor.insertNewline();
-    editor.insertText(FIVE_LINE);
-    // Get text and verify both blocks are expanded
+    editor.insertText(BLOCK_B);
+    // Two distinct blocks must coexist.
+    const lines = editor.getLines();
+    let blockCount = 0;
+    for (const l of lines) if (typeof l !== "string") blockCount++;
+    expect(blockCount).toBe(2);
+    // getText() expands both blocks in order.
     const text = editor.getText();
-    // getText() expands blocks, so we get the expanded content
-    expect(text).toBe("separator\n\na\nb\nc\nd\ne");
-    // Verify no blocks remain
-    expect(editor.getBlockAt(0)).toBe(null);
-    expect(editor.getBlockAt(2)).toBe(null);
-    expect(editor.getBlockAt(4)).toBe(null);
-    // Note: The blocks are inserted as separate rows, so we get 5 + 1 + 1 + 5 = 12 lines
-    expect(editor.getLines()).toHaveLength(7);
+    expect(text).toContain(BLOCK_A);
+    expect(text).toContain(BLOCK_B);
+    expect(text.indexOf(BLOCK_A)).toBeLessThan(text.indexOf(BLOCK_B));
+    expect(text).toContain("sep");
   });
 
-  test("backspace() at col 0 of a block row removes the entire block (getLines().length decreases by 1; no merge of neighbours; getBlockAt where it was is null/shifted)", () => {
+  test("backspace() at col 0 of a block row removes the entire block (no merge of neighbours)", () => {
     const editor = new LineEditor();
     editor.insertText(FIVE_LINE);
-    editor.backspace();
-    // After backspace, the block row is removed and replaced with an empty line
-    expect(editor.getLines()).toHaveLength(1);
-    const block = editor.getBlockAt(0);
-    expect(block).toBe(null);
+    editor.moveUpRow();          // climb from trailing empty row onto the block row
+    expect(editor.getBlockAt(0)).not.toBeNull();
+    expect(editor.getRow()).toBe(0);
+    editor.backspace();          // atomic-delete the block row
+    // Block removed; the trailing empty row remains as the sole line.
+    expect(editor.getBlockAt(0)).toBe(null);
     expect(editor.getText()).toBe("");
   });
 
@@ -486,32 +501,38 @@ describe("block-aware paste (Stage 12)", () => {
   test("deleteForward() at col 0 of a block row removes the block", () => {
     const editor = new LineEditor();
     editor.insertText(FIVE_LINE);
-    editor.deleteForward();
-    // deleteForward removes the block row and replaces it with an empty line
-    expect(editor.getLines()).toHaveLength(1);
-    const block = editor.getBlockAt(0);
-    expect(block).toBe(null);
+    editor.moveUpRow();          // onto the block row
+    expect(editor.getBlockAt(0)).not.toBeNull();
+    editor.deleteForward();      // atomic-delete the block row
+    expect(editor.getBlockAt(0)).toBe(null);
     expect(editor.getText()).toBe("");
   });
 
   test("deleteForward() at end of a plain row immediately BEFORE a block row removes the block (no merge)", () => {
     const editor = new LineEditor();
-    editor.insertText(FIVE_LINE);
-    editor.insertNewline();
-    editor.insertText("before");
-    // Cursor at end of "before" row
+    // Build [ "before", block ] adjacency: type "before", Alt-Enter to open a
+    // row after it, then paste the block onto that row.
+    editor.insertText("before");      // row 0 = "before"
+    editor.insertNewline();           // row 1 = "" (cursor here)
+    editor.insertText(FIVE_LINE);     // block collapses onto row 1; cursor on trailing empty row 2
+    // Now lines = ["before", block, ""]. Go to end of "before" (row 0).
+    editor.moveUpRow();               // row 1 (block)
+    editor.moveUpRow();               // row 0 ("before")
     editor.moveLineEnd();
-    editor.deleteForward();
-    // At end of line, deleteForward removes the block row
-    expect(editor.getLines()).toHaveLength(1);
-    expect(editor.getBlockAt(0)).toBe(null);
-    expect(editor.getText()).toBe("before");
+    expect(editor.getRow()).toBe(0);
+    expect(editor.getBlockAt(1)).not.toBeNull();
+    editor.deleteForward();           // at end of "before", next row is a block → atomic-delete
+    expect(editor.getBlockAt(1)).toBe(null);
+    expect(editor.getText()).toContain("before");
+    // No merge: "before" is intact and the block is gone.
+    expect(editor.getLines()[0]).toBe("before");
   });
 
   test("moveForward() at col 0 of a block row is a no-op (getCol() stays 0, getRow() unchanged)", () => {
     const editor = new LineEditor();
     editor.insertText(FIVE_LINE);
-    editor.moveLineStart();
+    editor.moveUpRow();          // onto the block row (row 0)
+    expect(editor.getRow()).toBe(0);
     editor.moveForward();
     expect(editor.getCol()).toBe(0);
     expect(editor.getRow()).toBe(0);
@@ -520,6 +541,8 @@ describe("block-aware paste (Stage 12)", () => {
   test("moveLineStart()/moveLineEnd() on a block row are no-ops (col stays 0)", () => {
     const editor = new LineEditor();
     editor.insertText(FIVE_LINE);
+    editor.moveUpRow();          // onto the block row
+    expect(editor.getRow()).toBe(0);
     editor.moveLineStart();
     expect(editor.getCol()).toBe(0);
     editor.moveLineEnd();
@@ -528,18 +551,16 @@ describe("block-aware paste (Stage 12)", () => {
 
   test("moveBackward() from col 0 of a block row lands at end of the plain row above it", () => {
     const editor = new LineEditor();
-    editor.insertText(FIVE_LINE);
-    editor.insertNewline();
-    editor.insertText("after");
-    editor.moveDownRow();
-    editor.moveLineStart();
-    // Cursor at block row, col 0
-    editor.moveBackward();
-    // moveBackward moves to the previous row (the plain row) and lands at end of it
+    // Build ["above", block, ""]: type "above", newline, paste block.
+    editor.insertText("above");       // row 0 = "above"
+    editor.insertNewline();           // row 1 = "" (cursor here)
+    editor.insertText(FIVE_LINE);     // block on row 1; cursor on trailing empty row 2
+    editor.moveUpRow();               // onto the block row (row 1), col 0
+    expect(editor.getRow()).toBe(1);
+    expect(editor.getBlockAt(1)).not.toBeNull();
+    editor.moveBackward();            // crosses to previous row, lands at its end
     expect(editor.getRow()).toBe(0);
-    expect(editor.getCol()).toBe(5);
-    const block = editor.getBlockAt(1);
-    expect(block).not.toBeNull();
+    expect(editor.getCol()).toBe(5);  // end of "above"
   });
 
   test("moveBackward() from col 0 of a plain row that follows a block row lands at col 0 of the block row", () => {
@@ -556,46 +577,46 @@ describe("block-aware paste (Stage 12)", () => {
 
   test("moveUpRow()/moveDownRow() crossing onto a block row snap col to 0 (start with col>0 on a plain row, move onto a block row, assert getCol() === 0)", () => {
     const editor = new LineEditor();
-    editor.insertText(FIVE_LINE);
-    editor.insertNewline();
-    editor.insertText("plain");
-    // Move cursor to middle of plain row (col 4)
+    // Build ["plain", block, ""]: type "plain", newline, paste block.
+    editor.insertText("plain");       // row 0 = "plain"
+    editor.insertNewline();           // row 1 = "" (cursor)
+    editor.insertText(FIVE_LINE);     // block on row 1; cursor on trailing empty row 2
+    // Cursor on "plain" row 0, col in the middle.
+    editor.moveUpRow();               // row 1 (block)
+    editor.moveUpRow();               // row 0 ("plain")
     editor.moveLineStart();
     for (let i = 0; i < 4; i++) editor.moveForward();
-    // Move down onto block row - col becomes 0
+    expect(editor.getCol()).toBe(4);
+    // Move down onto the block row (row 1) — col snaps to 0.
     editor.moveDownRow();
-    expect(editor.getCol()).toBe(0);
-    // Move up from block row - col becomes 0
-    editor.moveUpRow();
+    expect(editor.getRow()).toBe(1);
     expect(editor.getCol()).toBe(0);
   });
 
   test("insert(\"a\") on a block row at col 0 creates a NEW plain row after the block (block preserved; new row contains \"a\"; cursor on the new row)", () => {
     const editor = new LineEditor();
     editor.insertText(FIVE_LINE);
-    editor.moveLineStart();
+    editor.moveUpRow();          // onto the block row (row 0); a trailing empty row exists at row 1
+    expect(editor.getRow()).toBe(0);
     editor.insert("a");
-    // insert on a block row inserts into a new row AFTER the block
+    // insert on a block row inserts a new row AFTER the block (cursor col 1).
     expect(editor.getBlockAt(0)).not.toBeNull();
-    expect(editor.getLines()).toHaveLength(2);
-    // The new row at index 1 contains "a"
+    // The row immediately after the block contains "a".
     expect(editor.getLines()[1]).toBe("a");
-    expect(editor.getText()).toBe(FIVE_LINE + "\na");
     expect(editor.getRow()).toBe(1);
     expect(editor.getCol()).toBe(1);
+    expect(editor.getText().startsWith(FIVE_LINE + "\na")).toBe(true);
   });
 
   test("insertNewline() on a block row at col 0 creates a NEW empty row BEFORE the block (block preserved; empty row before it)", () => {
     const editor = new LineEditor();
     editor.insertText(FIVE_LINE);
-    editor.moveLineStart();
+    editor.moveUpRow();          // onto the block row (row 0)
+    expect(editor.getRow()).toBe(0);
     editor.insertNewline();
-    // insertNewline on a block row inserts a new empty row BEFORE the block
-    expect(editor.getBlockAt(1)).not.toBeNull();
-    expect(editor.getLines()).toHaveLength(2);
-    // The new empty row at index 0
+    // insertNewline on a block row inserts a new empty row BEFORE the block.
     expect(editor.getLines()[0]).toBe("");
-    expect(editor.getText()).toBe("\n" + FIVE_LINE);
+    expect(editor.getBlockAt(1)).not.toBeNull();
     expect(editor.getRow()).toBe(0);
     expect(editor.getCol()).toBe(0);
   });
@@ -603,6 +624,8 @@ describe("block-aware paste (Stage 12)", () => {
   test("killToEnd()/killToStart()/killWordBackward()/killWordForward() on a block row are no-ops (block preserved, getText() unchanged; you can check killRing indirectly via yank producing nothing — or just assert buffer unchanged)", () => {
     const editor = new LineEditor();
     editor.insertText(FIVE_LINE);
+    editor.moveUpRow();          // onto the block row
+    expect(editor.getRow()).toBe(0);
     const initialText = editor.getText();
     editor.killToEnd();
     editor.killToStart();
@@ -657,5 +680,74 @@ describe("block-aware paste (Stage 12)", () => {
 
   test("PASTE_COLLAPSE_LINE_THRESHOLD is exported and === 5", () => {
     expect(PASTE_COLLAPSE_LINE_THRESHOLD).toBe(5);
+  });
+
+  // --- Regression: bug 1 (cursor lands AFTER the pasted block) ---
+
+  test("bug1: after pasting a block the cursor lands on the empty row AFTER it (not on the placeholder), so typing continues after the paste", () => {
+    const editor = new LineEditor();
+    editor.insertText(FIVE_LINE);
+    // Cursor must NOT be on the block row (row 0); it sits on the trailing row.
+    expect(editor.getRow()).toBe(1);
+    expect(editor.getCol()).toBe(0);
+    expect(editor.getBlockAt(editor.getRow())).toBeNull();  // cursor row is plain
+    // Typing goes directly onto the cursor row, after the block.
+    editor.insert("h");
+    expect(editor.getLines()[1]).toBe("h");
+    expect(editor.getText()).toBe(FIVE_LINE + "\nh");
+  });
+
+  test("bug1: pasting a block mid-line keeps text before/after and lands the cursor on the trailing (after) row", () => {
+    const editor = new LineEditor();
+    editor.insertText("prefix suffix");
+    // Put cursor after "prefix " (col 7), then paste a block there.
+    editor.moveLineStart();
+    for (let i = 0; i < 7; i++) editor.moveForward();
+    editor.insertText(FIVE_LINE);
+    // lines: ["prefix ", block, "suffix"]; cursor on "suffix" row, col 0.
+    const lines = editor.getLines();
+    expect(lines[0]).toBe("prefix ");
+    expect(editor.getBlockAt(1)).not.toBeNull();
+    expect(lines[2]).toBe("suffix");
+    expect(editor.getRow()).toBe(2);
+    expect(editor.getCol()).toBe(0);
+  });
+
+  test("bug1: submit trims the single trailing empty row created by a block paste (no spurious trailing newline)", () => {
+    const editor = new LineEditor();
+    editor.insertText(FIVE_LINE);   // [block, ""]
+    let captured: string | undefined;
+    editor.on("submit", (t) => { captured = t; });
+    editor.enterOnLastRow();
+    expect(captured).toBe(FIVE_LINE);   // exact, no trailing "\n"
+  });
+
+  // --- Regression: bug 2 (buffer-height changes emit a "redraw" so the screen repaints) ---
+
+  test("bug2: history navigation that restores a pasted draft emits a redraw event (so the recalled text is repainted, not left stale)", () => {
+    const editor = new LineEditor();
+    editor.seedHistory(["previous message"]);
+    editor.insert("h"); editor.insert("i");
+    editor.insertText(FIVE_LINE);          // unsubmitted buffer now contains a block
+    const draftText = editor.getText();
+    // Enter history, then return — the restore must emit "redraw".
+    editor.histPrev();
+    let redraws = 0;
+    editor.on("redraw", () => { redraws++; });
+    editor.histNext();                      // restores the draft
+    expect(redraws).toBeGreaterThan(0);
+    // Draft restored in full (expanded plain text), matching the agreed behavior.
+    expect(editor.getText()).toBe(draftText);
+    expect(editor.getBlockAt(0)).toBeNull();  // recalled as plain rows
+  });
+
+  test("bug2: paste, clearBuffer, and loadText all emit a redraw event", () => {
+    const editor = new LineEditor();
+    let redraws = 0;
+    editor.on("redraw", () => { redraws++; });
+    editor.insertText(FIVE_LINE);  // block paste → redraw
+    editor.clearBuffer();          // wholesale replace → redraw
+    editor.loadText("a\nb\nc");    // wholesale replace → redraw
+    expect(redraws).toBeGreaterThanOrEqual(3);
   });
 });

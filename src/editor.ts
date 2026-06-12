@@ -110,7 +110,7 @@ export class LineEditor extends EventEmitter {
         this.row = matchIdx + expanded.length - 1;
         const last = expanded[expanded.length - 1];
         this.col = last.trimEnd().length;
-        this.emit("changed");
+        this._emitChangedAndRedraw();
         return;
       }
 
@@ -123,38 +123,37 @@ export class LineEditor extends EventEmitter {
         createdAt: Date.now(),
       };
 
+      // Cursor always lands on the plain row AFTER the block (col 0), so the
+      // user can keep typing right after the placeholder and the on-screen
+      // cursor matches the typing target (fixes the "cursor on placeholder
+      // start" confusion). If there is no natural row after the block, we add
+      // an empty one. Backspace from that row still atomically removes the
+      // block via the "col 0 of plain row after a block" path.
       const currentRow = this.lines[this.row];
       if (this._isBlock(this.row)) {
-        // Current row is already a block; just splice the new block after it
-        this.lines.splice(this.row + 1, 0, block);
-        this.row = this.row + 1;
+        // Current row is already a block; splice the new block after it, then
+        // ensure an empty row follows for the cursor to land on.
+        this.lines.splice(this.row + 1, 0, block, "");
+        this.row = this.row + 2;   // land on the trailing empty row
         this.col = 0;
       } else {
         const line = currentRow as string;
         const before = line.slice(0, this.col);
         const after = line.slice(this.col);
-        // Replace current row with: [before?], block, [after?]
+        // Replace current row with: [before?], block, <after-or-empty>.
+        // We ALWAYS keep a plain row after the block for the cursor.
         const spliceArgs: Line[] = [];
-        let blockInsertIdx: number;
-        if (before.length > 0 && after.length > 0) {
-          spliceArgs.push(before, block, after);
-          blockInsertIdx = 1;
-        } else if (before.length > 0) {
-          spliceArgs.push(before, block);
-          blockInsertIdx = 1;
-        } else if (after.length > 0) {
-          spliceArgs.push(block, after);
-          blockInsertIdx = 0;
-        } else {
-          // Empty current row — just replace with block
-          spliceArgs.push(block);
-          blockInsertIdx = 0;
-        }
+        if (before.length > 0) spliceArgs.push(before);
+        spliceArgs.push(block);
+        // Always a trailing plain row: the original `after` (even if empty) so
+        // there is somewhere to land. If `after` is empty this is "".
+        spliceArgs.push(after);
         this.lines.splice(this.row, 1, ...spliceArgs);
-        this.row = this.row + blockInsertIdx;
+        // Cursor lands on the trailing plain row (last spliced element), col 0.
+        this.row = this.row + spliceArgs.length - 1;
         this.col = 0;
       }
-      this.emit("changed");
+      this._emitChangedAndRedraw();
       return;
     }
 
@@ -282,7 +281,17 @@ export class LineEditor extends EventEmitter {
   }
 
   enterOnLastRow(): void {
-    const text = this.getText();  // now expands blocks
+    let text = this.getText();  // now expands blocks
+    // A pasted block lands the cursor on a trailing empty row (so typing
+    // continues after the placeholder). When the block is the last content,
+    // that auto-inserted empty row would add a spurious trailing newline to
+    // the submitted message. Drop a single trailing empty row before sending
+    // (only when the buffer has more than one row, so a lone "" stays empty).
+    if (this.lines.length > 1 &&
+        typeof this.lines[this.lines.length - 1] === "string" &&
+        (this.lines[this.lines.length - 1] as string).length === 0) {
+      text = text.replace(/\n$/, "");
+    }
     if (text.trim() && !this._queueMode) {
       this.history.push(text);
       this.histIdx = -1;
@@ -307,7 +316,7 @@ export class LineEditor extends EventEmitter {
     this.col = 0;
     this.histIdx = -1;
     this._draft = null;
-    this.emit("changed");
+    this._emitChangedAndRedraw();
   }
 
   // Kill ring
@@ -442,7 +451,7 @@ export class LineEditor extends EventEmitter {
         this.lines = this._pendingEntry.split("\n");
         this.row = this.lines.length - 1;
         this.col = this.lines[this.row].length;
-        this.emit("changed");
+        this._emitChangedAndRedraw();
         return;
       }
       if (this.history.length === 0) return;
@@ -471,7 +480,7 @@ export class LineEditor extends EventEmitter {
       this.lines = draft ? draft.split("\n") : [""];
       this.row = this.lines.length - 1;
       this.col = this.lines[this.row].length;
-      this.emit("changed");
+      this._emitChangedAndRedraw();
       return;
     }
     if (this.histIdx < this.history.length - 1) {
@@ -484,14 +493,14 @@ export class LineEditor extends EventEmitter {
         this.lines = this._pendingEntry.split("\n");
         this.row = this.lines.length - 1;
         this.col = this.lines[this.row].length;
-        this.emit("changed");
+        this._emitChangedAndRedraw();
       } else {
         const draft = this._draft ?? "";
         this._draft = null;
         this.lines = draft ? draft.split("\n") : [""];
         this.row = this.lines.length - 1;
         this.col = this.lines[this.row].length;
-        this.emit("changed");
+        this._emitChangedAndRedraw();
       }
     }
   }
@@ -501,7 +510,7 @@ export class LineEditor extends EventEmitter {
     this.lines = text ? text.split("\n") : [""];  // plain string rows, no collapse
     this.row = this.lines.length - 1;
     this.col = this.lines[this.row].length;
-    this.emit("changed");
+    this._emitChangedAndRedraw();
   }
 
   getText(): string {
@@ -544,7 +553,7 @@ export class LineEditor extends EventEmitter {
       this.lines = draft ? draft.split("\n") : [""];
       this.row = this.lines.length - 1;
       this.col = this.lines[this.row].length;
-      this.emit("changed");
+      this._emitChangedAndRedraw();
     }
   }
 
@@ -564,6 +573,17 @@ export class LineEditor extends EventEmitter {
     this.lines = this.history[this.histIdx].split("\n");
     this.row = this.lines.length - 1;
     this.col = this.lines[this.row].length;
+    this._emitChangedAndRedraw();
+  }
+
+  // Buffer-height-changing operations (wholesale `lines` replacement: history
+  // navigation, draft restore, loadText, clearBuffer) need a full Ink repaint,
+  // not just a React re-render. Without it, inline-mode leaves stale rows from
+  // the taller/shorter previous frame on screen — the symptom that made a
+  // recalled paste appear to "disappear". The renderer wires onRedraw to the
+  // "redraw" event. Mirrors the paste path, which forces a repaint too.
+  private _emitChangedAndRedraw(): void {
     this.emit("changed");
+    this.emit("redraw");
   }
 }

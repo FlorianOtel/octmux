@@ -41,6 +41,18 @@ export function PromptInput({ editor, disabled = false, overlayOpen = false, onS
     };
   }, [editor, onSubmit]);
 
+  // Buffer-height-changing edits (paste-block, history navigation, draft
+  // restore, loadText, clearBuffer) emit "redraw" so we force a full Ink
+  // repaint — not just a React re-render. Without it, inline-mode leaves stale
+  // rows from the previous (taller/shorter) frame on screen, which made a
+  // recalled paste appear to "disappear". Mirrors the Ctrl-L repaint hook.
+  useEffect(() => {
+    if (!onRedraw) return;
+    const handler = () => onRedraw();
+    editor.on("redraw", handler);
+    return () => { editor.off("redraw", handler); };
+  }, [editor, onRedraw]);
+
   useEffect(() => {
     const captureRaw = (data: Buffer) => { rawSeqRef.current = data.toString(); };
     process.stdin.prependListener('data', captureRaw);
@@ -55,9 +67,10 @@ export function PromptInput({ editor, disabled = false, overlayOpen = false, onS
       // path and would otherwise mutate the buffer behind the modal.
       if (disabled) return;
       editor.insertText(text);
-      // Fix #1: force a full Ink repaint after multi-line paste. Same hook as
-      // Ctrl-L (inkRaw.log.clear + lastOutput="" + onRender) — eliminates the
-      // inline-mode render-vs-scrollback collision when buffer height grows.
+      // insertText emits "redraw" for the block/expand paths (wired above);
+      // for sub-threshold pastes that grow the buffer height we still force a
+      // repaint here to eliminate the inline-mode render-vs-scrollback
+      // collision. Same hook as Ctrl-L (log.clear + lastOutput="" + onRender).
       onRedraw?.();
     });
     return () => { setPasteCallback(() => {}); };
