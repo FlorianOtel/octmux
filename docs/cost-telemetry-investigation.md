@@ -60,7 +60,7 @@ Three key observations from this table:
 
 - `$1.8237` (rounded) matches the `Σ$1.82` shown in the operator's status bar exactly — the cost data in the DB is complete; only the summariser's reading path is broken.
 - All three subagent rows have `parent_id = ses_17ad26e03ffeWX9l6sspQFduDz` — parent↔child session linkage is correct at the DB layer; no additional plumbing needed.
-- Subagent costs are `$0.0000` because they ran on free `sohoai/ollama-cloud/*` models (Planner = glm-5.1, Actor = qwen3-coder-next, Reviewer = kimi-k2.6). The token counts are non-zero and proportional to each subagent's input.
+- Subagent costs are `$0.0000` because they ran on free `sohoai/ollama-cloud/*` models (Planner = glm-5.1, Actor = qwen3-coder-next, Reviewer = kimi-k2.7). The token counts are non-zero and proportional to each subagent's input.
 
 ## Secondary findings
 

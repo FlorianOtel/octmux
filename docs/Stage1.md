@@ -139,8 +139,8 @@ True streaming was missing; fixed in Stage 1.5b above.
 Three-layer test was run to locate where "output appears all at once" originates.
 
 _Layer 1 — SoHoAI gateway (direct curl with `stream: true`):_
-- Model **kimi-k2.6** (`ollama-cloud/kimi-k2.6`): SSE chunks arrive every ~70ms ✅
-  streaming. But kimi-k2.6 is a **thinking model** — it streams `reasoning_content`
+- Model **kimi-k2.7** (`ollama-cloud/kimi-k2.7`): SSE chunks arrive every ~70ms ✅
+  streaming. But kimi-k2.7 is a **thinking model** — it streams `reasoning_content`
   tokens for ~1.5 s, then dumps all `content` tokens in a tight burst (~300 ms).
   So content appears all at once even though the transport is streaming.
 - Model **claude-haiku-4-5** (`anthropic/claude-haiku-4-5`): response delivers in
@@ -180,7 +180,7 @@ _Layer 3 — octmux:_
   from the moment the text part is created (len=0 event) until `session.idle`
   fires. This gives the user feedback during the generation wait without requiring
   incremental text delivery.
-- The `reasoning` part (kimi-k2.6 and other thinking models) follows the same
+- The `reasoning` part (kimi-k2.7 and other thinking models) follows the same
   two-event pattern: created at len=0, complete at len=N. It can be used to drive
   a `[thinking…]` status badge distinct from `[generating…]`.
 

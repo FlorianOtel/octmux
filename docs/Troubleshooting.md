@@ -1,7 +1,7 @@
 ---
 title: "octmux — Troubleshooting Guide"
 created_at: 2026-05-19--17-46
-created_by: Claude Code (claude-code-kimi-k2.6)
+created_by: Claude Code (claude-code-kimi-k2.7)
 updated_by: Claude Code (Claude Sonnet 4.6)
 updated_at: 2026-05-20--10-45
 context: >

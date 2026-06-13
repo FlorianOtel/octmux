@@ -138,7 +138,7 @@ the documented `curl` once. Root cause is model-side: `tool_call: false` models
 cannot emit structured tool calls and improvise via opencode's text-mode tool
 dispatcher. `rag.md` is byte-identical between `~/.claude/commands/` and
 `~/.config/opencode/commands/`; octmux is a literal passthrough for forwarded
-commands. Same flow with a `tool_call: true` model (Claude, Kimi K2.6, etc.)
+commands. Same flow with a `tool_call: true` model (Claude, Kimi K2.7, etc.)
 executes a single curl.
 
 **Change:** Add a one-line yellow warning to the transcript when a forwarded

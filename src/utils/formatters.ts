@@ -80,7 +80,7 @@ export async function getContextWindow(
     const provData = resp.data;
     if (provData) {
       // Pass 1: match provider ID first, then model by dict key OR mInfo.id field.
-      // The dict key format may differ from sess.model.id (e.g. "moonshot/kimi-k2.6" vs "kimi-k2.6").
+      // The dict key format may differ from sess.model.id (e.g. "moonshot/kimi-k2.7" vs "kimi-k2.7").
       for (const p of provData.all) {
         if (p.id === providerID) {
           for (const [mId, mInfo] of Object.entries(p.models)) {
