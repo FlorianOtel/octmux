@@ -425,7 +425,7 @@ in the planner output.
 ### 2026-06-15--22-40 — Stage 5.9.1 — silence git stderr leak on the non-repo `-w` path
 
 **Implemented by:** Claude Code (Claude Opus 4.8) — 2026-06-15--22-40
-**Commit(s):** `PENDING`
+**Commit(s):** `ae318a1`
 
 When `-w`/`--worktree` is used outside a git repository, the `git rev-parse
 --show-toplevel` probe in the worktree-setup block printed git's own
