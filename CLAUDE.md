@@ -45,4 +45,6 @@ octmux is a text-only TUI REPL for OpenCode. It runs inside tmux and communicate
 
 **Default startup (as of Stage 4.1c):** `octmux` with no args attaches to port 4096. The systemd service (`scripts/opencode-server.service`) must be running. Use `--auto-spawn` only as an explicit opt-in (risk: SQLite locking + MCP/LSP bloat from multiple instances).
 
+**Startup flags:** `--single`/`--multi-window` (display mode, required), `--endpoint <url>`, `--auto-spawn`, `--no-tmux-guard`, `--resume <id>`, `--resume-last`, `--fork <id>`, `-w`/`--worktree [<name>]` (Stage 5.9).
+
 **Docs:** `docs/Stage7.md` is the latest implementation log (work can continue in parallel on different stages). `docs/Implementation-plan.md` is the stage-level design reference.
