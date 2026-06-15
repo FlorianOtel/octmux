@@ -28,7 +28,7 @@ context: >
 
 ### 2026-06-15--12-06 — Stage 8.1.6 — Layered defense against orphaned subagent rows (interrupt-robust)
 **Implemented by:** Actor (sohoai/qwen3-4b-q6) — 2026-06-15--12-06
-**Commit(s):** _pending operator commit_
+**Commit(s):** `436fb1b`
 
 **Bug**: Subagent ticker rows (planner/actor/researcher/etc.) froze (◐ not spinning, never removed) when a subagent finished or — especially — when the operator INTERRUPTED a `/brain` session. Root cause was octmux-side: row removal depended on positional-FIFO pairing + a completed-event gate, with NO handling of operator interrupts (which surface as MessageAbortedError on the parent assistant message, not session.error) and no safety net.
 
