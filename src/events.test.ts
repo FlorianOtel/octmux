@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach } from "bun:test";
-import { filterEvent, resetEventState } from "./events.ts";
+import { filterEvent, resetEventState, recordSubmittedUserText, peekSubmittedUserText } from "./events.ts";
 
 const PARENT_SID = "ses_parent_harness";
 const CHILD_SID  = "ses_child_planner";
@@ -25,6 +25,29 @@ function sessionInfo(opts: {
     agent: opts.agent,
     model: opts.model,
   };
+}
+
+function userMsgUpdated(messageID: string) {
+  return {
+    type: "message.updated",
+    properties: { info: { id: messageID, sessionID: PARENT_SID, role: "user", time: { created: 1, updated: 2 } } },
+  } as any;
+}
+function assistantMsgUpdated(messageID: string) {
+  return {
+    type: "message.updated",
+    properties: { info: { id: messageID, sessionID: PARENT_SID, role: "assistant", time: { created: 1, updated: 2 } } },
+  } as any;
+}
+function userTextPart(messageID: string, partID: string, text: string, opts?: { synthetic?: boolean; ignored?: boolean }) {
+  return {
+    type: "message.part.updated",
+    properties: { part: {
+      id: partID, sessionID: PARENT_SID, messageID, type: "text", text,
+      ...(opts?.synthetic !== undefined ? { synthetic: opts.synthetic } : {}),
+      ...(opts?.ignored !== undefined ? { ignored: opts.ignored } : {}),
+    } },
+  } as any;
 }
 
 beforeEach(() => {
@@ -760,5 +783,81 @@ describe("filterEvent — parallel multi-task dispatch out-of-order", () => {
     // Complete task_y — should end child_y
     const out_y = filterEvent(taskPart("prt_task_y", "completed", ""), PARENT_SID);
     expect((out_y as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === "ses_child_y")).toBe(true);
+  });
+});
+
+describe("filterEvent — Mobile-Companion Part B: foreign-user-turn detection", () => {
+  const asArray = (out: any) => Array.isArray(out) ? out : (out ? [out] : []);
+
+  // (a) Local single-part turn → no foreign-user-turn; FIFO consumed
+  test("local single-part turn → no foreign-user-turn; FIFO consumed", () => {
+    recordSubmittedUserText("hello world");
+    filterEvent(userMsgUpdated("msg_local"), PARENT_SID);
+    filterEvent(userTextPart("msg_local", "p1", "hello world"), PARENT_SID);
+    const out = filterEvent(assistantMsgUpdated("msg_asst_a"), PARENT_SID);
+    expect(asArray(out).some((e: any) => e.kind === "foreign-user-turn")).toBe(false);
+    expect(peekSubmittedUserText()).toBeUndefined();  // FIFO consumed
+  });
+
+  // (b) Foreign single-part turn → foreign-user-turn emitted with reconstructed text
+  test("foreign single-part turn → foreign-user-turn emitted with reconstructed text", () => {
+    // no recordSubmittedUserText
+    filterEvent(userMsgUpdated("msg_f"), PARENT_SID);
+    filterEvent(userTextPart("msg_f", "pf1", "from phone"), PARENT_SID);
+    const out = filterEvent(assistantMsgUpdated("msg_asst_b"), PARENT_SID);
+    const evt = asArray(out).find((e: any) => e.kind === "foreign-user-turn");
+    expect(evt).toBeTruthy();
+    expect(evt.messageID).toBe("msg_f");
+    expect(evt.text).toBe("from phone");
+  });
+
+  // (c) Foreign multi-part: synthetic/ignored excluded, order preserved, joined with newline
+  test("foreign multi-part: synthetic/ignored excluded, order preserved, joined with newline", () => {
+    filterEvent(userMsgUpdated("msg_multi"), PARENT_SID);
+    filterEvent(userTextPart("msg_multi", "p1", "line 1"), PARENT_SID);
+    filterEvent(userTextPart("msg_multi", "p2", "[reminder]", { synthetic: true }), PARENT_SID);
+    filterEvent(userTextPart("msg_multi", "p3", "line 2"), PARENT_SID);
+    filterEvent(userTextPart("msg_multi", "p4", "[noise]", { ignored: true }), PARENT_SID);
+    const out = filterEvent(assistantMsgUpdated("msg_asst_c"), PARENT_SID);
+    const evt = asArray(out).find((e: any) => e.kind === "foreign-user-turn");
+    expect(evt).toBeTruthy();
+    expect(evt.text).toBe("line 1\nline 2");
+  });
+
+  // (d) User message with only synthetic/ignored parts → no foreign-user-turn
+  test("user message with only synthetic/ignored parts → no foreign-user-turn", () => {
+    filterEvent(userMsgUpdated("msg_syn"), PARENT_SID);
+    filterEvent(userTextPart("msg_syn", "p1", "[a]", { synthetic: true }), PARENT_SID);
+    filterEvent(userTextPart("msg_syn", "p2", "[b]", { ignored: true }), PARENT_SID);
+    const out = filterEvent(assistantMsgUpdated("msg_asst_d"), PARENT_SID);
+    expect(asArray(out).some((e: any) => e.kind === "foreign-user-turn")).toBe(false);
+  });
+
+  // (e) session.idle backstop flush → foreign-user-turn present alongside idle close events
+  test("session.idle backstop flush → foreign-user-turn present alongside idle close events", () => {
+    filterEvent(userMsgUpdated("msg_idle"), PARENT_SID);
+    filterEvent(userTextPart("msg_idle", "p1", "from idle path"), PARENT_SID);
+    const out = filterEvent({ type: "session.idle", properties: { sessionID: PARENT_SID } } as any, PARENT_SID);
+    expect(Array.isArray(out)).toBe(true);
+    const arr = out as any[];
+    const evt = arr.find((e: any) => e.kind === "foreign-user-turn");
+    expect(evt).toBeTruthy();
+    expect(evt.text).toBe("from idle path");
+    expect(arr.some((e: any) => e.kind === "parent-turn-end" && e.reason === "idle")).toBe(true);
+    expect(arr.some((e: any) => e.kind === "session-idle")).toBe(true);
+  });
+
+  // (f) resetEventState clears FIFO + accumulator; fresh foreign turn emits after reset
+  test("resetEventState clears FIFO + accumulator; fresh foreign turn emits after reset", () => {
+    recordSubmittedUserText("stale");
+    expect(peekSubmittedUserText()).toBe("stale");
+    resetEventState();
+    expect(peekSubmittedUserText()).toBeUndefined();
+    filterEvent(userMsgUpdated("msg_after"), PARENT_SID);
+    filterEvent(userTextPart("msg_after", "p1", "fresh foreign"), PARENT_SID);
+    const out = filterEvent(assistantMsgUpdated("msg_asst_f"), PARENT_SID);
+    const evt = asArray(out).find((e: any) => e.kind === "foreign-user-turn");
+    expect(evt).toBeTruthy();
+    expect(evt.text).toBe("fresh foreign");
   });
 });
