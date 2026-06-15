@@ -994,12 +994,12 @@ export function App(props: AppProps) {
   // Sync queue mode; auto-submit pending queue when model goes idle
   useEffect(() => {
     editor.setQueueMode(isGenerating);
-    if (!isGenerating && pendingQueueRef.current.length > 0) {
+    if (!isGenerating && !question && !permission && pendingQueueRef.current.length > 0) {
       const merged = pendingQueueRef.current.join("\n\n");
       setPendingQueue([]);
       handleSubmitRef.current?.(merged);
     }
-  }, [isGenerating, editor]);
+  }, [isGenerating, question, permission, editor]);
 
   // Keep editor virtual pending-entry in sync with the queue
   useEffect(() => {
@@ -1010,13 +1010,26 @@ export function App(props: AppProps) {
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       if (isGenerating) {
+        const q = question;
         props.client.session.abort({ path: { id: sessionID } }).catch(() => {});
         setIsGenerating(false);
         setLastSubmitted("");
+        if (q) {
+          fetch(`${props.baseUrl}/question/${q.reqID}/reject`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-opencode-directory": props.cwd },
+            body: JSON.stringify({}),
+          }).catch(() => {});
+        }
         // Defensive: ensure PromptInput cannot be left disabled by a stale modal
         // or stray session.updated event. Ctrl-C-during-generation explicitly
         // means "bail to a fresh prompt"; any modal in flight is intentionally
         // dismissed. The non-isGenerating Ctrl-C branches below stay unchanged.
+        // The reject + setPendingQueue([]) + editor.clearBuffer() prevent the
+        // queue-flush effect from POSTing the operator's typed text as the
+        // question's default answer (bug analysis session 20260615T130815Z-161369).
+        setPendingQueue([]);
+        editor.clearBuffer();
         setPermission(null);
         setQuestion(null);
         setModelPicker(null);

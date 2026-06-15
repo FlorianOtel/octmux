@@ -2,10 +2,28 @@
 title: "Stage 9 — Question Deliberation Flow (Piece 2)"
 created_at: 2026-06-07--17-23
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: local/qwen3-4b-q6 — 2026-06-15--11-58
-updated_at: 2026-06-15--11-58
+updated_by: local/qwen3-4b-q6 — 2026-06-15--16-29
+updated_at: 2026-06-15--16-29
 context: >
   Stage 9 implements Piece 2 of the octmux UI architecture redesign: the AskUserQuestion tool's options are committed to scrollback (Piece 2A) and the operator can answer with prose in addition to digit selection (Piece 2B). Piece 2 is renderer-independent and works identically under both --single (StdoutRenderer) and --multi-window (TmuxWindowRenderer) modes.
+---
+
+### 2026-06-15--16-29 — Stage 9.2 — Ctrl-C cancels pending question (reject server-side)
+**Implemented by:** Actor (sohoai/qwen3-4b-q6) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-15--16-29
+**Commit(s):** _pending operator commit_
+
+**Bug:** Pressing Ctrl-C while a QUESTION modal was pending could silently submit the DEFAULT option as the answer. Root cause: the MCP question tool blocks the pipeline so isGenerating stays TRUE while the modal is up; the operator's typed answer sits in the live prompt buffer / pendingQueue (editor not disabled for `question` at src/app.tsx:1514); Ctrl-C's setIsGenerating(false) fires the queue-flush effect (app.tsx ~995-1002) → handleSubmit(merged) → handleSubmit's `if (question)` branch routes the buffered text as the question's answer (option[0]/default via handleQuestion) before setQuestion(null) commits.
+
+**Fix** (two edits to src/app.tsx): (1) Ctrl-C abort branch now snapshots the pending question, fire-and-forget POSTs /question/{reqID}/reject to cancel it server-side, and clears pendingQueue + editor buffer so the typed default cannot leak; (2) the queue-flush effect is guarded with `!question && !permission` (and those added to deps) so a queued message is never flushed into a pending modal — defense-in-depth that also fixes the Enter-while-generating variant.
+
+**Why safe:** explicit reject is the semantically-correct cancel (session.abort alone only probably unblocks the pending question via Effect-ts fiber interrupt — UNCLEAR; reject emits question.rejected and cleans the pending map; rejecting an already-resolved question 404s silently → idempotent). Preserves: idle queue flush, normal question answer (type number+Enter), Ctrl-C with no modal, double-Ctrl-C exit.
+
+**Manual repro** (verification path; app.tsx not unit-tested):
+- **Repro A (fix):** question modal up, type "1", Ctrl-C → NO /question/.../reply POST; ONE /question/.../reject POST IS sent; modal gone; empty prompt.
+- **Repro B (regression):** plain prompt queued during NON-modal generation still auto-sends on idle.
+- **Repro C (regression):** question up, type "2"+Enter → /question/.../reply sent as before.
+- **Repro D (regression):** double-Ctrl-C at idle empty prompt still exits.
+
 ---
 
 #### 2026-06-15--11-58 — Stage 9.2.1 — A5: Correct per-line invert for multi-line prose
