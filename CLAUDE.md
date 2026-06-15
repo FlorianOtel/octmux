@@ -6,9 +6,9 @@ After any change to `src/`, you MUST:
 
 1. **Rebuild the binary:**
    ```
-   /home/florian/.bun/bin/bun build src/index.tsx --compile --target bun-linux-x64 --outfile dist/octmux
+   bash scripts/build.sh
    ```
-   The binary at `dist/octmux` is what the user actually runs. Never report a change as complete without rebuilding.
+   This injects the current git branch, short commit hash, and build timestamp into the binary via `bun --define`. The binary at `dist/octmux` is what the user actually runs. Never report a change as complete without rebuilding.
 
 2. **Update docs and memory:**
    - Add an implementation log entry to the relevant `docs/StageN.md`. Work can continue in parallel on different stages — new commits do _not_ necessarily go in the "latest stage", but should be filed against the most appropriate stage. Each entry must include two metadata lines immediately after the `### YYYY-MM-DD--HH-MM — Title` heading:

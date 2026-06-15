@@ -14,6 +14,13 @@ import type { Renderer } from "./renderer/types.ts";
 import { loadExternalCommands } from "./command-registry.ts";
 import { createPasteFilter } from "./paste-filter.ts";
 
+// ─── Build-time constants (injected via bun --define in scripts/build.sh) ────
+// These are replaced with string literals in the compiled binary.
+// In dev mode (bun run src/index.tsx) they are undefined; version block falls back to 'dev'.
+declare const BUILD_BRANCH: string | undefined;
+declare const BUILD_COMMIT: string | undefined;
+declare const BUILD_DATE:   string | undefined;
+
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
@@ -45,7 +52,10 @@ if (args.includes("--help") || args.includes("-h")) {
 }
 
 if (args.includes("--version")) {
-  console.log("0.0.0");
+  const branch = typeof BUILD_BRANCH !== 'undefined' ? BUILD_BRANCH : 'dev';
+  const commit = typeof BUILD_COMMIT !== 'undefined' ? BUILD_COMMIT : 'dev';
+  const date   = typeof BUILD_DATE   !== 'undefined' ? BUILD_DATE   : 'dev';
+  console.log(`octmux ${branch} branch, ${commit} commit, ${date} build`);
   process.exit(0);
 }
 

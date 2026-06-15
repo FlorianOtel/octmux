@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "bun run src/index.tsx",
     "build": "bun build src/index.tsx --target bun --outfile dist/octmux.js",
-    "compile": "bun build src/index.tsx --compile --target bun-linux-x64 --outfile dist/octmux",
+    "compile": "bash scripts/build.sh",
     "test": "bun test src/"
   },
   "dependencies": {
