@@ -10,7 +10,7 @@ context: >
 
 ### 2026-06-15--16-29 — Stage 9.2 — Ctrl-C cancels pending question (reject server-side)
 **Implemented by:** Actor (sohoai/qwen3-4b-q6) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-15--16-29
-**Commit(s):** _pending operator commit_
+**Commit(s):** `8c8d590`
 
 **Bug:** Pressing Ctrl-C while a QUESTION modal was pending could silently submit the DEFAULT option as the answer. Root cause: the MCP question tool blocks the pipeline so isGenerating stays TRUE while the modal is up; the operator's typed answer sits in the live prompt buffer / pendingQueue (editor not disabled for `question` at src/app.tsx:1514); Ctrl-C's setIsGenerating(false) fires the queue-flush effect (app.tsx ~995-1002) → handleSubmit(merged) → handleSubmit's `if (question)` branch routes the buffered text as the question's answer (option[0]/default via handleQuestion) before setQuestion(null) commits.
 
