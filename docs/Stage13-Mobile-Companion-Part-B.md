@@ -10,7 +10,7 @@ context: >
 
 ### 2026-06-15--18-51 — Stage 13 — Mobile Companion Part B — foreign-user-turn detection at turn boundary
 **Implemented by:** Actor (sohoai/qwen3-4b-q6 + sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-15--18-51
-**Commit(s):** `73d8fc7`
+**Commit(s):** `0b932ec`
 
 **Problem:** octmux suppresses ALL user-message SSE echoes (origin-blind, events.ts) because local turns are optimistically rendered by commitUserInput on submit; a mobile-submitted turn gets no optimistic render and is then suppressed → invisible. You see the phone-triggered reply but not the phone-typed question.
 
