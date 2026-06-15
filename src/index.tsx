@@ -13,6 +13,7 @@ import { TmuxWindowRenderer } from "./renderer/tmux-window.ts";
 import type { Renderer } from "./renderer/types.ts";
 import { loadExternalCommands } from "./command-registry.ts";
 import { createPasteFilter } from "./paste-filter.ts";
+import { deriveWorktreeSlug, deriveWorktreePaths, createWorktree } from "./utils/worktree.ts";
 
 // ─── Build-time constants (injected via bun --define in scripts/build.sh) ────
 // These are replaced with string literals in the compiled binary.
@@ -38,6 +39,10 @@ Options:
   --resume <id>     resume a past session by ID
   --resume-last     resume the most recently updated session
   --fork <id>       fork a past session by ID (creates a child, attaches to it)
+  -w, --worktree [<name>]  create a git worktree on a new branch and start there
+                    bare -w → auto slug wt-YYYYMMDD-HHMM; -w <name> → slug=name
+                    worktree is a sibling dir <repoRoot>--<slug>; mutually exclusive
+                    with --resume, --resume-last, --fork
   --help, -h        show this help
   --version         show version
 
@@ -70,10 +75,19 @@ const resumeArg    = resumeIdx !== -1 && args[resumeIdx + 1] && !args[resumeIdx 
 const resumeLast   = args.includes("--resume-last");
 const forkIdx      = args.indexOf("--fork");
 const forkArg      = forkIdx !== -1 && args[forkIdx + 1] && !args[forkIdx + 1].startsWith("--") ? args[forkIdx + 1] : undefined;
+const worktreeIdx  = args.findIndex(a => a === "-w" || a === "--worktree");
+const worktreeFlag = worktreeIdx !== -1;
+const worktreeArg  = worktreeFlag && args[worktreeIdx + 1] && !args[worktreeIdx + 1].startsWith("-") ? args[worktreeIdx + 1] : undefined;
 
 // --resume, --resume-last, --fork are mutually exclusive (each picks a different initial session).
 if ([resumeArg, resumeLast, forkArg].filter(Boolean).length > 1) {
   console.error("octmux: --resume, --resume-last, and --fork are mutually exclusive");
+  process.exit(2);
+}
+
+// --worktree is mutually exclusive with --resume, --resume-last, and --fork.
+if (worktreeFlag && (resumeArg || resumeLast || forkArg)) {
+  console.error("octmux: --worktree is mutually exclusive with --resume, --resume-last, and --fork");
   process.exit(2);
 }
 
@@ -132,6 +146,51 @@ if (multiWindow) {
     console.error("octmux: could not verify tmux pane context. Run from inside a tmux pane.");
     process.exit(1);
   }
+}
+
+// ─── Worktree setup (-w / --worktree) ────────────────────────────────────────
+// Module-scope variables for worktree path and branch (read by startup banner in STEP 5)
+let worktreePath = "";
+let worktreeBranch = "";
+
+// Must run AFTER arg validation and BEFORE the server-lifecycle block + the
+// `const cwd = process.cwd()` capture (line ~199). chdir-before-capture makes the
+// SDK client directory, session.create, fetchGitBranch, projectName, and
+// orchestra-watch all target the worktree automatically.
+if (worktreeFlag) {
+  let repoRoot = "";
+  try {
+    // stdio: capture stdout (pipe), but silence git's own stderr ("fatal: not a
+    // git repository …") — we print our own clean message in the catch below.
+    repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    console.error("octmux: --worktree requires a git repository (git rev-parse --show-toplevel failed)");
+    process.exit(1);
+  }
+  let slug: string;
+  try {
+    slug = deriveWorktreeSlug(worktreeArg);
+  } catch (err) {
+    console.error(`octmux: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(2);
+  }
+  const derived = deriveWorktreePaths(repoRoot, slug);
+  worktreePath = derived.worktreePath;
+  worktreeBranch = derived.branchName;
+  try {
+    createWorktree(repoRoot, worktreePath, worktreeBranch);
+  } catch (err) {
+    console.error(`octmux: failed to create worktree: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+  process.chdir(worktreePath);
+  console.log(`worktree: ${worktreePath}  branch: ${worktreeBranch}`);
+  process.on("exit", () => {
+    try { process.stdout.write(`\n[octmux] worktree preserved at: ${worktreePath} (remove with: git worktree remove ${worktreePath})\n`); } catch {}
+  });
 }
 
 // ─── Server lifecycle ─────────────────────────────────────────────────────────
@@ -299,6 +358,10 @@ const visibility = new Visibility();
 // renderer's committed lines). Only set for --resume / --resume-last / --fork.
 if (startupBanner) {
   renderer.commitSystemMessage(startupBanner);
+}
+
+if (worktreeFlag) {
+  renderer.commitSystemMessage(`worktree: ${worktreePath}  branch: ${worktreeBranch}  (orchestra: verify agent frontmatter — KP-2)`);
 }
 
 // ─── Terminal clear + cursor anchor ──────────────────────────────────────────────────

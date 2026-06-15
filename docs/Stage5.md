@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-10--10-05
+updated_by: Claude Code (Claude Opus 4.8)
+updated_at: 2026-06-15--22-40
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -421,6 +421,59 @@ in the planner output.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-06-15--22-40 — Stage 5.9.1 — silence git stderr leak on the non-repo `-w` path
+
+**Implemented by:** Claude Code (Claude Opus 4.8) — 2026-06-15--22-40
+**Commit(s):** `ae318a1`
+
+When `-w`/`--worktree` is used outside a git repository, the `git rev-parse
+--show-toplevel` probe in the worktree-setup block printed git's own
+`fatal: not a git repository …` to stderr before octmux's clean error message —
+a confusing double-message. Fixed by passing `stdio: ["ignore", "pipe", "ignore"]`
+to that `execFileSync` call (`src/index.tsx`), capturing stdout while discarding
+git's stderr. The catch branch still prints the single clean line
+`octmux: --worktree requires a git repository (...)` and exits 1. Rebuilt and
+verified: the non-repo path now emits only octmux's message.
+
+### 2026-06-15--22-09 — Stage 5.9 — -w/--worktree: startup git worktree creation + chdir
+
+**Implemented by:** Actor (Haiku 4.5) — 2026-06-15--22-09
+**Commit(s):** `2c37ac8`
+
+**Motivation:** When developing within a git worktree (isolated branch without affecting the main working tree), all SDK operations, session creation, and orchestra integration benefit from `process.cwd()` being the worktree rather than the original repo. Creating the worktree and calling `process.chdir()` BEFORE the `const cwd = process.cwd()` capture at line ~199 makes every cwd-derived value (SDK client directory, `session.create` directory, `fetchGitBranch`, projectName, orchestra-watch) target the worktree automatically, without requiring any changes to downstream code.
+
+**Design:** Three pure utility functions in `src/utils/worktree.ts`:
+- `deriveWorktreeSlug(name?: string)` — if no name given, returns auto slug `wt-YYYYMMDD-HHMM` in LOCAL time (zero-padded); if name given, sanitizes to safe git refname by replacing whitespace runs with `-`, stripping git-refname-invalid chars (`~^:?*[\x00-\x1f\x7f`), and stripping leading `-`. Throws if sanitization results in empty string.
+- `deriveWorktreePaths(repoRoot, slug)` — PURE: returns `{ worktreePath: <repoRoot's parent>/<repoRoot's basename>--<slug>, branchName: slug }`.
+- `createWorktree(repoRoot, worktreePath, branchName)` — calls `git worktree add <path> -b <branch>` and rethrows on error.
+
+**Execution flow:**
+1. Arg parsing (~line 73) extracts `-w`/`--worktree [<name>]` flag and optional name.
+2. Mutual-exclusion check rejects `--worktree` with `--resume`/`--resume-last`/`--fork` (exit 2).
+3. Worktree setup block (line ~151-189) runs AFTER arg validation and BEFORE server-lifecycle + `process.cwd()` capture:
+   - Finds repo root via `git rev-parse --show-toplevel`.
+   - Derives slug via `deriveWorktreeSlug(worktreeArg)`.
+   - Derives paths and creates worktree via `createWorktree()`.
+   - Calls `process.chdir(worktreePath)` so all subsequent `process.cwd()` returns the worktree.
+   - Logs startup message and registers exit handler to preserve worktree directory with cleanup hint.
+4. Startup banner (line ~359) includes worktree path and branch, plus `(orchestra: verify agent frontmatter — KP-2)` hint for operator.
+
+**Files changed:**
+- `src/utils/worktree.ts` — new file: three pure utilities + tests as `src/utils/worktree.test.ts`.
+- `src/index.tsx` — imports; arg parsing; mutual-exclusion check; worktree setup block (module-scope `worktreePath`/`worktreeBranch` + chdir-before-cwd-capture); startup banner.
+- `CLAUDE.md` — updated startup flags list in "Project overview" section to include `-w/--worktree [<name>]`.
+
+**Testing:** All 224 tests pass; new `src/utils/worktree.test.ts` covers auto slug generation, name sanitization, path derivation, and error cases (no worktree creation tests per spec).
+
+**Edge cases handled:**
+- Empty or whitespace-only names → auto slug.
+- Invalid git refname chars stripped; leading `-` stripped; result validated non-empty or error thrown.
+- Worktree already exists → git error caught and rethrown with context.
+- No git repo → error on `git rev-parse --show-toplevel` (exit 1).
+- Mutual exclusion with session-selection flags enforced (exit 2).
+
+---
 
 ### 2026-06-10--00-00 — Stage 5.8 — --single mode startup defaults: tools/thinking off + permissions allow
 
