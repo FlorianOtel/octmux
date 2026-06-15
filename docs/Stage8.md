@@ -2,8 +2,8 @@
 title: "Stage 8 — Live cost display (OC SDK) + orchestra inflight badge"
 created_at: 2026-05-29--08-27
 created_by: Claude Code (Claude Haiku 4.5)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-06-05--23-16
+updated_by: Actor via /brain pipeline (Brain: claude-opus-4-8)
+updated_at: 2026-06-15--12-06
 context: >
   octmux's status bar shows live `Σ$X.XX` cost (from OC SDK `AssistantMessage.cost`,
   summed over parent session + one-level children) and an orchestra inflight badge
@@ -25,6 +25,21 @@ context: >
 ---
 
 ## Implementation log
+
+### 2026-06-15--12-06 — Stage 8.1.6 — Layered defense against orphaned subagent rows (interrupt-robust)
+**Implemented by:** Actor (sohoai/qwen3-4b-q6) — 2026-06-15--12-06
+**Commit(s):** _pending operator commit_
+
+**Bug**: Subagent ticker rows (planner/actor/researcher/etc.) froze (◐ not spinning, never removed) when a subagent finished or — especially — when the operator INTERRUPTED a `/brain` session. Root cause was octmux-side: row removal depended on positional-FIFO pairing + a completed-event gate, with NO handling of operator interrupts (which surface as MessageAbortedError on the parent assistant message, not session.error) and no safety net.
+
+**Fix**: Three-layer defense introduced across `src/events.ts`, `src/app.tsx`, and `src/orchestra-watch.ts`:
+- **Layer A — metadata-keyed pairing**: Read `state.metadata.sessionId` from task tool parts to pair task↔child directly (`src/events.ts` task-pending branch); FIFO `tryPair()` retained as fallback; `session.created` alreadyPaired guard. Also: task-error branch now does unconditional subagent cleanup + conditional block-end (handles interrupted/aborted tasks).
+- **Layer B — parent-turn-end sweep**: New `ReplEvent { kind: "parent-turn-end"; reason: "idle"|"aborted"|"error" }` emitted from `src/events.ts` on parent session.idle, parent assistant message abort (MessageAbortedError), and parent session.error; `src/app.tsx` handles it by calling `notifyAllSubagentsEnded()` + `setIsGenerating(false)` WITHOUT showing error copy (a routine interrupt is not a server error).
+- **Layer C — age eviction**: `OrchestraWatcher.sweepStaleSubagents(maxAgeMs = SUBAGENT_EVICTION_MS=120_000)` in `src/orchestra-watch.ts`, called on a 30s timer in `src/app.tsx` (worst-case orphan lifetime ~150s).
+
+**Test coverage**: 11 new tests across `src/events.test.ts` (Layer A FIFO-swap + interrupted-then-real-subagent; Layer B all three emission sites + child-idle regression guard) and `src/orchestra-watch.test.ts` (sweepStaleSubagents stale/fresh/mixed). Total suite 211 pass / 0 fail.
+
+**Design decision**: `parent-turn-end` is distinct from `{ kind: "error" }` so an operator abort doesn't surface a misleading "/brain-abandon" prompt.
 
 ### 2026-06-05--13-48 — Stage 8.3 — Documentary alignment with oconona v8.2.0 (researcher tiers)
 **Implemented by:** Actor (sohoai/qwen3-4b-q6) — 2026-06-05--13-48

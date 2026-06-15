@@ -36,7 +36,8 @@ export type ReplEvent =
   | { kind: "message-completed"; messageID: string }
   | { kind: "subagent-detected"; sessionID: string; agent: string; model: string; description?: string }
   | { kind: "subagent-ended"; sessionID: string }
-  | { kind: "subagent-activity"; sessionID: string; ts: number };
+  | { kind: "subagent-activity"; sessionID: string; ts: number }
+  | { kind: "parent-turn-end"; reason: "idle" | "aborted" | "error" };
 
 // Track user message IDs so we don't echo the user's own input back to them.
 // opencode fires message.part.updated for user messages too — we skip them.
@@ -110,6 +111,16 @@ export function resetEventState(): void {
 // Called whenever either unpairedChildren or openTaskPartIDs gains a new entry.
 // Both Sets iterate in insertion order (JS spec), so pairing is FIFO:
 // the oldest pending part pairs with the oldest unpaired child.
+//
+// Subagent row lifecycle — three-layer defense (Stage 8.1.6):
+// Layer A = metadata-keyed pairing precedence: read state.metadata.sessionId from
+// task tool parts and pair directly via taskToChild; FIFO tryPair is the fallback
+// for children arriving before metadata is available. This prevents interrupted tasks
+// (which enter openTaskPartIDs without pairing) from poison-fu FIFO-mispairing real children.
+// Layer B = parent-turn-end sweep signal: emitted on parent session.idle, parent message abort,
+// or parent session.error to clean up orphaned rows when operator interrupt occurs (MessageAbortedError).
+// Layer C = age-based eviction in orchestra-watch.ts: sweepStaleSubagents() removes subagent rows
+// that have been idle beyond the spinner-freeze threshold.
 function tryPair(): void {
   const childIter = unpairedChildren.values();
   const partIter  = openTaskPartIDs.values();
@@ -198,6 +209,14 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
             events.push({ kind: "block-retag", partID, newRole: "summary" });
           }
         }
+      }
+      // Handle errors on assistant message (operator interrupt).
+      const infoErr = (info as unknown as { error?: { name?: string; data?: { message?: string } } }).error;
+      if (infoErr) {
+        events.push({
+          kind: "parent-turn-end",
+          reason: infoErr.name === "MessageAbortedError" ? "aborted" : "error",
+        });
       }
       // Existing message-completed logic.
       const completed = (info as { time?: { completed?: number | null } }).time?.completed;
@@ -316,7 +335,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
         id: string; messageID: string; sessionID: string;
         type: "tool"; tool: string;
         callID: string;
-        state: { status: string; input?: unknown; raw?: string; output?: string; error?: string; title?: string };
+        state: { status: string; input?: unknown; raw?: string; output?: string; error?: string; title?: string; metadata?: { sessionId?: string; interrupted?: boolean } };
       };
       if (userMessageIDs.has(toolPart.messageID)) return null;
 
@@ -327,11 +346,30 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
         partIDToMessageID.set(toolPart.id, toolPart.messageID);
         openParts.set(toolPart.id, "tool-call");
         if (toolPart.tool === "task") {
-          openTaskPartIDs.add(toolPart.id);
-          if (process.env.OCTMUX_DEBUG_SSE === "1") {
-            console.error("[octmux-debug] task tool pending partID=" + toolPart.id);
+          // Metadata-keyed pairing precedence: read sessionId from metadata first.
+          // This takes precedence over FIFO pairing to prevent interrupted tasks
+          // (which entered openTaskPartIDs without pairing) from poison-fu mispairing.
+          const metaChild = toolPart.state.metadata?.sessionId;
+          if (metaChild && metaChild !== "") {
+            // Metadata-keyed pairing: direct pair via taskToChild.
+            taskToChild.set(toolPart.id, metaChild);
+            // Remove from unpairedChildren if present (it may have been left there
+            // by a prior interrupted task with the same sessionId).
+            if (unpairedChildren.has(metaChild)) {
+              unpairedChildren.delete(metaChild);
+            }
+            if (process.env.OCTMUX_DEBUG_SSE === "1") {
+              console.error("[octmux-debug] metadata-keyed pairing partID=" + toolPart.id + " childID=" + metaChild);
+            }
+            // Do NOT add to openTaskPartIDs and do NOT call tryPair — already paired.
+          } else {
+            // No metadata: fall back to existing FIFO pairing.
+            openTaskPartIDs.add(toolPart.id);
+            if (process.env.OCTMUX_DEBUG_SSE === "1") {
+              console.error("[octmux-debug] task tool pending partID=" + toolPart.id);
+            }
+            tryPair();
           }
-          tryPair(); // ← new: pair immediately if an unpairedChild is already waiting
         }
         return { kind: "block-start", partID: toolPart.id, role: "tool-call", toolName: toolPart.tool };
       }
@@ -390,26 +428,40 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
         return events;
       }
 
-      // Tool errored: end tool-call block with error.
-      if (state.status === "error" && openParts.get(toolPart.id) === "tool-call") {
+      // Task tool errored (incl. operator interrupt / aborted task): close the tool-call
+      // block if it was open, and remove the paired subagent row. Unconditional subagent
+      // cleanup handles the error-without-pending case; block-end is conditional on the
+      // block having been opened.
+      if (state.status === "error" && toolPart.tool === "task") {
+        const events: ReplEvent[] = [];
+        const hadOpenBlock = openParts.get(toolPart.id) === "tool-call";
+        if (hadOpenBlock) {
+          openParts.delete(toolPart.id);
+          detectedQuestionToolCallIDs.delete(toolPart.id);
+          events.push({ kind: "block-end", partID: toolPart.id, role: "tool-call", status: "error" });
+        }
+        const pairedChildID = taskToChild.get(toolPart.id);
+        if (pairedChildID) {
+          if (process.env.OCTMUX_DEBUG_SSE === "1") {
+            console.error("[octmux-debug] task tool errored, ending subagent partID=" + toolPart.id + " childID=" + pairedChildID);
+          }
+          taskToChild.delete(toolPart.id);
+          trackedChildSessions.delete(pairedChildID);
+          events.push({ kind: "subagent-ended", sessionID: pairedChildID });
+          return events;
+        } else if (openTaskPartIDs.has(toolPart.id)) {
+          openTaskPartIDs.delete(toolPart.id);
+        }
+        return events.length > 0 ? events : null;
+      }
+
+      // Generic error branch: only for non-task parts, or task parts that weren't paired.
+      if (state.status === "error" && openParts.get(toolPart.id) === "tool-call" && toolPart.tool !== "task") {
         openParts.delete(toolPart.id);
         detectedQuestionToolCallIDs.delete(toolPart.id);
         const events: ReplEvent[] = [
           { kind: "block-end", partID: toolPart.id, role: "tool-call", status: "error" },
         ];
-        if (toolPart.tool === "task") {
-          const pairedChildID = taskToChild.get(toolPart.id);
-          if (pairedChildID) {
-            if (process.env.OCTMUX_DEBUG_SSE === "1") {
-              console.error("[octmux-debug] task tool errored, ending subagent partID=" + toolPart.id + " childID=" + pairedChildID);
-            }
-            taskToChild.delete(toolPart.id);
-            trackedChildSessions.delete(pairedChildID);
-            events.push({ kind: "subagent-ended", sessionID: pairedChildID });
-          } else if (openTaskPartIDs.has(toolPart.id)) {
-            openTaskPartIDs.delete(toolPart.id);
-          }
-        }
         return events;
       }
 
@@ -444,6 +496,18 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       );
     }
     if (info.parentID === sessionID && !trackedChildSessions.has(info.id)) {
+      // Check if this child is already metadata-paired to a task part.
+      const alreadyPaired = [...taskToChild.values()].includes(info.id);
+      if (alreadyPaired) {
+        // Child already paired via metadata-keyed logic — skip FIFO pairing.
+        trackedChildSessions.add(info.id);
+        return {
+          kind: "subagent-detected",
+          sessionID: info.id,
+          agent: info.agent ?? "",
+          model: info.model ? `${info.model.providerID}/${info.model.id}` : "",
+        };
+      }
       trackedChildSessions.add(info.id);
       // Park this child in unpairedChildren, then let tryPair() do both sides.
       unpairedChildren.add(info.id);
@@ -532,7 +596,7 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     }
     openParts.clear();
     seenPartIDs.clear();
-    return [{ kind: "session-idle" }, ...closeEvents];
+    return [{ kind: "parent-turn-end", reason: "idle" }, { kind: "session-idle" }, ...closeEvents];
   }
 
   if (event.type === "session.error") {
@@ -541,7 +605,10 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     if (e.properties.sessionID !== sessionID) return null;
     const err = e.properties.error;
     const message = err && "data" in err ? err.data.message : "unknown server error";
-    return { kind: "error", message };
+    return [
+      { kind: "parent-turn-end", reason: "error" },
+      { kind: "error", message },
+    ];
   }
 
   if (event.type === "session.status") {

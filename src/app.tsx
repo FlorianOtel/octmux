@@ -774,6 +774,14 @@ export function App(props: AppProps) {
           // notifyAllSubagentsEnded is a safe no-op when badge.subagents is empty.
           watcherRef.current?.notifyAllSubagentsEnded();
         }
+        else if (ev.kind === "parent-turn-end") {
+          // Parent harness turn ended (idle / operator abort / server error). Any subagent
+          // rows still present are orphans — the parent cannot be turn-ended while a child
+          // Task is running. Sweep them. Do NOT call renderer.commitError: a routine operator
+          // interrupt (reason "aborted") is not a server error and must not show error copy.
+          watcherRef.current?.notifyAllSubagentsEnded();
+          setIsGenerating(false);
+        }
         else if (ev.kind === "generating")   setIsGenerating(true);
         else if (ev.kind === "session-idle") {
           renderer.commitTurnEnd();

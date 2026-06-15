@@ -174,7 +174,7 @@ describe("filterEvent — lifecycle end signals for tracked children", () => {
 });
 
 // Helpers for Task-tool tracking tests
-function taskPart(partID: string, status: "pending" | "running" | "completed" | "error", output?: string) {
+function taskPart(partID: string, status: "pending" | "running" | "completed" | "error", output?: string, metadata?: { sessionId?: string; interrupted?: boolean }) {
   return {
     type: "message.part.updated",
     properties: {
@@ -185,7 +185,11 @@ function taskPart(partID: string, status: "pending" | "running" | "completed" | 
         type: "tool",
         tool: "task",
         callID: "call_" + partID,
-        state: { status, output },
+        state: {
+          status,
+          output,
+          metadata: metadata ?? { },
+        },
       },
     },
   } as any;
@@ -272,6 +276,114 @@ describe("filterEvent — Task tool tracking (protocol-precise end signal)", () 
       agent: "planner",
       model: "sohoai/minimax-m3",
     });
+  });
+});
+
+describe("filterEvent — Layer A: metadata-keyed pairing (Stage 8.1.6)", () => {
+  const PARENT_SID = "ses_parent_harness";
+  const CHILD_REAL = "ses_real_child";
+  const CHILD_INT = "ses_interrupted_child";
+  const PRT_INTERRUPTED = "prt_interrupted";
+  const PRT_REAL = "prt_real";
+
+  beforeEach(() => {
+    resetEventState();
+  });
+
+  test("interrupted task partID never pairs to a subsequent real child (behavioral guard)", () => {
+    // Step 1: task pending partID="prt_interrupted" (no metadata) → openTaskPartIDs
+    filterEvent(taskPart(PRT_INTERRUPTED, "pending"), PARENT_SID);
+
+    // Step 2: task error partID="prt_interrupted" (status "error", optionally metadata.interrupted=true)
+    // Cleanup; the stale entry is removed; no subagent-ended (no child was paired)
+    filterEvent(taskPart(PRT_INTERRUPTED, "error", "", { interrupted: true }), PARENT_SID);
+
+    // Step 3: session.created CHILD_REAL (parentID=PARENT_SID) → subagent-detected; child parked in unpairedChildren
+    filterEvent({
+      type: "session.created",
+      properties: {
+        info: {
+          id: CHILD_REAL,
+          parentID: PARENT_SID,
+          agent: "planner",
+          model: { providerID: "sohoai", id: "minimax-m3" },
+        },
+      },
+    } as any, PARENT_SID);
+
+    // Step 4: task completed partID="prt_real" WITH metadata.sessionId=CHILD_REAL AFTER the session.created
+    // metadata pairing should pair and pull CHILD_REAL out of unpairedChildren
+    filterEvent(taskPart(PRT_REAL, "pending", "result", { sessionId: CHILD_REAL }), PARENT_SID);
+
+    // MUST emit subagent-ended for CHILD_REAL
+    const completed = filterEvent(taskPart(PRT_REAL, "completed", "result", { sessionId: CHILD_REAL }), PARENT_SID);
+    expect(Array.isArray(completed)).toBe(true);
+    expect((completed as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === CHILD_REAL)).toBe(true);
+    // Behavioral guard: CHILD_INT was never paired to CHILD_REAL. Since CHILD_INT's part was
+    // removed during the error (step 2), it's no longer in openTaskPartIDs. CHILD_REAL was
+    // then paired directly via metadata (sessionId=CHILD_REAL), not via FIFO to CHILD_INT.
+    // This test verifies that an interrupted task part doesn't leave a residue that could
+    // mispair a subsequent real child.
+  });
+
+  test("metadata-keyed pairing wins; stale openTaskPartIDs entry does not mispair the real child", () => {
+    // Step 1: Feed a task pending part with NO metadata.sessionId → goes into openTaskPartIDs (FIFO fallback)
+    filterEvent(taskPart(PRT_INTERRUPTED, "pending"), PARENT_SID);
+
+    // Step 2: Feed a task pending part WITH metadata.sessionId = CHILD_REAL
+    // Metadata-keyed pairing should pair prt_real↔CHILD_REAL directly (NOT FIFO)
+    filterEvent(taskPart(PRT_REAL, "pending", undefined, { sessionId: CHILD_REAL }), PARENT_SID);
+
+    // Step 3: Feed session.created for CHILD_REAL with parentID=PARENT_SID
+    // Should emit subagent-detected; must NOT re-pair (alreadyPaired path)
+    filterEvent({
+      type: "session.created",
+      properties: {
+        info: {
+          id: CHILD_REAL,
+          parentID: PARENT_SID,
+          agent: "planner",
+          model: { providerID: "sohoai", id: "minimax-m3" },
+        },
+      },
+    } as any, PARENT_SID);
+
+    // Step 4: Feed task completed part for prt_real with metadata.sessionId=CHILD_REAL
+    // MUST emit a subagent-ended event for CHILD_REAL
+    const completed = filterEvent(taskPart(PRT_REAL, "completed", "result", { sessionId: CHILD_REAL }), PARENT_SID);
+    expect(Array.isArray(completed)).toBe(true);
+    expect((completed as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === CHILD_REAL)).toBe(true);
+  });
+
+  test("interrupted task then real subagent → real subagent's row is removed (no orphan)", () => {
+    // Step 1: task pending partID="prt_interrupted" (no metadata) → openTaskPartIDs
+    filterEvent(taskPart(PRT_INTERRUPTED, "pending"), PARENT_SID);
+
+    // Step 2: task error partID="prt_interrupted" (status "error", optionally metadata.interrupted=true)
+    // Cleanup; the stale entry is removed; no subagent-ended (no child was paired)
+    filterEvent(taskPart(PRT_INTERRUPTED, "error", "", { interrupted: true }), PARENT_SID);
+
+    // Step 3: session.created CHILD_REAL (parentID=PARENT_SID) → subagent-detected; child parked in unpairedChildren
+    filterEvent({
+      type: "session.created",
+      properties: {
+        info: {
+          id: CHILD_REAL,
+          parentID: PARENT_SID,
+          agent: "planner",
+          model: { providerID: "sohoai", id: "minimax-m3" },
+        },
+      },
+    } as any, PARENT_SID);
+
+    // Step 4: task completed partID="prt_real" WITH metadata.sessionId=CHILD_REAL AFTER the session.created
+    // metadata pairing should pair and pull CHILD_REAL out of unpairedChildren
+    filterEvent(taskPart(PRT_REAL, "pending", "result", { sessionId: CHILD_REAL }), PARENT_SID);
+
+    // MUST emit subagent-ended for CHILD_REAL
+    const completed = filterEvent(taskPart(PRT_REAL, "completed", "result", { sessionId: CHILD_REAL }), PARENT_SID);
+    expect(Array.isArray(completed)).toBe(true);
+    expect((completed as any[]).some(e => e.kind === "subagent-ended" && e.sessionID === CHILD_REAL)).toBe(true);
   });
 });
 
@@ -439,6 +551,123 @@ describe("filterEvent — session.updated activity routing", () => {
       expect((autoUnset as any).kind).toBe("compaction-divider");
       expect((autoUnset as any).auto).toBe(false);
     });
+  });
+});
+
+describe("filterEvent — Layer B: parent-turn-end sweep signal (Stage 8.1.6)", () => {
+  const PARENT_SID = "ses_parent_harness";
+  const CHILD_SID = "ses_child_planner";
+  const CHILD_REAL = "ses_real_child";
+
+  beforeEach(() => {
+    resetEventState();
+  });
+
+  function trackChild() {
+    filterEvent({
+      type: "session.created",
+      properties: {
+        info: {
+          id: CHILD_SID,
+          parentID: PARENT_SID,
+          agent: "planner",
+          model: { providerID: "sohoai", id: "minimax-m3" },
+        },
+      },
+    } as any, PARENT_SID);
+  }
+
+  // (a) Test "parent session.idle emits parent-turn-end(idle)"
+  test("parent session.idle emits parent-turn-end(idle)", () => {
+    const out = filterEvent({
+      type: "session.idle",
+      properties: { sessionID: PARENT_SID },
+    } as any, PARENT_SID);
+    expect(Array.isArray(out)).toBe(true);
+    expect((out as any[])[0]).toEqual({ kind: "parent-turn-end", reason: "idle" });
+    expect((out as any[])[1]).toEqual({ kind: "session-idle" });
+  });
+
+  // (b) Test "child session.idle does NOT emit parent-turn-end"
+  test("child session.idle does NOT emit parent-turn-end (child-idle regression guard)", () => {
+    trackChild();
+    const out = filterEvent({
+      type: "session.idle",
+      properties: { sessionID: CHILD_SID },
+    } as any, PARENT_SID);
+    expect(out).toBeNull();
+  });
+
+  // (c) Test "parent assistant message abort emits parent-turn-end(aborted)"
+  test("parent assistant message abort emits parent-turn-end(aborted)", () => {
+    const msgUpdated = {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "msg_1",
+          sessionID: PARENT_SID,
+          role: "assistant",
+          error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+          time: { created: 1, updated: 2 },
+        },
+      },
+    } as any;
+    const out = filterEvent(msgUpdated, PARENT_SID);
+    // Normalize to array and search
+    const arr = Array.isArray(out) ? out : [out];
+    expect(arr.some(e => e.kind === "parent-turn-end" && e.reason === "aborted")).toBe(true);
+  });
+
+  // (d) Test "parent assistant message with other error emits parent-turn-end(error)"
+  test("parent assistant message with other error emits parent-turn-end(error)", () => {
+    const msgUpdated = {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "msg_2",
+          sessionID: PARENT_SID,
+          role: "assistant",
+          error: { name: "SomeServerError", data: { message: "boom" } },
+          time: { created: 1, updated: 2 },
+        },
+      },
+    } as any;
+    const out = filterEvent(msgUpdated, PARENT_SID);
+    // Normalize to array and search
+    const arr = Array.isArray(out) ? out : [out];
+    expect(arr.some(e => e.kind === "parent-turn-end" && e.reason === "error")).toBe(true);
+  });
+
+  // (e) Test "parent assistant message with NO error does not emit parent-turn-end"
+  test("parent assistant message with NO error does not emit parent-turn-end", () => {
+    const msgUpdated = {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "msg_3",
+          sessionID: PARENT_SID,
+          role: "assistant",
+          time: { created: 1, updated: 2 },
+        },
+      },
+    } as any;
+    const out = filterEvent(msgUpdated, PARENT_SID);
+    // message.updated with no error returns null, not parent-turn-end
+    expect(out).toBeNull();
+  });
+
+  // (f) Test "parent session.error emits both parent-turn-end(error) and error"
+  test("parent session.error emits both parent-turn-end(error) and error", () => {
+    const out = filterEvent({
+      type: "session.error",
+      properties: {
+        sessionID: PARENT_SID,
+        error: { data: { message: "server error" } },
+      },
+    } as any, PARENT_SID);
+    expect(Array.isArray(out)).toBe(true);
+    expect((out as any[]).some(e => e.kind === "parent-turn-end" && e.reason === "error")).toBe(true);
+    expect((out as any[]).some(e => e.kind === "error")).toBe(true);
   });
 });
 

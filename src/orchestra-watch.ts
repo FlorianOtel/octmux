@@ -19,6 +19,12 @@ export type OrchestraBadge = {
   parserWarnings?: Array<{ code: string; message: string }>;
 } | null;
 
+// Age-eviction threshold for subagent ticker rows (Layer C backstop). Kept in sync
+// with StatusLine.tsx:6 ACTIVITY_FREEZE_MS = 120_000 — the spinner-freeze threshold and
+// the eviction threshold deliberately share the same value so a row cannot be both
+// "frozen visually" and "still present". If you change one, change the other.
+const SUBAGENT_EVICTION_MS = 120_000;
+
 type Client = ReturnType<typeof createOpencodeClient>;
 
 /**
@@ -489,6 +495,25 @@ export class OrchestraWatcher extends EventEmitter {
       this.badge = {...this.badge};
       this.emit("changed", this.badge);
     }
+  }
+
+  /**
+    * Layer C backstop: evict subagent rows whose lastActivityAt is older than maxAgeMs.
+    * Catches orphaned rows that escaped both metadata-keyed removal (Layer A) and the
+    * parent-turn-end sweep (Layer B). Emits "changed" only if rows were actually dropped,
+    * to avoid spurious React re-renders.
+    */
+   sweepStaleSubagents(maxAgeMs: number = SUBAGENT_EVICTION_MS): void {
+    if (!this.badge) return;
+    const now = Date.now();
+    const before = this.badge.subagents.length;
+    const kept = this.badge.subagents.filter(
+      s => s.lastActivityAt === undefined || (now - s.lastActivityAt) <= maxAgeMs
+    );
+    if (kept.length === before) return; // nothing dropped — no emit
+    this.badge.subagents = kept;
+    this.badge = { ...this.badge };
+    this.emit("changed", this.badge);
   }
 
   /**

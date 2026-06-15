@@ -250,3 +250,65 @@ describe("OrchestraWatcher emit identity (React same-reference bailout defeat)",
     expect(Object.is(beforeRef, afterRef)).toBe(false);
   });
 });
+
+describe("OrchestraWatcher.sweepStaleSubagents (Stage 8.1.6)", () => {
+  let changed = 0;
+
+  function attachCounter(w: OrchestraWatcher): void {
+    changed = 0;
+    w.on("changed", () => { changed += 1; });
+  }
+
+  test("drops only the stale row, emits changed once", () => {
+    const w = freshWatcher();
+    setBadge(w, makeBadge({
+      subagents: [
+        { sessionID: "ses_fresh", agent: "planner", model: "m1", lastActivityAt: Date.now() - 5000 },
+        { sessionID: "ses_stale", agent: "actor", model: "m2", lastActivityAt: Date.now() - 200000 },
+      ],
+    }));
+    attachCounter(w);
+    w.sweepStaleSubagents(120_000);
+    const b = getBadge(w)!;
+    // Fresh row remains, stale row dropped
+    expect(b.subagents).toHaveLength(1);
+    expect(b.subagents[0].sessionID).toBe("ses_fresh");
+    // Changed listener fired
+    expect(changed).toBe(1);
+  });
+
+  test("both fresh → no drop, no emit", () => {
+    const w = freshWatcher();
+    setBadge(w, makeBadge({
+      subagents: [
+        { sessionID: "ses_fresh1", agent: "planner", model: "m1", lastActivityAt: Date.now() - 5000 },
+        { sessionID: "ses_fresh2", agent: "actor", model: "m2", lastActivityAt: Date.now() - 5000 },
+      ],
+    }));
+    attachCounter(w);
+    w.sweepStaleSubagents(120_000);
+    const b = getBadge(w)!;
+    // Both rows remain
+    expect(b.subagents).toHaveLength(2);
+    expect(b.subagents[0].sessionID).toBe("ses_fresh1");
+    expect(b.subagents[1].sessionID).toBe("ses_fresh2");
+    // Changed listener NOT called
+    expect(changed).toBe(0);
+  });
+
+  test("both stale → both dropped, subagents empty", () => {
+    const w = freshWatcher();
+    setBadge(w, makeBadge({
+      subagents: [
+        { sessionID: "ses_stale1", agent: "planner", model: "m1", lastActivityAt: Date.now() - 200000 },
+        { sessionID: "ses_stale2", agent: "actor", model: "m2", lastActivityAt: Date.now() - 200000 },
+      ],
+    }));
+    attachCounter(w);
+    w.sweepStaleSubagents(120_000);
+    const b = getBadge(w)!;
+    // Both rows dropped
+    expect(b.subagents).toEqual([]);
+    expect(changed).toBe(1);
+  });
+});
