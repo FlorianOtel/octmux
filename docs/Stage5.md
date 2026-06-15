@@ -425,7 +425,7 @@ in the planner output.
 ### 2026-06-15--22-09 — Stage 5.9 — -w/--worktree: startup git worktree creation + chdir
 
 **Implemented by:** Actor (Haiku 4.5) — 2026-06-15--22-09
-**Commit(s):** `PENDING`
+**Commit(s):** `2c37ac8`
 
 **Motivation:** When developing within a git worktree (isolated branch without affecting the main working tree), all SDK operations, session creation, and orchestra integration benefit from `process.cwd()` being the worktree rather than the original repo. Creating the worktree and calling `process.chdir()` BEFORE the `const cwd = process.cwd()` capture at line ~199 makes every cwd-derived value (SDK client directory, `session.create` directory, `fetchGitBranch`, projectName, orchestra-watch) target the worktree automatically, without requiring any changes to downstream code.
 
