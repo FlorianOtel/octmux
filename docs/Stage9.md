@@ -11,7 +11,7 @@ context: >
 #### 2026-06-15--11-58 — Stage 9.2.1 — A5: Correct per-line invert for multi-line prose
 
 **Implemented by:** local/qwen3-4b-q6 — 2026-06-15--11-58
-**Commit(s):** `pending — operator commit`
+**Commit(s):** `f5103b0`
 
 **What shipped:**
 - Corrected the false claim in §9.2.1: Ink's `<Text>` component collapses embedded newlines to a single row, so the invert state does NOT persist across `\n`. The fix in `formatAnswerSummary` splits multi-line prose on `\n`, applies `\x1b[7m`/`\x1b[0m` to each segment independently, then re-joins with `\n`. This ensures each line of the operator's answer is rendered with correct inverse-video styling, respecting the Ink row-collapse behavior.

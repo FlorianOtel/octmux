@@ -369,7 +369,7 @@ via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Stage 4
 #### 2026-06-15--11-58 — Stage 3 UX — multi-line operator-turn / error inverse-render fix (A1–A4)
 
 **Implemented by:** local/qwen3-4b-q6 — 2026-06-15--11-58
-**Commit(s):** `pending — operator commit`
+**Commit(s):** `f5103b0`
 
 **What shipped:**
 - **A1–A2 (formatLine user/error honor isFirstLine):** Updated `formatLine` in `src/blocks.ts` so user and error roles use `isFirstLine` to determine prefix (`"> "` for user, `"[error] "` for error on first line; `"  "` for continuations). This ensures multi-line operator turns render with consistent visual alignment.
