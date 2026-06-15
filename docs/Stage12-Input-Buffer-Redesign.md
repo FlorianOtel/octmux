@@ -2,8 +2,8 @@
 title: "Stage 12 — Block-aware input buffer with collapsed-paste handling"
 created_at: 2026-06-12--15-59
 created_by: Actor (sohoai/qwen3-4b-q6)
-updated_by: Brain (anthropic/claude-opus-4-8) via direct fix — 2026-06-12--20-29
-updated_at: 2026-06-12--20-29
+updated_by: Claude Code (claude-sonnet-4-6) — 2026-06-15--12-49
+updated_at: 2026-06-15--12-49
 context: >
   Stage 12 — block-aware input buffer with Claude-Code-style collapsed-paste handling (paste >=5 lines renders as a one-line placeholder, atomic for cursor/delete, expands inline on byte-identical re-paste, expands fully on submit).
 ---
@@ -13,6 +13,22 @@ context: >
 This feature implements Claude-Code-style collapsed-paste handling. When the user pastes 5 or more lines, the editor renders a single collapsed placeholder row instead of expanding inline. The internal buffer uses a discriminated-union type `Line = string | PastedBlock` where one `PastedBlock` occupies exactly one row. The canonical entry points are `src/editor.ts` (model + `insertText` threshold/expand logic) and `src/components/PromptInput.tsx` (placeholder render). Note that history/draft/SDK-send all see fully-expanded plain text (no block state persisted).
 
 ## Implementation log
+
+### 2026-06-15--12-49 — Stage 12.4 — `--version` shows branch, commit, and build date
+**Implemented by:** Claude Code (claude-sonnet-4-6) — 2026-06-15--12-49
+**Commit(s):** `619bfc5`
+
+`octmux --version` previously printed the hardcoded string `0.0.0`. It now shows real
+build provenance, e.g. `octmux main branch, 619bfc5 commit, 2026-06-15 12:49 build`.
+
+Implementation: a new `scripts/build.sh` wrapper extracts `git branch --show-current`
+(with detached-HEAD fallback to `--abbrev-ref`), `git rev-parse --short HEAD`, and
+`date '+%Y-%m-%d %H:%M'`, then calls `bun build` with `--define BUILD_BRANCH="…"`
+`--define BUILD_COMMIT="…"` `--define BUILD_DATE="…"`. Three `declare const … : string | undefined`
+globals at the top of `src/index.tsx` receive the injected literals; the `--version` block
+uses `typeof` guards so dev-mode runs (`bun run src/index.tsx`) fall back to `'dev'` without
+throwing. `package.json`'s `compile` script and `CLAUDE.md`'s rebuild instruction both
+updated to use `bash scripts/build.sh`.
 
 ### 2026-06-12--20-29 — Stage 12.3 — Draft recall preserves the collapsed block
 **Implemented by:** Brain (anthropic/claude-opus-4-8) — direct fix — 2026-06-12--20-29
