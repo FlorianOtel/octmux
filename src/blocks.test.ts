@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { renderInlineMarkdown } from "./blocks";
+import { renderInlineMarkdown, formatBlock } from "./blocks";
 
 describe("renderInlineMarkdown", () => {
   // Simple constructs
@@ -126,5 +126,62 @@ describe("renderInlineMarkdown", () => {
     expect(result).toContain("\x1b[2;36m");
     // Interior ** is inside code span (not transformed)
     expect(result.includes("\x1b[2;36m**not bold**")).toBe(true);
+  });
+});
+
+describe("formatBlock", () => {
+  // ANSI codes from blocks.ts
+  const ANSI = {
+    reset: "\x1b[0m",
+    dim: "\x1b[2m",
+    bold: "\x1b[1m",
+    cyan: "\x1b[36m",
+    yellow: "\x1b[33m",
+    magenta: "\x1b[35m",
+    red: "\x1b[31m",
+    gray: "\x1b[90m",
+    invert: "\x1b[7m",
+    dimCyan: "\x1b[2;36m",
+    boldOff: "\x1b[22m",
+    italic: "\x1b[3m",
+    italicOff: "\x1b[23m",
+  };
+
+  test("user multi-line alpha\\nbeta\\ngamma → 3 \\n-joined segments", () => {
+    const block = { id: "1", role: "user", text: "alpha\nbeta\ngamma" };
+    const result = formatBlock(block);
+    expect(result.split("\n")).toHaveLength(3);
+    expect(result.split("\n")[0]).toBe(ANSI.invert + "> alpha" + ANSI.reset);
+    expect(result.split("\n")[1]).toBe(ANSI.invert + "  beta" + ANSI.reset);
+    expect(result.split("\n")[2]).toBe(ANSI.invert + "  gamma" + ANSI.reset);
+  });
+
+  test("user single-line hello → exactly \\x1b[7m> hello\\x1b[0m", () => {
+    const block = { id: "1", role: "user", text: "hello" };
+    const result = formatBlock(block);
+    expect(result).toBe(ANSI.invert + "> hello" + ANSI.reset);
+  });
+
+  test("user empty-continuation a\\n\\nb → middle seg \\x1b[7m  \\x1b[0m", () => {
+    const block = { id: "1", role: "user", text: "a\n\nb" };
+    const result = formatBlock(block);
+    expect(result.split("\n")).toHaveLength(3);
+    expect(result.split("\n")[0]).toBe(ANSI.invert + "> a" + ANSI.reset);
+    expect(result.split("\n")[1]).toBe(ANSI.invert + "  " + ANSI.reset);
+    expect(result.split("\n")[2]).toBe(ANSI.invert + "  b" + ANSI.reset);
+  });
+
+  test("error multi-line line one\\nline two → seg0 [error] line one, seg1 8 spaces + line two", () => {
+    const block = { id: "1", role: "error", text: "line one\nline two" };
+    const result = formatBlock(block);
+    expect(result.split("\n")).toHaveLength(2);
+    expect(result.split("\n")[0]).toBe(ANSI.red + "[error] line one" + ANSI.reset);
+    expect(result.split("\n")[1]).toBe(ANSI.red + "        line two" + ANSI.reset);
+  });
+
+  test("error single-line boom → \\x1b[31m[error] boom\\x1b[0m", () => {
+    const block = { id: "1", role: "error", text: "boom" };
+    const result = formatBlock(block);
+    expect(result).toBe(ANSI.red + "[error] boom" + ANSI.reset);
   });
 });

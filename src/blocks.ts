@@ -81,13 +81,13 @@ export function renderInlineMarkdown(content: string): string {
 // Caller is responsible for line-splitting; this function never receives \n.
 export function formatLine(role: Role, line: string, isFirstLine: boolean): string {
   switch (role) {
-    case "user":        return ANSI.invert + "> " + line + ANSI.reset;
+    case "user":        return ANSI.invert + (isFirstLine ? "> " : "  ") + line + ANSI.reset;
     case "text":        return renderInlineMarkdown(line);
     case "thinking":    return ANSI.gray + "│ " + renderInlineMarkdown(line) + ANSI.reset;
     case "tool-call":   return ANSI.cyan + (isFirstLine ? "⚙ " : "  ") + line + ANSI.reset;
     case "tool-result": return ANSI.dim  + (isFirstLine ? "  ↳ " : "    ") + renderInlineMarkdown(line) + ANSI.reset;
     case "summary":     return ANSI.dim + "[compacted summary] " + renderInlineMarkdown(line) + ANSI.reset;
-    case "error":       return ANSI.red  + "[error] " + line + ANSI.reset;
+    case "error":       return ANSI.red  + (isFirstLine ? "[error] " : "        ") + line + ANSI.reset;
   }
 }
 

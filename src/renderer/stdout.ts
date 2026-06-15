@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { Block, Role } from "../blocks.ts";
-import { formatLine } from "../blocks.ts";
+import { formatBlock, formatLine } from "../blocks.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer, CommittedLine } from "./types.ts";
 import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
@@ -126,8 +126,13 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
   }
 
   commitUserInput(text: string): void {
-    this._committed = [...this._committed,
-      { id: this._nextId++, role: "user", ansi: formatLine("user", text, true) },
+    const userLines = formatBlock({ id: "user", role: "user", text }).split("\n");
+    const userCommitted: CommittedLine[] = userLines.map((ansi) => ({
+      id: this._nextId++,
+      role: "user",
+      ansi,
+    }));
+    this._committed = [...this._committed, ...userCommitted,
       { id: this._nextId++, role: "text", ansi: " " },
       { id: this._nextId++, role: "text", ansi: " " },
     ];
@@ -146,10 +151,13 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
   commitError(message: string): void {
     this._flushTail();
     this._activePart = null;
-    this._committed = [...this._committed, {
-      id: this._nextId++, role: "error",
-      ansi: formatLine("error", message, true),
-    }];
+    const errorLines = formatBlock({ id: "error", role: "error", text: message }).split("\n");
+    const errorCommitted: CommittedLine[] = errorLines.map((ansi) => ({
+      id: this._nextId++,
+      role: "error",
+      ansi,
+    }));
+    this._committed = [...this._committed, ...errorCommitted];
     this.emit("changed");
   }
 

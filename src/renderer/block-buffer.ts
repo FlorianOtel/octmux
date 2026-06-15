@@ -6,7 +6,7 @@ import Table from "cli-table3";
 import stringWidth from "string-width";
 import { computeColWidths, wrapCell, naturalWidths } from "./table-layout.ts";
 import type { Block, Role } from "../blocks.ts";
-import { formatLine } from "../blocks.ts";
+import { formatBlock, formatLine } from "../blocks.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer, CommittedLine } from "./types.ts";
 import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
@@ -458,8 +458,13 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     if (this._activeTextPartID !== null) {
       this._commitActiveText();
     }
-    this._committed = [...this._committed,
-      { id: this._nextId++, role: "user", ansi: formatLine("user", text, true) },
+    const userLines = formatBlock({ id: "user", role: "user", text }).split("\n");
+    const userCommitted: CommittedLine[] = userLines.map((ansi) => ({
+      id: this._nextId++,
+      role: "user",
+      ansi,
+    }));
+    this._committed = [...this._committed, ...userCommitted,
       { id: this._nextId++, role: "text", ansi: " " },
       { id: this._nextId++, role: "text", ansi: " " },
     ];
@@ -490,10 +495,13 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     this._activeBlockRole = null;
     this._activeTextBuf = "";
     this._activeBlockAnsi = "";
-    this._committed = [...this._committed, {
-      id: this._nextId++, role: "error",
-      ansi: formatLine("error", message, true),
-    }];
+    const errorLines = formatBlock({ id: "error", role: "error", text: message }).split("\n");
+    const errorCommitted: CommittedLine[] = errorLines.map((ansi) => ({
+      id: this._nextId++,
+      role: "error",
+      ansi,
+    }));
+    this._committed = [...this._committed, ...errorCommitted];
     this.emit("changed");
   }
 

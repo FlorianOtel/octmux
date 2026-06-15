@@ -2,8 +2,8 @@
 title: "octmux — Stage 3: Custom raw-mode input + Ink rendering + typed block renderer + tmux multiplex"
 created_at: 2026-05-20--00-34
 created_by: Claude Code (Actor, Claude Haiku 4.5)
-updated_by: Claude Code (Brain: Opus 4.7; Actor: Haiku 4.5; Reviewer: Sonnet 4.6)
-updated_at: 2026-06-07--20-07
+updated_by: local/qwen3-4b-q6 — 2026-06-15--11-58
+updated_at: 2026-06-15--11-58
 context: >
   Stage 3 is the foundational UX phase split across three major sub-initiatives:
   Stage 3 (original raw-mode input), Stage 3 Extended (Ink-based rendering layer),
@@ -365,6 +365,19 @@ via `TmuxWindowRenderer`). `--multi-pane` was subsequently deprecated in Stage 4
 (see deprecation notice above)._
 
 ### Implementation log (reverse chronological — newest at top)
+
+#### 2026-06-15--11-58 — Stage 3 UX — multi-line operator-turn / error inverse-render fix (A1–A4)
+
+**Implemented by:** local/qwen3-4b-q6 — 2026-06-15--11-58
+**Commit(s):** `pending — operator commit`
+
+**What shipped:**
+- **A1–A2 (formatLine user/error honor isFirstLine):** Updated `formatLine` in `src/blocks.ts` so user and error roles use `isFirstLine` to determine prefix (`"> "` for user, `"[error] "` for error on first line; `"  "` for continuations). This ensures multi-line operator turns render with consistent visual alignment.
+- **A3 (fan-out in renderers):** Both `StdoutRenderer` and `TmuxWindowRenderer` now import and use `formatBlock` to fan-out a committed block into one `CommittedLine` per line. The `commitUserInput` and `commitError` methods in both renderers split on `\n` and emit one renderer call per line, matching the `CommittedLine` structure.
+- **A4 (Ink row-collapse rationale):** Splitting per-line is necessary because Ink's `<Text>` component collapses embedded newlines into a single row. A single `formatBlock` call would produce one styled line regardless of internal `\n` count, losing the visual distinction between operator turn prefixes. Fan-out ensures each line retains its correct prefix (`"> "` vs `"  "` for user; `"[error] "` vs `"        "` for error) in the final rendered output.
+- **A5 (prose-answer):** Logged separately in `docs/Stage9.md` — `formatAnswerSummary` inverts each line independently.
+
+---
 
 #### 2026-05-21 — Stage 3U.7 (cleanup)
 
