@@ -160,7 +160,12 @@ let worktreeBranch = "";
 if (worktreeFlag) {
   let repoRoot = "";
   try {
-    repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+    // stdio: capture stdout (pipe), but silence git's own stderr ("fatal: not a
+    // git repository …") — we print our own clean message in the catch below.
+    repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
   } catch {
     console.error("octmux: --worktree requires a git repository (git rev-parse --show-toplevel failed)");
     process.exit(1);

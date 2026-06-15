@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Actor (Claude Haiku 4.5)
-updated_at: 2026-06-15--22-09
+updated_by: Claude Code (Claude Opus 4.8)
+updated_at: 2026-06-15--22-40
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -421,6 +421,20 @@ in the planner output.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-06-15--22-40 — Stage 5.9.1 — silence git stderr leak on the non-repo `-w` path
+
+**Implemented by:** Claude Code (Claude Opus 4.8) — 2026-06-15--22-40
+**Commit(s):** `PENDING`
+
+When `-w`/`--worktree` is used outside a git repository, the `git rev-parse
+--show-toplevel` probe in the worktree-setup block printed git's own
+`fatal: not a git repository …` to stderr before octmux's clean error message —
+a confusing double-message. Fixed by passing `stdio: ["ignore", "pipe", "ignore"]`
+to that `execFileSync` call (`src/index.tsx`), capturing stdout while discarding
+git's stderr. The catch branch still prints the single clean line
+`octmux: --worktree requires a git repository (...)` and exits 1. Rebuilt and
+verified: the non-repo path now emits only octmux's message.
 
 ### 2026-06-15--22-09 — Stage 5.9 — -w/--worktree: startup git worktree creation + chdir
 
