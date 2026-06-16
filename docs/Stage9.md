@@ -10,7 +10,7 @@ context: >
 
 ### 2026-06-16--18-54 — Stage 9.3 — Orchestra badge re-emit storm (5s flicker fix)
 **Implemented by:** Actor (sohoai/qwen3-4b-q6) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16--18-54
-**Commit(s):** `TBD`
+**Commit(s):** `36d0b7e`
 
 **Root cause:** During /brain or /duo sessions, the `OrchestraWatcher.scan()` method polls every 5 seconds and updates the badge. At lines 284 (duo branch) and 321 (brain branch) in `src/orchestra-watch.ts`, `lastActivityAt: Date.now()` is set fresh on every 5s scan. The `_updateBadge` method at line 435 compared badges using `JSON.stringify(this.badge) !== JSON.stringify(newBadge)`, which ALWAYS differed because the timestamp changed → emitted "changed" → triggered `setOrchestraBadge` in `app.tsx` → full TUI re-render every 5s → visible flicker. This only occurred during /brain or /duo when the polling was active.
 
