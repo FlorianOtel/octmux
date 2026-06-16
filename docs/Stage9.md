@@ -12,7 +12,7 @@ context: >
 
 ### 2026-06-16--18-54 — Stage 9.4 — Per-question collection (regression fix for 9.1 D4-α)
 **Implemented by:** Actor (sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16--18-54
-**Commit(s):** <fill after commit>
+**Commit(s):** `f0285e2`
 
 **Root cause:** Stage 9.1's `handleSubmit` built a `padded: string[][]` array on every answer, filling only the `currentSubIdx` slot with the chosen answer and setting all other slots to `[]` (empty — "Unanswered"). It then immediately called `handleQuestion(padded)`, which POSTs to `/question/{reqID}/reply` and clears the modal (`setQuestion(null)`). For multi-question batches, this means the FIRST sub-question's answer submitted the ENTIRE batch, leaving remaining sub-questions as "Unanswered" on the server.
 
