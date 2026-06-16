@@ -434,19 +434,27 @@ export class OrchestraWatcher extends EventEmitter {
   private _badgeContentEquals(a: OrchestraBadge, b: OrchestraBadge): boolean {
     if (a === null || b === null) return a === b;
     
-    // Deep clone, strip timestamps, then compare
-    const aCloned = structuredClone(a);
-    const bCloned = structuredClone(b);
-    
-    // Delete lastActivityAt from top level
-    delete aCloned.lastActivityAt;
-    delete bCloned.lastActivityAt;
-    
-    // Delete lastActivityAt from each subagent row
-    aCloned.subagents.forEach(sa => delete sa.lastActivityAt);
-    bCloned.subagents.forEach(sa => delete sa.lastActivityAt);
-    
-    return JSON.stringify(aCloned) === JSON.stringify(bCloned);
+    // Deep clone, strip timestamps via destructuring, then compare
+    const strip = (badge: NonNullable<OrchestraBadge>): {
+      mode: "brain" | "duo";
+      title: string;
+      parentModelRaw?: string;
+      parentModelLabel?: string;
+      subagents: Array<{
+        sessionID: string;
+        agent: string;
+        model: string;
+        description?: string;
+      }>;
+      parserWarnings?: Array<{ code: string; message: string }>;
+    } | undefined => {
+      const { lastActivityAt: _ts, subagents, ...rest } = badge;
+      return {
+        ...rest,
+        subagents: subagents.map(({ lastActivityAt: _saTs, ...saRest }) => saRest),
+      };
+    };
+    return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
   }
 
   /**

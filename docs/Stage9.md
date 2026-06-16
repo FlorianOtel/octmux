@@ -10,7 +10,7 @@ context: >
 
 ---
 
-### 2026-06-16 — Stage 9.5 — External question resolution (mobile / Pocket)
+### 2026-06-16--18-54 — Stage 9.5 — External question resolution (mobile / Pocket)
 **Implemented by:** Actor (sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16
 **Commit(s):** `b8d4bc2`
 

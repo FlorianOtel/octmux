@@ -269,7 +269,7 @@ export function App(props: AppProps) {
   const [isCompacting, setIsCompacting] = useState(false);
   const [sessionPicker, setSessionPicker] = useState<{ items: SessionPickerItem[]; idx: number } | null>(null);
   // Stage 9.1 (Piece 2B, revised): current sub-question index, owned by app.tsx
-  // so handleSubmit can build the D4-α padded array. Modal is display-only.
+  // so handleSubmit can track the current sub-question index during multi-Q collection.
   const [currentSubIdx, setCurrentSubIdx] = useState<number>(0);
   // Stage 9.4: accumulator for per-sub-Q answers; only POSTed after the last sub-Q.
   const questionAnswersRef = useRef<string[][]>([]);
