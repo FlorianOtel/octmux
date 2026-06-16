@@ -2,8 +2,8 @@
 title: "Stage 13 — Mobile Companion Part B (foreign-user-turn rendering)"
 created_at: 2026-06-15--18-51
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/minimax-m3 Planner + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: Actor (sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-15--18-51
-updated_at: 2026-06-15--18-51
+updated_by: Actor (local/qwen3-4b-q6) via /duo pipeline (Brain: local/claude-opus-4-8) — 2026-06-16--11-29
+updated_at: 2026-06-16--11-29
 context: >
   Stage 13 implements Mobile Companion Part B: render foreign (mobile-originated) operator turns in the octmux transcript while suppressing locally-submitted turns. Builds on Part A's whole-turn commitUserInput primitive (commit f5103b0). Unconditional (no flag/env); inert without a mobile peer. Implemented on the feat/mobile-app worktree, not main.
 ---
@@ -25,3 +25,28 @@ context: >
 **Decisions:** no flag/env (unconditional; inert without a peer); exclude synthetic/ignored parts; Design 2 (not Design 1). Verified facts: promptAsync returns 204 void (no id) so FIFO-of-texts is mandatory; user message has no time.completed; the only turn-complete signal is the next different messageID / session.idle.
 
 **Reversibility:** Part B is confined to events.ts + a few app.tsx lines; with no mobile peer it is inert.
+
+### 2026-06-16--11-29 — Model Adoption Fix (shared-session hijack prevention)
+**Implemented by:** Actor (local/qwen3-4b-q6) — 2026-06-16--11-29
+**Commit(s):** `pending`
+
+**Problem:** octmux's `activeModel` was being silently overwritten by foreign (mobile-app) turns in a shared OpenCode session. When the mobile app submitted a prompt with model `requesty/google/gemini-3-pro-preview`, that assistant message became the latest in the shared session. The next `message-completed`/`session-idle` SSE event triggered `refreshTokenUsage`, which read the latest assistant message's model via `pickPostSummaryAssistantTokenUsage` and called `setActiveModel(...)`, overwriting octmux's own model. The server then rejected the next prompt with `ProviderModelNotFoundError`.
+
+**Root cause (confirmed):** `refreshTokenUsage` (src/app.tsx:665) computed token usage from the latest post-summary assistant but also mutated `activeModel` state. In a shared session, foreign turns hijack this state. The mount effect (lines 902-925) and session-switch effect (lines 1078-1090) already seed `activeModel` from `session.get().data.model` with `getDefaultModel` fallback, making `refreshTokenUsage`'s model-adoption redundant for the legitimate resume/fork case.
+
+**Solution:**
+1. **Stop refreshTokenUsage from overwriting activeModel** (src/app.tsx:686): Removed the `setActiveModel(...)` call inside `refreshTokenUsage`. The function now only updates display-only values (token bar and running cost). Added a comment explaining the shared-session rationale: "foreign turns must not hijack octmux's model."
+
+2. **Verified seeding paths**: Confirmed that the mount effect (line 913) and session-switch effect (line 1087) both seed `activeModel` from `session.get().data.model` with `getDefaultModel` fallback. No gaps found.
+
+3. **Defense-in-depth validation** (src/utils/formatters.ts + src/app.tsx:1379,1413): Added `validateModel(client, providerID, modelID)` helper that checks if the provider+model exist in `client.config.providers()` (the same source the `/model` picker uses). Before sending (both `session.command` and `promptAsync` paths), if `activeModel` is not found among connected providers, emit a one-line system message (`"active model X not available — falling back to Y"`) and fall back to `getDefaultModel(props.client)`. This prevents ANY stale/foreign model from reaching the server.
+
+4. **Unit test**: Added a regression test in `src/refresh-token-usage.test.ts` asserting that a message list whose latest assistant turn uses a foreign model still yields correct token usage, and documenting that `activeModel` is no longer derived from it. Full suite: 231 pass, 0 fail.
+
+5. **Binary rebuild**: `bash scripts/build.sh` → `dist/octmux` builds clean.
+
+**Risks mitigated:**
+- Context-window display: `getContextWindow` still uses the latest turn's model for the token bar denominator (display-only, cosmetic, acceptable).
+- Validation cost: submit-time only (not per-keystroke).
+
+**Out of scope:** No change to the mobile app; no redesign of session sharing; no SSE event model changes; no persistence of `activeModel` to disk.

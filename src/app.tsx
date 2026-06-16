@@ -26,7 +26,7 @@ import { SessionPickerModal, type SessionPickerItem } from "./components/Session
 import { SlashCompletionOverlay } from "./components/SlashCompletionOverlay.tsx";
 import { ToggleStatusLine } from "./components/ToggleStatusLine.tsx";
 import { expandCommands } from "./command-registry.ts";
-import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, prettyModelName, contextLabel } from "./utils/formatters.ts";
+import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, prettyModelName, contextLabel, validateModel } from "./utils/formatters.ts";
 
 const TOGGLES_CONFIG = loadTogglesConfig();
 
@@ -677,13 +677,18 @@ export function App(props: AppProps) {
         return;
       }
 
-      // Get context window and set active model
+      // Get context window and set token usage.
+      // Note: We do NOT call setActiveModel here. In a shared OpenCode session,
+      // foreign (mobile-app) turns may become the latest assistant message,
+      // which would hijack activeModel via this code path. The mount effect
+      // (lines 902-925) and session-switch effect (lines 1078-1090) already
+      // seed activeModel from session.get().data.model, so refreshTokenUsage
+      // only needs to update display-only values (token bar and running cost).
       const ctxWindow = await getContextWindow(
         props.client,
         result.providerID ?? "",
         result.modelID ?? "",
       );
-      setActiveModel({ providerID: result.providerID ?? "", modelID: result.modelID ?? "" });
       setTokenUsage({ used: result.used, contextWindow: ctxWindow });
 
       // Compute running cost: sum all assistant messages in parent + children
@@ -1374,6 +1379,23 @@ export function App(props: AppProps) {
             );
           }
         }
+
+        // Defense-in-depth: validate activeModel against connected providers.
+        // In a shared session, foreign turns may have set activeModel to an
+        // unsupported model (e.g. from mobile app). This check prevents the
+        // server from rejecting the request.
+        if (activeModel) {
+          const validModel = await validateModel(props.client, activeModel.providerID, activeModel.modelID);
+          if (!validModel) {
+            renderer.commitSystemMessage(
+              `active model ${activeModel.providerID}/${activeModel.modelID} not available — falling back to default`,
+            );
+            const fallback = await getDefaultModel(props.client);
+            if (fallback) {
+              setActiveModel(fallback);
+            }
+          }
+        }
         setIsGenerating(true);
         try {
           await props.client.session.command({
@@ -1409,6 +1431,24 @@ export function App(props: AppProps) {
     recordSubmittedUserText(text);
     renderer.commitUserInput(text);
     setIsGenerating(true);
+
+    // Defense-in-depth: validate activeModel against connected providers before send.
+    // In a shared session, foreign turns may have set activeModel to an unsupported
+    // model (e.g. from mobile app). This check prevents the server from rejecting
+    // the prompt request.
+    if (activeModel) {
+      const validModel = await validateModel(props.client, activeModel.providerID, activeModel.modelID);
+      if (!validModel) {
+        renderer.commitSystemMessage(
+          `active model ${activeModel.providerID}/${activeModel.modelID} not available — falling back to default`,
+        );
+        const fallback = await getDefaultModel(props.client);
+        if (fallback) {
+          setActiveModel(fallback);
+        }
+      }
+    }
+
     try {
       await props.client.session.promptAsync({
         path: { id: sessionID },

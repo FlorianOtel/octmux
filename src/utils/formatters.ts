@@ -234,3 +234,38 @@ export function prettyModelName(modelID: string): string {
 export function contextLabel(contextWindow: number): string {
   return `${formatTokens(contextWindow)} context`;
 }
+
+/**
+ * Validate that a model exists in connected providers.
+ * Calls client.provider.list() and checks if the provider+model is present
+ * in the connected providers list.
+ * Returns the model info if found, or null if not connected.
+ *
+ * This is used as defense-in-depth to prevent stale/foreign models (e.g. from a
+ * mobile app in a shared session) from being sent to the server.
+ */
+export async function validateModel(
+  client: Client,
+  providerID: string,
+  modelID: string,
+): Promise<{ providerID: string; modelID: string } | null> {
+  try {
+    const resp = await client.provider.list();
+    const provData = resp.data;
+    if (!provData) return null;
+
+    // Check connected providers — iterate all providers and filter by connected IDs
+    for (const p of provData.all) {
+      if (!provData.connected.includes(p.id)) continue;
+      // Find the model in this provider
+      for (const [mId, mInfo] of Object.entries(p.models)) {
+        if (mId === modelID || mInfo.id === modelID) {
+          return { providerID: p.id, modelID: mId };
+        }
+      }
+    }
+  } catch {
+    // Silently swallow errors
+  }
+  return null;
+}
