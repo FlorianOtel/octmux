@@ -12,7 +12,7 @@ context: >
 
 ### 2026-06-16 — Stage 9.5 — External question resolution (mobile / Pocket)
 **Implemented by:** Actor (sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16
-**Commit(s):** _(pending backfill)_
+**Commit(s):** `b8d4bc2`
 
 **Bug:** When a question is answered or rejected externally (e.g. via the Pocket mobile app POSTing `/question/{id}/reply` or `/question/{id}/reject`), octmux's question modal never clears and the answer isn't shown locally. octmux only handled the `question.asked` SSE event; OC's server also emits `question.replied` and `question.rejected` events, which were silently dropped.
 
