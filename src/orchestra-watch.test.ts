@@ -251,6 +251,85 @@ describe("OrchestraWatcher emit identity (React same-reference bailout defeat)",
   });
 });
 
+describe("OrchestraWatcher._badgeContentEquals timestamp exclusion", () => {
+  let changed = 0;
+
+  function attachCounter(w: OrchestraWatcher): void {
+    changed = 0;
+    w.on("changed", () => { changed += 1; });
+  }
+
+  test("same content with different lastActivityAt does not emit (seeded badge timestamp preserved)", () => {
+    const w = freshWatcher();
+    
+    // Seed badge with lastActivityAt=1000
+    const seedBadge = makeBadge({ lastActivityAt: 1000 });
+    setBadge(w, seedBadge);
+    attachCounter(w);
+    
+    // Call _updateBadge with same content but lastActivityAt=9999
+    const newBadge = makeBadge({ lastActivityAt: 9999 });
+    (w as any)._updateBadge(newBadge);
+    
+    // Assert NO emit (timestamp exclusion)
+    expect(changed).toBe(0);
+    // Assert badge.lastActivityAt still 1000 (untouched)
+    expect(getBadge(w)!.lastActivityAt).toBe(1000);
+  });
+
+  test("real content change (different title) does emit", () => {
+    const w = freshWatcher();
+    
+    const seedBadge = makeBadge({ lastActivityAt: 1000, title: "old title" });
+    setBadge(w, seedBadge);
+    attachCounter(w);
+    
+    const newBadge = makeBadge({ lastActivityAt: 1000, title: "new title" });
+    (w as any)._updateBadge(newBadge);
+    
+    // Assert emit (content changed)
+    expect(changed).toBe(1);
+    // Assert new content is applied
+    expect(getBadge(w)!.title).toBe("new title");
+  });
+
+  test("subagent row timestamp difference does not emit", () => {
+    const w = freshWatcher();
+    
+    // Seed badge with subagent at lastActivityAt=100
+    const seedBadge = makeBadge({
+      subagents: [
+        { sessionID: "ses_a", agent: "planner", model: "m1", lastActivityAt: 100 },
+      ],
+    });
+    setBadge(w, seedBadge);
+    attachCounter(w);
+    
+    // Call _updateBadge with same subagent content but lastActivityAt=9999
+    const newBadge = makeBadge({
+      subagents: [
+        { sessionID: "ses_a", agent: "planner", model: "m1", lastActivityAt: 9999 },
+      ],
+    });
+    (w as any)._updateBadge(newBadge);
+    
+    // Assert NO emit (timestamp exclusion)
+    expect(changed).toBe(0);
+    // Assert subagent lastActivityAt still 100 (untouched)
+    expect(getBadge(w)!.subagents[0].lastActivityAt).toBe(100);
+  });
+
+  test("null badge comparison returns equality", () => {
+    const w = freshWatcher();
+    
+    // Both null - no change
+    const newBadge = null;
+    (w as any)._updateBadge(newBadge);
+    expect(getBadge(w)).toBeNull();
+    expect(changed).toBe(0);
+  });
+});
+
 describe("OrchestraWatcher.sweepStaleSubagents (Stage 8.1.6)", () => {
   let changed = 0;
 

@@ -428,11 +428,33 @@ export class OrchestraWatcher extends EventEmitter {
   }
 
   /**
+   * Internal: compare two badges ignoring lastActivityAt timestamps.
+   * Returns true if the content (excluding timestamps) is equal.
+   */
+  private _badgeContentEquals(a: OrchestraBadge, b: OrchestraBadge): boolean {
+    if (a === null || b === null) return a === b;
+    
+    // Deep clone, strip timestamps, then compare
+    const aCloned = structuredClone(a);
+    const bCloned = structuredClone(b);
+    
+    // Delete lastActivityAt from top level
+    delete aCloned.lastActivityAt;
+    delete bCloned.lastActivityAt;
+    
+    // Delete lastActivityAt from each subagent row
+    aCloned.subagents.forEach(sa => delete sa.lastActivityAt);
+    bCloned.subagents.forEach(sa => delete sa.lastActivityAt);
+    
+    return JSON.stringify(aCloned) === JSON.stringify(bCloned);
+  }
+
+  /**
    * Internal: update badge and emit if changed.
    * After setting badge, drain any pending subagent notifications from the queue.
    */
   private _updateBadge(newBadge: OrchestraBadge): void {
-    const changed = JSON.stringify(this.badge) !== JSON.stringify(newBadge);
+    const changed = !this._badgeContentEquals(this.badge, newBadge);
     if (changed) {
       this.badge = newBadge;
       this.emit("changed", newBadge);

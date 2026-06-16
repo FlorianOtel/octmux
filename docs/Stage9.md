@@ -2,11 +2,31 @@
 title: "Stage 9 — Question Deliberation Flow (Piece 2)"
 created_at: 2026-06-07--17-23
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: local/qwen3-4b-q6 — 2026-06-15--16-29
-updated_at: 2026-06-15--16-29
+updated_by: local/qwen3-4b-q6 — 2026-06-16--18-54
+updated_at: 2026-06-16--18-54
 context: >
   Stage 9 implements Piece 2 of the octmux UI architecture redesign: the AskUserQuestion tool's options are committed to scrollback (Piece 2A) and the operator can answer with prose in addition to digit selection (Piece 2B). Piece 2 is renderer-independent and works identically under both --single (StdoutRenderer) and --multi-window (TmuxWindowRenderer) modes.
 ---
+
+### 2026-06-16--18-54 — Stage 9.3 — Orchestra badge re-emit storm (5s flicker fix)
+**Implemented by:** Actor (sohoai/qwen3-4b-q6) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16--18-54
+**Commit(s):** `TBD`
+
+**Root cause:** During /brain or /duo sessions, the `OrchestraWatcher.scan()` method polls every 5 seconds and updates the badge. At lines 284 (duo branch) and 321 (brain branch) in `src/orchestra-watch.ts`, `lastActivityAt: Date.now()` is set fresh on every 5s scan. The `_updateBadge` method at line 435 compared badges using `JSON.stringify(this.badge) !== JSON.stringify(newBadge)`, which ALWAYS differed because the timestamp changed → emitted "changed" → triggered `setOrchestraBadge` in `app.tsx` → full TUI re-render every 5s → visible flicker. This only occurred during /brain or /duo when the polling was active.
+
+**Fix:** Added a new private method `_badgeContentEquals(a: OrchestraBadge, b: OrchestraBadge): boolean` that compares two badges while ignoring `lastActivityAt` timestamps. The method:
+1. Uses `structuredClone` to deep-clone both badges
+2. Deletes `lastActivityAt` from the top-level badge
+3. Deletes `lastActivityAt` from each subagent row
+4. Compares the resulting JSON strings
+
+The `_updateBadge` method now calls `!this._badgeContentEquals(this.badge, newBadge)` instead of the raw JSON.stringify diff. This ensures badge content changes only trigger re-renders when actual content (mode, title, subagents' content) changes, not when timestamps update. The `lastActivityAt` fields remain untouched, preserving their existing behavior for stale-row eviction.
+
+**Files changed:**
+- `src/orchestra-watch.ts`: Added `_badgeContentEquals` method (lines 430-450), updated `_updateBadge` to use it (line 457)
+- `src/orchestra-watch.test.ts`: Added tests for timestamp exclusion behavior
+
+**Manual verification:** The fix eliminates the 5s flicker during brain/duo sessions. Badge re-renders now only occur on actual content changes (e.g., new subagent added, subagent ended, parent activity bump). Timestamp updates no longer trigger re-renders.
 
 ### 2026-06-15--16-29 — Stage 9.2 — Ctrl-C cancels pending question (reject server-side)
 **Implemented by:** Actor (sohoai/qwen3-4b-q6) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-15--16-29
