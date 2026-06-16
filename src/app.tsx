@@ -247,6 +247,12 @@ export function App(props: AppProps) {
   const [ctrlcPending, setCtrlcPending] = useState(false);
   const [permission, setPermission] = useState<{ permID: string; title: string; sessionID: string } | null>(null);
   const [question, setQuestion] = useState<{ reqID: string; questions: QuestionType[] } | null>(null);
+  // Ref mirror of `question` state for use inside applyReplEvents (avoids deps churn).
+  // Always holds the current value; the useEffect below keeps it in sync.
+  const questionRef = useRef<{ reqID: string; questions: QuestionType[] } | null>(null);
+  useEffect(() => {
+    questionRef.current = question;
+  }, [question]);
   const [lastSubmitted, setLastSubmitted] = useState<string>("");
   const [procTimes, setProcTimes] = useState<{ thinking: number | null; tools: number | null; generating: number | null }>({ thinking: null, tools: null, generating: null });
   const [sessionID, setSessionID] = useState(props.sessionID);
@@ -876,6 +882,29 @@ export function App(props: AppProps) {
               // Silent — operator can Ctrl-C (now safe under Bug 1 fix) and retry.
             }
           })();
+        }
+        else if (ev.kind === "question-replied") {
+          const q = questionRef.current;
+          if (q && ev.reqID === q.reqID) {
+            questionAnswersRef.current = [];
+            setCurrentSubIdx(0);
+            setQuestion(null);
+            const summary = ev.answers.map((ansArr, i) => {
+              const qi = (q.questions[i] ?? q.questions[0])!;
+              const labels = ansArr.length > 0 ? ansArr.join(", ") : "(no answer)";
+              return `▶ Externally answered Q${i + 1}/${q.questions.length}${qi.header ? ` — ${qi.header}` : ""}: ${labels}`;
+            }).join("\n");
+            renderer.commitSystemMessage(summary);
+          }
+        }
+        else if (ev.kind === "question-rejected") {
+          const q = questionRef.current;
+          if (q && ev.reqID === q.reqID) {
+            questionAnswersRef.current = [];
+            setCurrentSubIdx(0);
+            setQuestion(null);
+            renderer.commitSystemMessage("▶ Question rejected externally");
+          }
         }
         else if (ev.kind === "subagent-detected") {
           watcherRef.current?.notifySubagentStarted(ev.sessionID, ev.agent, ev.model, ev.description);

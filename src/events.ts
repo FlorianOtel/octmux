@@ -25,10 +25,12 @@ export type ReplEvent =
   | { kind: "session-status"; status: "idle" | "busy" | "retry" }
   | { kind: "part-removed"; partId: string }
   | { kind: "permission-asked"; permID: string; sessionID: string; title: string; permType: string }
- | { kind: "question-asked"; reqID: string; sessionID: string; questions: Array<{
+  | { kind: "question-asked"; reqID: string; sessionID: string; questions: Array<{
       question: string; header: string; options: Array<{ label: string; description: string }>;
       multiple?: boolean; custom?: boolean;
     }> }
+  | { kind: "question-replied"; reqID: string; sessionID: string; answers: string[][] }
+  | { kind: "question-rejected"; reqID: string; sessionID: string }
   | { kind: "question-tool-detected"; sessionID: string; callID: string }
   | { kind: "session-compacted"; sessionID: string }
   | { kind: "block-retag"; partID: string; newRole: "summary" }
@@ -783,6 +785,33 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       reqID: e.properties.id,
       sessionID: e.properties.sessionID,
       questions: e.properties.questions,
+    };
+  }
+
+  // v2 event type (not in v1 union): question.replied
+  // Emitted when a question is answered externally (e.g. via Pocket mobile app
+  // POSTing /question/{id}/reply). Clears the pending modal in octmux.
+  if (event.type === "question.replied") {
+    const e = event as unknown as { properties: { sessionID: string; requestID: string; answers: string[][] } };
+    if (e.properties.sessionID !== sessionID) return null;
+    return {
+      kind: "question-replied",
+      reqID: e.properties.requestID,
+      sessionID: e.properties.sessionID,
+      answers: e.properties.answers,
+    };
+  }
+
+  // v2 event type (not in v1 union): question.rejected
+  // Emitted when a question is rejected externally (e.g. via Pocket mobile app
+  // or Ctrl-C on another client). Clears the pending modal in octmux.
+  if (event.type === "question.rejected") {
+    const e = event as unknown as { properties: { sessionID: string; requestID: string } };
+    if (e.properties.sessionID !== sessionID) return null;
+    return {
+      kind: "question-rejected",
+      reqID: e.properties.requestID,
+      sessionID: e.properties.sessionID,
     };
   }
 

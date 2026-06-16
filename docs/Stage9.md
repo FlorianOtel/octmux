@@ -2,13 +2,29 @@
 title: "Stage 9 — Question Deliberation Flow (Piece 2)"
 created_at: 2026-06-07--17-23
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: Actor (sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16--18-54
-updated_at: 2026-06-16--18-54
+updated_by: Actor (sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16
+updated_at: 2026-06-16
 context: >
   Stage 9 implements Piece 2 of the octmux UI architecture redesign: the AskUserQuestion tool's options are committed to scrollback (Piece 2A) and the operator can answer with prose in addition to digit selection (Piece 2B). Piece 2 is renderer-independent and works identically under both --single (StdoutRenderer) and --multi-window (TmuxWindowRenderer) modes.
 ---
 
 ---
+
+### 2026-06-16 — Stage 9.5 — External question resolution (mobile / Pocket)
+**Implemented by:** Actor (sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16
+**Commit(s):** _(pending backfill)_
+
+**Bug:** When a question is answered or rejected externally (e.g. via the Pocket mobile app POSTing `/question/{id}/reply` or `/question/{id}/reject`), octmux's question modal never clears and the answer isn't shown locally. octmux only handled the `question.asked` SSE event; OC's server also emits `question.replied` and `question.rejected` events, which were silently dropped.
+
+**Fix:**
+1. **src/events.ts** — Added `question-replied` and `question-rejected` variants to the `ReplEvent` union, and two new `filterEvent` branches that mirror the existing `question.asked` pattern: cast via `as unknown`, match on `sessionID`, and extract `requestID` (note: field is `requestID` with capital ID on replied/rejected, vs `id` on asked). `question-replied` also carries `answers: string[][]`.
+2. **src/app.tsx** — Added `questionRef` (ref mirror of `question` state, synced via useEffect) to avoid adding `question` to the `applyReplEvents` dependency array. Two new `else if` branches in `applyReplEvents`:
+   - `question-replied`: if `questionRef.current?.reqID === ev.reqID`, clears the modal (`setQuestion(null)`, resets `questionAnswersRef` and `currentSubIdx`), and echoes a human-readable summary of the external answers to scrollback via `renderer.commitSystemMessage`.
+   - `question-rejected`: same guard, clears modal and echoes "▶ Question rejected externally".
+   The `ev.reqID === question.reqID` guard makes stale events a no-op and covers the local-reply-then-SSE-echo race (local reply already set `question` to null → ref is null → no-op).
+3. **src/events.test.ts** — Added 4 tests: replied with matching sessionID, replied with non-matching sessionID, rejected with matching sessionID, rejected with non-matching sessionID.
+
+**Non-goal:** Surfacing subagent/descendant question resolutions via the descendant-walk block is explicitly out of scope for 9.5.
 
 ### 2026-06-16--18-54 — Stage 9.4 — Per-question collection (regression fix for 9.1 D4-α)
 **Implemented by:** Actor (sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16--18-54

@@ -861,3 +861,66 @@ describe("filterEvent — Mobile-Companion Part B: foreign-user-turn detection",
     expect(evt.text).toBe("fresh foreign");
   });
 });
+
+describe("filterEvent — question.replied / question.rejected", () => {
+  // (a) question.replied with matching sessionID → returns question-replied event
+  test("question.replied with matching sessionID returns question-replied event", () => {
+    const ev = {
+      type: "question.replied",
+      properties: {
+        sessionID: PARENT_SID,
+        requestID: "q_abc123",
+        answers: [["opt1"], ["custom text"]],
+      },
+    } as any;
+    const out = filterEvent(ev, PARENT_SID);
+    expect(out).toEqual({
+      kind: "question-replied",
+      reqID: "q_abc123",
+      sessionID: PARENT_SID,
+      answers: [["opt1"], ["custom text"]],
+    });
+  });
+
+  // (b) question.replied with NON-matching sessionID → returns null
+  test("question.replied with non-matching sessionID returns null", () => {
+    const ev = {
+      type: "question.replied",
+      properties: {
+        sessionID: OTHER_SID,
+        requestID: "q_abc123",
+        answers: [["opt1"]],
+      },
+    } as any;
+    expect(filterEvent(ev, PARENT_SID)).toBeNull();
+  });
+
+  // (c) question.rejected with matching sessionID → returns question-rejected event
+  test("question.rejected with matching sessionID returns question-rejected event", () => {
+    const ev = {
+      type: "question.rejected",
+      properties: {
+        sessionID: PARENT_SID,
+        requestID: "q_abc123",
+      },
+    } as any;
+    const out = filterEvent(ev, PARENT_SID);
+    expect(out).toEqual({
+      kind: "question-rejected",
+      reqID: "q_abc123",
+      sessionID: PARENT_SID,
+    });
+  });
+
+  // (d) question.rejected with NON-matching sessionID → returns null
+  test("question.rejected with non-matching sessionID returns null", () => {
+    const ev = {
+      type: "question.rejected",
+      properties: {
+        sessionID: OTHER_SID,
+        requestID: "q_abc123",
+      },
+    } as any;
+    expect(filterEvent(ev, PARENT_SID)).toBeNull();
+  });
+});
