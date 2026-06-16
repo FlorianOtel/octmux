@@ -2,11 +2,38 @@
 title: "Stage 9 — Question Deliberation Flow (Piece 2)"
 created_at: 2026-06-07--17-23
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: local/qwen3-4b-q6 — 2026-06-16--18-54
+updated_by: Actor (sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16--18-54
 updated_at: 2026-06-16--18-54
 context: >
   Stage 9 implements Piece 2 of the octmux UI architecture redesign: the AskUserQuestion tool's options are committed to scrollback (Piece 2A) and the operator can answer with prose in addition to digit selection (Piece 2B). Piece 2 is renderer-independent and works identically under both --single (StdoutRenderer) and --multi-window (TmuxWindowRenderer) modes.
 ---
+
+---
+
+### 2026-06-16--18-54 — Stage 9.4 — Per-question collection (regression fix for 9.1 D4-α)
+**Implemented by:** Actor (sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16--18-54
+**Commit(s):** <fill after commit>
+
+**Root cause:** Stage 9.1's `handleSubmit` built a `padded: string[][]` array on every answer, filling only the `currentSubIdx` slot with the chosen answer and setting all other slots to `[]` (empty — "Unanswered"). It then immediately called `handleQuestion(padded)`, which POSTs to `/question/{reqID}/reply` and clears the modal (`setQuestion(null)`). For multi-question batches, this means the FIRST sub-question's answer submitted the ENTIRE batch, leaving remaining sub-questions as "Unanswered" on the server.
+
+**Fix:** Replaced the D4-α padding + immediate-submit with per-question collection:
+1. Added `questionAnswersRef = useRef<string[][]>([])` alongside `currentSubIdx`. Reset both in the `question?.reqID` useEffect.
+2. In `handleSubmit`'s `if (question)` branch:
+   - Early-return on empty buffer (`text.trim() === ""`) — prevents accidental POST of whitespace mid-collection.
+   - PRESERVED the existing routing rule (digit → option label, else verbatim prose).
+   - Store: `questionAnswersRef.current[currentSubIdx] = [chosen]`.
+   - Echo per-sub-Q summary to scrollback (unchanged `formatAnswerSummary` call).
+   - If NOT last sub-Q: `setCurrentSubIdx(currentSubIdx + 1); return;` — modal advances to next sub-Q.
+   - If LAST sub-Q: `handleQuestion(questionAnswersRef.current); return;` — single POST with all collected answers.
+3. Ctrl-C abort branch now also resets `questionAnswersRef.current = []` and `setCurrentSubIdx(0)` alongside the existing `setQuestion(null)`, preventing stale accumulator state after cancellation.
+
+**Files changed:**
+- `src/app.tsx`: Added `questionAnswersRef` (line ~269), reset in `useEffect` (line ~270), rewrote `handleSubmit` question branch (line ~1126–1152), added accumulator/subIdx reset in Ctrl-C branch (line ~1049–1051).
+
+**Manual verification path** (app.tsx not unit-tested):
+- **Repro A (fix):** Multi-question modal → answer sub-Q 1 → modal advances to sub-Q 2 (NOT dismissed). Answer sub-Q 2 → POST `/question/{reqID}/reply` with both answers, modal dismissed.
+- **Repro B (regression):** Single-question modal → answer → POST as before, modal dismissed.
+- **Repro C (regression):** Ctrl-C during question → modal dismissed, accumulator and subIdx reset.
 
 ### 2026-06-16--18-54 — Stage 9.3 — Orchestra badge re-emit storm (5s flicker fix)
 **Implemented by:** Actor (sohoai/qwen3-4b-q6) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-16--18-54

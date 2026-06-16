@@ -265,8 +265,11 @@ export function App(props: AppProps) {
   // Stage 9.1 (Piece 2B, revised): current sub-question index, owned by app.tsx
   // so handleSubmit can build the D4-α padded array. Modal is display-only.
   const [currentSubIdx, setCurrentSubIdx] = useState<number>(0);
+  // Stage 9.4: accumulator for per-sub-Q answers; only POSTed after the last sub-Q.
+  const questionAnswersRef = useRef<string[][]>([]);
   useEffect(() => {
     setCurrentSubIdx(0);
+    questionAnswersRef.current = [];
   }, [question?.reqID]);
   const [permMode, setPermMode] = useState<"ask" | "allow" | "deny">(props.singleMode ? "allow" : "ask");
   const [runningCost, setRunningCost] = useState<number>(0);
@@ -1044,6 +1047,9 @@ export function App(props: AppProps) {
         editor.clearBuffer();
         setPermission(null);
         setQuestion(null);
+        // Stage 9.4: reset per-question accumulator on Ctrl-C abort
+        questionAnswersRef.current = [];
+        setCurrentSubIdx(0);
         setModelPicker(null);
         setSessionPicker(null);
         setIsCompacting(false);
@@ -1118,11 +1124,11 @@ export function App(props: AppProps) {
   }, [question, props.baseUrl, props.cwd]);
 
   const handleSubmit = useCallback(async (text: string) => {
-    // Stage 9.1 (Piece 2B, revised): route prompt input while any question is pending.
-    // Selection: trimmed buffer is a bare integer 1..N.
-    // Prose: everything else (including "1 ", "0", "12", letters, multi-line).
-    // D4-α padding: padded to string[][], current slot filled, rest [].
+    // Stage 9.4: per-question collection. Collect one sub-Q answer at a time,
+    // advancing currentSubIdx; POST only after the LAST sub-Q.
     if (question) {
+      // Early-return on empty buffer — don't advance or submit garbage.
+      if (text.trim() === "") return;
       const currentQ = question.questions[currentSubIdx] ?? question.questions[0];
       if (currentQ) {
         const trimmed = text.trim();
@@ -1138,13 +1144,19 @@ export function App(props: AppProps) {
         } else {
           chosen = trimmed;
         }
-        const padded: string[][] = question.questions.map((_q, i) =>
-          i === currentSubIdx ? [chosen] : []
-        );
+        // Store answer for this sub-question
+        questionAnswersRef.current[currentSubIdx] = [chosen];
+        // Echo per-sub-Q summary to scrollback
         renderer.commitSystemMessage(
           formatAnswerSummary(currentQ, currentSubIdx, question.questions.length, text)
         );
-        handleQuestion(padded);
+        // If NOT the last sub-question, advance the index and wait for the next answer
+        if (currentSubIdx < question.questions.length - 1) {
+          setCurrentSubIdx(currentSubIdx + 1);
+          return;
+        }
+        // LAST sub-question — POST the collected answers
+        handleQuestion(questionAnswersRef.current);
         return;
       }
     }
