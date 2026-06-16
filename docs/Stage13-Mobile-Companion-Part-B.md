@@ -28,7 +28,7 @@ context: >
 
 ### 2026-06-16--11-29 — Model Adoption Fix (shared-session hijack prevention)
 **Implemented by:** Actor (local/qwen3-4b-q6) — 2026-06-16--11-29
-**Commit(s):** `pending`
+**Commit(s):** `672e202`
 
 **Problem:** octmux's `activeModel` was being silently overwritten by foreign (mobile-app) turns in a shared OpenCode session. When the mobile app submitted a prompt with model `requesty/google/gemini-3-pro-preview`, that assistant message became the latest in the shared session. The next `message-completed`/`session-idle` SSE event triggered `refreshTokenUsage`, which read the latest assistant message's model via `pickPostSummaryAssistantTokenUsage` and called `setActiveModel(...)`, overwriting octmux's own model. The server then rejected the next prompt with `ProviderModelNotFoundError`.
 
@@ -39,7 +39,7 @@ context: >
 
 2. **Verified seeding paths**: Confirmed that the mount effect (line 913) and session-switch effect (line 1087) both seed `activeModel` from `session.get().data.model` with `getDefaultModel` fallback. No gaps found.
 
-3. **Defense-in-depth validation** (src/utils/formatters.ts + src/app.tsx:1379,1413): Added `validateModel(client, providerID, modelID)` helper that checks if the provider+model exist in `client.config.providers()` (the same source the `/model` picker uses). Before sending (both `session.command` and `promptAsync` paths), if `activeModel` is not found among connected providers, emit a one-line system message (`"active model X not available — falling back to Y"`) and fall back to `getDefaultModel(props.client)`. This prevents ANY stale/foreign model from reaching the server.
+3. **Defense-in-depth validation** (src/utils/formatters.ts + src/app.tsx:1379,1413): Added `validateModel(client, providerID, modelID)` helper that checks if the provider+model exist in the connected providers returned by `client.provider.list()` (iterating `data.all` filtered by `data.connected` — the same source the `/model` picker uses). Before sending (both `session.command` and `promptAsync` paths), if `activeModel` is not found among connected providers, emit a one-line system message (`"active model X not available — falling back to Y"`) and fall back to `getDefaultModel(props.client)`. This prevents ANY stale/foreign model from reaching the server.
 
 4. **Unit test**: Added a regression test in `src/refresh-token-usage.test.ts` asserting that a message list whose latest assistant turn uses a foreign model still yields correct token usage, and documenting that `activeModel` is no longer derived from it. Full suite: 231 pass, 0 fail.
 
