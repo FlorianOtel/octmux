@@ -2,8 +2,8 @@
 title: "Stage 13 — Mobile Companion Part B (foreign-user-turn rendering)"
 created_at: 2026-06-15--18-51
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/minimax-m3 Planner + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: OpenCode (anthropic/claude-sonnet-4-6) — 2026-06-17--12-45
-updated_at: 2026-06-17--12-45
+updated_by: Actor (sohoai/qwen3-4b-q6) — 2026-06-17--18-43
+updated_at: 2026-06-17--18-43
 context: >
   Stage 13 implements Mobile Companion Part B: render foreign (mobile-originated) operator turns in the octmux transcript while suppressing locally-submitted turns. Builds on Part A's whole-turn commitUserInput primitive (commit f5103b0). Unconditional (no flag/env); inert without a mobile peer. Implemented on the feat/mobile-app worktree, not main.
 ---
@@ -99,6 +99,14 @@ present). Full suite: 241 pass / 0 fail.
 **Interleave safety:** because classification is by id identity (not order/count), a mobile (foreign) turn interleaved between two local turns is judged independently — foreign rendered once, both local suppressed. This was the explicit operator requirement (mobile + octmux operators interleaved on the same shared session). An explicit interleave unit test guards it. Mobile foreign-user-turn rendering is preserved (foreign ids are not in ownMessageIDs → still emitted/rendered).
 
 **Tests:** the 6 Part B tests were migrated to the ID model; 2 new tests added (slash-command expanded-template suppression; interleave foreign-between-two-locals). events.test.ts 48/0; full suite 241 pass / 0 fail. Binary rebuilt via scripts/build.sh.
+
+---
+
+### 2026-06-17--18-43 — Stage 13.x — fix mintUserMessageID byte-format (prefill 400 regression)
+**Implemented by:** Actor (sohoai/qwen3-4b-q6) — 2026-06-17--18-43
+**Commit(s):** `PENDING`
+
+**Problem:** octmux minted IDs with base-36 timestamp prefix which sorts lexically GREATER than the server's hex prefix msg_ed*, breaking the server run-loop break condition `lastUser.id < lastAssistant.id` string comparison → spurious regeneration → "This model does not support assistant message prefill" 400 on claude-opus-4-8); the fix (extracted mintUserMessageID to new src/message-id.ts as a faithful port of opencode Identifier.ascending("message") — hex timestamp + monotonic counter + 14-char base62); extraction rationale (src/app.tsx is ~1670 lines, importing it from a test is impractical); new test coverage (src/message-id.test.ts, 5 cases); and an explicit "DO NOT revert d1b7b20 — the feature is wanted, only the ID encoding was wrong" note for future readers.
 
 ---
 

@@ -8,6 +8,7 @@ import { replaySession } from "./replay.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
 import { filterEvent, resetEventState, synthesizeSessionIdleEvents, hasOpenStreamingPart, recordOwnMessageID, recordOwnCommandPrefix, type ReplEvent } from "./events.ts";
 import { isSessionDescendant } from "./utils/session-ancestry.ts";
+import { mintUserMessageID } from "./message-id.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand, parseResyncCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
@@ -29,15 +30,6 @@ import { expandCommands } from "./command-registry.ts";
 import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, prettyModelName, contextLabel, validateModel } from "./utils/formatters.ts";
 
 const TOGGLES_CONFIG = loadTogglesConfig();
-
-/**
- * Mint a fresh user-message ID. Server schema only requires "msg" prefix (opencode
- * session/schema.ts:10 isStartsWith("msg")). Uniqueness across this session lifetime is
- * the goal; a collision with a foreign client's id is astronomically unlikely.
- */
-function mintUserMessageID(): string {
-  return "msg_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-}
 
 type MessageForUsageScan = {
   info: {
