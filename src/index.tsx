@@ -307,7 +307,7 @@ if (resumeArg) {
       console.error(`octmux: parent session not found: ${forkArg}`);
       process.exit(1);
     }
-    const child = await client.session.fork({ path: { id: forkArg } });
+    const child = await client.session.fork({ path: { id: forkArg }, query: { directory: cwd } });
     if (!child.data?.id) {
       console.error(`octmux: fork returned no child session for parent ${forkArg}`);
       process.exit(1);

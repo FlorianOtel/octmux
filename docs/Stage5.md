@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Claude Code (Claude Opus 4.8)
-updated_at: 2026-06-15--22-40
+updated_by: Claude Code (Claude Sonnet 4.6)
+updated_at: 2026-06-17--00-00
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -956,5 +956,35 @@ Bug fix against the Stage 5 hotfix (a65f833). Pressing arrow-up while a message 
 **Files modified:**
 - `src/editor.ts`
 - `src/app.tsx`
+
+---
+
+### 2026-06-17--00-00 — Stage 5 backfill — `--fork` directory inheritance fix (three-part)
+
+**Implemented by:** Claude Code (Claude Sonnet 4.6) — 2026-06-17
+**Commits:** octmux `src/index.tsx`; opencode `211e81793`
+
+**Symptom:** `octmux --fork <parentID>` from a different directory (e.g. `~/Gin-AI/projects/P4OC`) created a child session still anchored to the parent's project (e.g. `octmux`). oc-history correctly showed `octmux` — the bug was in opencode and octmux, not the viewer.
+
+**Root cause — three parts:**
+
+1. **Bug 1 (opencode `packages/opencode/src/session/session.ts:756`):** `session.fork()` hardcoded `ctx.directory` (the middleware-resolved directory, derived from the *parent* session's stored `directory` field) with no mechanism for a caller to override it. The child session was always created in the parent's directory.
+
+2. **Bug 2 (opencode `packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts:204`):** The HTTP fork endpoint is declared with `query: WorkspaceRoutingQuery` (which includes `?directory`), but the `forkRaw` handler never read the query param from the request URL and never passed it into `session.fork()`. The param was accepted and silently discarded. Additionally, the `WorkspaceRoutingMiddleware` resolves instance context as `session?.directory || defaultDirectory(request, url)` — because the parent session exists with a stored directory, `session.directory` wins over `?directory`, making the middleware path equally broken.
+
+3. **Omission (octmux `src/index.tsx:310`):** Even if the server had supported `?directory`, the `--fork` startup call never sent it. The new-session path (`session.create`) already passed `query: { directory: cwd }` at line 325, but the fork path passed only `{ path: { id: forkArg } }`.
+
+**Fix:**
+
+- **opencode Bug 1:** Extended `fork()` signature (type declaration at ~line 473 and implementation at ~line 756) to accept `directory?: string`. Implementation resolves `const directory = input.directory ?? ctx.directory` and uses it for both `createNext({ directory })` and `sessionPath(ctx.worktree, directory)`.
+
+- **opencode Bug 2:** `forkRaw` now reads `url.searchParams.get("directory")` from the raw request URL and passes it as `directory` to the internal `fork()` call.
+
+- **octmux omission:** Changed `client.session.fork({ path: { id: forkArg } })` to `client.session.fork({ path: { id: forkArg }, query: { directory: cwd } })`. `cwd` is already captured at line 258.
+
+**Files modified:**
+- `src/index.tsx` (octmux — omission fix)
+- `packages/opencode/src/session/session.ts` (opencode — Bug 1)
+- `packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts` (opencode — Bug 2)
 
 ---
