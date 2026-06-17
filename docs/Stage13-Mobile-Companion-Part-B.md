@@ -53,7 +53,7 @@ context: >
 
 ### 2026-06-17--02-05 — Stage 13.x — client-supplied messageID for own-turn echo suppression (regression fix)
 **Implemented by:** Actor (sohoai/qwen3-4b-q6 + sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-17--02-05
-**Commit(s):** `pending`
+**Commit(s):** `d1b7b20`
 
 **Problem:** Two Stage 13 regressions: (1) operator input echoed TWICE during /brain and /duo (orchestra) sessions; (2) at the start of a /brain or /duo session the entire EXPANDED slash-command markdown template was rendered as a giant green-inverted operator-input block.
 
