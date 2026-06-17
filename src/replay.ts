@@ -61,7 +61,10 @@ export async function replaySession(
         const parts = msg.parts ?? [];
         const textParts: string[] = [];
         for (const p of parts) {
-          if (p.type === "text" && p.text) {
+          // Filter synthetic/ignored parts to prevent system-reminder parts from
+          // appearing in scrollback on session resume (mirrors guard in events.ts
+          // line ~386 for live SSE user message handling).
+          if (p.type === "text" && p.text && p.synthetic !== true && p.ignored !== true) {
             textParts.push(p.text);
           }
         }

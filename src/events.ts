@@ -58,6 +58,13 @@ const classifiedUserMessageIDs = new Set<string>();
 // number of user turns in a session.
 const ownMessageIDs = new Set<string>();
 
+// Backstop for custom commands (/brain-abandon, /duo-abandon). Tracks the heading
+// prefix that OpenCode injects as the first H1 of the system-reminder.
+// When classifyOpenUserTurns detects a user turn starting with this prefix,
+// it suppresses the foreign-user-turn event (same as own-turn), preventing the
+// full .md command from being rendered as user input.
+const ownCommandPrefixes = new Set<string>();
+
 // Maps partID → Role for currently-open (in-progress) blocks.
 const openParts = new Map<string, Role>();
 // Used only for "emit generating exactly once" logic.
@@ -130,6 +137,7 @@ export function resetEventState(): void {
   summaryMessageIDs.clear();
   partIDToMessageID.clear();
   ownMessageIDs.clear();
+  ownCommandPrefixes.clear();
   accumulatedUserTexts.clear();
   classifiedUserMessageIDs.clear();
 }
@@ -144,6 +152,18 @@ export function resetEventState(): void {
  */
 export function recordOwnMessageID(id: string): void {
   ownMessageIDs.add(id);
+}
+
+/**
+ * Record a custom command prefix that OpenCode injects as the first H1 of the
+ * system-reminder for custom commands like /brain-abandon and /duo-abandon.
+ * When classifyOpenUserTurns detects a user turn starting with this prefix,
+ * it suppresses the foreign-user-turn event (same as own-turn), preventing the
+ * full .md command from being rendered as user input.
+ * Called from app.tsx in the opencodeCommands branch before session.command.
+ */
+export function recordOwnCommandPrefix(prefix: string): void {
+  ownCommandPrefixes.add(prefix);
 }
 
 /**
@@ -164,10 +184,19 @@ export function classifyOpenUserTurns(): ReplEvent[] {
       // Own turn — already optimistically rendered; suppress.
       accumulatedUserTexts.delete(id);
     } else {
-      // Foreign turn — emit event if there is text.
+      // Foreign turn — check prefix backstop before emitting event.
       const parts = accumulatedUserTexts.get(id);
       accumulatedUserTexts.delete(id);
       const joined = (parts ?? []).join("\n");
+      // Backstop: if the user turn starts with our custom command prefix,
+      // suppress it (same as own-turn) to prevent the full .md command from
+      // being rendered as user input.
+      for (const prefix of ownCommandPrefixes) {
+        if (joined.startsWith(prefix)) {
+          // Suppress — same as own-turn, emit nothing
+          return events;
+        }
+      }
       if (joined !== "") {
         events.push({ kind: "foreign-user-turn", messageID: id, text: joined });
       }

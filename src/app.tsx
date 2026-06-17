@@ -6,7 +6,7 @@ import * as path from "path";
 import { LineEditor } from "./editor.ts";
 import { replaySession } from "./replay.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
-import { filterEvent, resetEventState, synthesizeSessionIdleEvents, hasOpenStreamingPart, recordOwnMessageID, type ReplEvent } from "./events.ts";
+import { filterEvent, resetEventState, synthesizeSessionIdleEvents, hasOpenStreamingPart, recordOwnMessageID, recordOwnCommandPrefix, type ReplEvent } from "./events.ts";
 import { isSessionDescendant } from "./utils/session-ancestry.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand, parseResyncCommand } from "./commands.ts";
@@ -1448,7 +1448,15 @@ export function App(props: AppProps) {
             }
           }
         }
-       setIsGenerating(true);
+
+        // Mobile-Companion Part B: backstop for custom commands whose .md content
+        // begins with "# /cmdname". OpenCode injects this heading as the first H1
+        // of the system-reminder. When classifyOpenUserTurns detects a user turn
+        // starting with this prefix, it suppresses the foreign-user-turn event,
+        // preventing the full .md command from being rendered as user input.
+        recordOwnCommandPrefix("# /" + cmdName);
+
+        setIsGenerating(true);
         try {
           await props.client.session.command({
             path: { id: sessionID },

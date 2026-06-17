@@ -2,8 +2,8 @@
 title: "Stage 13 — Mobile Companion Part B (foreign-user-turn rendering)"
 created_at: 2026-06-15--18-51
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/minimax-m3 Planner + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: OpenCode (anthropic/claude-opus-4-8) — 2026-06-17--11-34
-updated_at: 2026-06-17--11-34
+updated_by: local/qwen3-4b-q6 — 2026-06-17--12-32
+updated_at: 2026-06-17--12-32
 context: >
   Stage 13 implements Mobile Companion Part B: render foreign (mobile-originated) operator turns in the octmux transcript while suppressing locally-submitted turns. Builds on Part A's whole-turn commitUserInput primitive (commit f5103b0). Unconditional (no flag/env); inert without a mobile peer. Implemented on the feat/mobile-app worktree, not main.
 ---
@@ -99,3 +99,22 @@ present). Full suite: 241 pass / 0 fail.
 **Interleave safety:** because classification is by id identity (not order/count), a mobile (foreign) turn interleaved between two local turns is judged independently — foreign rendered once, both local suppressed. This was the explicit operator requirement (mobile + octmux operators interleaved on the same shared session). An explicit interleave unit test guards it. Mobile foreign-user-turn rendering is preserved (foreign ids are not in ownMessageIDs → still emitted/rendered).
 
 **Tests:** the 6 Part B tests were migrated to the ID model; 2 new tests added (slash-command expanded-template suppression; interleave foreign-between-two-locals). events.test.ts 48/0; full suite 241 pass / 0 fail. Binary rebuilt via scripts/build.sh.
+
+---
+
+### 2026-06-17--12-32 — Fix /brain-abandon /duo-abandon echo suppression
+**Implemented by:** local/qwen3-4b-q6 — 2026-06-17--12-32
+**Commit(s):** `TBD` (will be updated after commit)
+
+**Problem:** After running `/brain-abandon` or `/duo-abandon`, the full OpenCode system-reminder (the expanded slash-command markdown template) was rendered as a user-input block with green-inverted text, cluttering the transcript. The root cause: `session.command` sends `body.messageID` (client-minted) to the server, but the OpenCode server does not honour that field for custom commands — it assigns its own ID to the SSE `message.updated` event. `ownMessageIDs` therefore never contains the server-assigned ID, so `classifyOpenUserTurns()` treats the user message as foreign and emits `foreign-user-turn` with the full system-reminder text. `commitUserInput(fullText)` is then called, rendering the entire command `.md` as a user block.
+
+**Solution (Design 3, prefix backstop):**
+1. **events.ts:** Added `ownCommandPrefixes` module-level Set and exported `recordOwnCommandPrefix(prefix)` function. When a custom command like `/brain-abandon` is submitted, we register `# /brain-abandon` as a prefix. In `classifyOpenUserTurns`, before emitting `foreign-user-turn`, we check if the joined user text contains any registered prefix. If yes → suppress (same as own-turn, emit nothing). If no → emit `foreign-user-turn` as before.
+
+2. **app.tsx:** In the `opencodeCommands.has(cmdName)` branch (before `session.command`), call `recordOwnCommandPrefix("# /" + cmdName)` to register the heading that OpenCode injects as the first H1 of the system-reminder.
+
+3. **replay.ts:** Added guard `if (p.synthetic === true || p.ignored === true) continue;` in the user-message loop to prevent system-reminder parts from appearing in scrollback on session resume, mirroring the existing guard in `events.ts` line ~386.
+
+**Tests:** Full suite: 241 pass / 0 fail. No tests modified (existing tests cover the core ID-based echo suppression; this fix adds a prefix backstop layer). Binary rebuilt via scripts/build.sh.
+
+**Out of scope:** No change to promptAsync echo suppression (that path works correctly); no change to the mobile app; no redesign of session sharing.
