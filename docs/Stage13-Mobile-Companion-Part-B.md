@@ -104,7 +104,7 @@ present). Full suite: 241 pass / 0 fail.
 
 ### 2026-06-17--18-43 — Stage 13.x — fix mintUserMessageID byte-format (prefill 400 regression)
 **Implemented by:** Actor (sohoai/qwen3-4b-q6) — 2026-06-17--18-43
-**Commit(s):** `PENDING`
+**Commit(s):** `6daf785`
 
 **Problem:** octmux minted IDs with base-36 timestamp prefix which sorts lexically GREATER than the server's hex prefix msg_ed*, breaking the server run-loop break condition `lastUser.id < lastAssistant.id` string comparison → spurious regeneration → "This model does not support assistant message prefill" 400 on claude-opus-4-8); the fix (extracted mintUserMessageID to new src/message-id.ts as a faithful port of opencode Identifier.ascending("message") — hex timestamp + monotonic counter + 14-char base62); extraction rationale (src/app.tsx is ~1670 lines, importing it from a test is impractical); new test coverage (src/message-id.test.ts, 5 cases); and an explicit "DO NOT revert d1b7b20 — the feature is wanted, only the ID encoding was wrong" note for future readers.
 
