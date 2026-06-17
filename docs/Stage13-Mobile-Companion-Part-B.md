@@ -10,7 +10,7 @@ context: >
 
 ### 2026-06-17--11-34 — Stage 13.x — early "generating" signal on turn-created (TTFT blind-window fix)
 **Implemented by:** OpenCode (anthropic/claude-opus-4-8) — 2026-06-17--11-34
-**Commit(s):** `TBD`
+**Commit(s):** `365e635`
 
 **Problem:** When a turn is submitted (especially from the mobile companion), the
 spinner / generating indicator only appeared once the FIRST assistant message
