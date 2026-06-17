@@ -75,6 +75,14 @@ const detectedQuestionToolCallIDs = new Set<string>();
 // session switch via resetEventState().
 const completedAssistantMessageIDs = new Set<string>();
 
+// Tracks assistant messageIDs for which we've already emitted "generating" from
+// the message.updated (turn-created) branch. Without this, the spinner only
+// appeared once the FIRST message part streamed — which on large-context
+// sessions can be 20-40s after the turn starts (prefill/TTFT), making the UI
+// look frozen. Emitting on message-created closes that blind window. Cleared on
+// session switch via resetEventState().
+const generatingEmittedMessageIDs = new Set<string>();
+
 // Tracks child session IDs for sessions whose parentID matches the harness session.
 // Populated on session.created; cleared on session.deleted or when the paired
 // parent Task tool transitions to completed/error.
@@ -114,6 +122,7 @@ export function resetEventState(): void {
   seenPartIDs.clear();
   detectedQuestionToolCallIDs.clear();
   completedAssistantMessageIDs.clear();
+  generatingEmittedMessageIDs.clear();
   trackedChildSessions.clear();
   openTaskPartIDs.clear();
   taskToChild.clear();
@@ -289,6 +298,17 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
       if (completed != null && !completedAssistantMessageIDs.has(info.id)) {
         completedAssistantMessageIDs.add(info.id);
         events.push({ kind: "message-completed", messageID: info.id });
+      }
+      // Early "generating" signal: an assistant turn has been created but not yet
+      // completed, and the operator did not interrupt it. Emit "generating" now —
+      // BEFORE the first message part streams — so the spinner appears within ms
+      // of submit instead of after the full prefill/TTFT window (which can be
+      // 20-40s on large-context sessions). Guarded once-per-messageID; skipped if
+      // the turn is already completed (late metadata update) or errored (the
+      // parent-turn-end above already handled the turn boundary).
+      if (completed == null && !infoErr && !generatingEmittedMessageIDs.has(info.id)) {
+        generatingEmittedMessageIDs.add(info.id);
+        events.push({ kind: "generating" });
       }
       if (events.length === 1) return events[0];
       if (events.length > 1) return events;

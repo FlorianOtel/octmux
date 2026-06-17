@@ -2,10 +2,45 @@
 title: "Stage 13 — Mobile Companion Part B (foreign-user-turn rendering)"
 created_at: 2026-06-15--18-51
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/minimax-m3 Planner + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: Actor (sohoai/qwen3-4b-q6 + sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-17--02-05
-updated_at: 2026-06-17--02-05
+updated_by: OpenCode (anthropic/claude-opus-4-8) — 2026-06-17--11-34
+updated_at: 2026-06-17--11-34
 context: >
   Stage 13 implements Mobile Companion Part B: render foreign (mobile-originated) operator turns in the octmux transcript while suppressing locally-submitted turns. Builds on Part A's whole-turn commitUserInput primitive (commit f5103b0). Unconditional (no flag/env); inert without a mobile peer. Implemented on the feat/mobile-app worktree, not main.
+---
+
+### 2026-06-17--11-34 — Stage 13.x — early "generating" signal on turn-created (TTFT blind-window fix)
+**Implemented by:** OpenCode (anthropic/claude-opus-4-8) — 2026-06-17--11-34
+**Commit(s):** `TBD`
+
+**Problem:** When a turn is submitted (especially from the mobile companion), the
+spinner / generating indicator only appeared once the FIRST assistant message
+*part* streamed. On large-context sessions the prefill / time-to-first-token can
+be 20–40s (measured: 42.1s on a ~394K-token/turn session), during which the
+client showed nothing after the user message — looking frozen/disconnected. On
+the mobile app this blind window read as a hang ("submitted, no reaction, then
+suddenly came alive"). Root cause: in `src/events.ts`, the `{ kind: "generating" }`
+event was emitted only in the `message.part.updated` first-part-creation branch
+(`part.text.length === 0`), never on assistant `message.updated` (turn created).
+
+**Diagnosis note (not a bug):** server-side pickup is ~0ms (user msg → assistant
+msg created within ~20ms); transport is healthy. The felt latency is genuine
+prefill/TTFT driven by accumulated context size, identical for any client. The
+*fix* here addresses the missing progress indicator during that window, not the
+latency itself (which is mitigated by `/compact` or a fresh session).
+
+**Fix** (`src/events.ts`): in the assistant `message.updated` branch, emit
+`{ kind: "generating" }` once per messageID when the turn is created but not yet
+completed and not errored (guarded by a new `generatingEmittedMessageIDs` set,
+cleared in `resetEventState`). This makes `isGenerating` flip true within ms of
+submit, so the spinner appears immediately and persists until the existing clear
+paths (`session-idle` / `parent-turn-end` / `error` / `message-completed`). The
+original first-part emit is harmless (idempotent via app-state).
+
+**Tests:** updated two `events.test.ts` cases that asserted a non-completed
+assistant `message.updated` returns `null` — it now also emits `generating`
+(assertions updated to check `parent-turn-end` is absent and `generating` is
+present). Full suite: 241 pass / 0 fail.
+
 ---
 
 ### 2026-06-15--18-51 — Stage 13 — Mobile Companion Part B — foreign-user-turn detection at turn boundary

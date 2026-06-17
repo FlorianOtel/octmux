@@ -481,9 +481,15 @@ describe("filterEvent — session.updated activity routing", () => {
 
       const out = filterEvent(msgUpdated, PARENT_SID);
       expect(out).not.toBeNull();
-      expect((out as any).kind).toBe("block-retag");
-      expect((out as any).partID).toBe(partID);
-      expect((out as any).newRole).toBe("summary");
+      // Non-completed assistant turn now also emits a "generating" signal
+      // (early-spinner fix), so the result is an array containing both the
+      // block-retag and the generating event.
+      const arr = Array.isArray(out) ? out : [out];
+      const retag = arr.find((e: any) => e.kind === "block-retag");
+      expect(retag).toBeDefined();
+      expect((retag as any).partID).toBe(partID);
+      expect((retag as any).newRole).toBe("summary");
+      expect(arr.some((e: any) => e.kind === "generating")).toBe(true);
     });
 
     test("message.part.updated text part for already-known summary message gets role summary", () => {
@@ -675,8 +681,11 @@ describe("filterEvent — Layer B: parent-turn-end sweep signal (Stage 8.1.6)", 
       },
     } as any;
     const out = filterEvent(msgUpdated, PARENT_SID);
-    // message.updated with no error returns null, not parent-turn-end
-    expect(out).toBeNull();
+    // A non-completed assistant turn with no error must NOT emit parent-turn-end.
+    // It now emits a "generating" signal (early-spinner fix) instead of null.
+    const arr = Array.isArray(out) ? out : out == null ? [] : [out];
+    expect(arr.some((e: any) => e.kind === "parent-turn-end")).toBe(false);
+    expect(arr.some((e: any) => e.kind === "generating")).toBe(true);
   });
 
   // (f) Test "parent session.error emits both parent-turn-end(error) and error"
