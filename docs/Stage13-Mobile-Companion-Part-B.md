@@ -2,8 +2,8 @@
 title: "Stage 13 — Mobile Companion Part B (foreign-user-turn rendering)"
 created_at: 2026-06-15--18-51
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/minimax-m3 Planner + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: local/qwen3-4b-q6 — 2026-06-17--12-32
-updated_at: 2026-06-17--12-32
+updated_by: OpenCode (anthropic/claude-sonnet-4-6) — 2026-06-17--12-45
+updated_at: 2026-06-17--12-45
 context: >
   Stage 13 implements Mobile Companion Part B: render foreign (mobile-originated) operator turns in the octmux transcript while suppressing locally-submitted turns. Builds on Part A's whole-turn commitUserInput primitive (commit f5103b0). Unconditional (no flag/env); inert without a mobile peer. Implemented on the feat/mobile-app worktree, not main.
 ---
@@ -103,8 +103,8 @@ present). Full suite: 241 pass / 0 fail.
 ---
 
 ### 2026-06-17--12-32 — Fix /brain-abandon /duo-abandon echo suppression
-**Implemented by:** local/qwen3-4b-q6 — 2026-06-17--12-32
-**Commit(s):** `TBD` (will be updated after commit)
+**Implemented by:** Actor (local/qwen3-4b-q6) via /duo pipeline (Brain: anthropic/claude-sonnet-4-6) — 2026-06-17--12-32
+**Commit(s):** `ea7fd86`
 
 **Problem:** After running `/brain-abandon` or `/duo-abandon`, the full OpenCode system-reminder (the expanded slash-command markdown template) was rendered as a user-input block with green-inverted text, cluttering the transcript. The root cause: `session.command` sends `body.messageID` (client-minted) to the server, but the OpenCode server does not honour that field for custom commands — it assigns its own ID to the SSE `message.updated` event. `ownMessageIDs` therefore never contains the server-assigned ID, so `classifyOpenUserTurns()` treats the user message as foreign and emits `foreign-user-turn` with the full system-reminder text. `commitUserInput(fullText)` is then called, rendering the entire command `.md` as a user block.
 
