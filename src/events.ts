@@ -46,19 +46,17 @@ export type ReplEvent =
 // opencode fires message.part.updated for user messages too — we skip them.
 const userMessageIDs = new Set<string>();
 
-// Mobile-Companion Part B: FIFO of locally-submitted user text. octmux always submits
-// one text part per prompt; a foreign client MAY submit multiple. Consumed at the
-// turn boundary to suppress our own turns before they reach the renderer.
-const submittedUserTexts: string[] = [];
 // Per-messageID arrival-order accumulator of user text parts (excludes parts where
-// synthetic===true || ignored===true). Cleared on session switch and after flush.
+// synthetic===true || ignored===true). Deleted per-id on classification; the Map
+// itself is cleared on session switch via resetEventState.
 const accumulatedUserTexts = new Map<string, string[]>();
-// Guards against double-flush of the same user messageID.
+// Guards against double-classification of the same user messageID.
 const classifiedUserMessageIDs = new Set<string>();
-// The single user-turn messageID currently accumulating text parts. Set on user
-// message.updated; cleared on flush. At most one open turn at a time in the
-// single-operator hand-off model; flush tolerates back-to-back foreign turns.
-let openUserTurnMessageID: string | null = null;
+// Message IDs minted by this octmux instance (recorded via recordOwnMessageID).
+// Used by classifyOpenUserTurns to suppress our own turns (already optimistically
+// rendered). Never pruned; cleared on resetEventState. Growth is bounded by the
+// number of user turns in a session.
+const ownMessageIDs = new Set<string>();
 
 // Maps partID → Role for currently-open (in-progress) blocks.
 const openParts = new Map<string, Role>();
@@ -122,63 +120,51 @@ export function resetEventState(): void {
   unpairedChildren.clear();
   summaryMessageIDs.clear();
   partIDToMessageID.clear();
-  submittedUserTexts.length = 0;
+  ownMessageIDs.clear();
   accumulatedUserTexts.clear();
   classifiedUserMessageIDs.clear();
-  openUserTurnMessageID = null;
 }
 
-// Mobile-Companion Part B (FIFO dedup).
-/**
- * Mobile-Companion Part B (FIFO dedup). Push the local user's submitted text so the
- * next foreign-user-turn flush at the turn boundary can recognise and suppress it.
- * Called from app.tsx at every prompt path that produces an SSE user message
- * (default promptAsync + /cmd session.command). Local-only commands MUST NOT call
- * this — they produce no user SSE event and pushing would corrupt the FIFO.
- */
-export function recordSubmittedUserText(text: string): void {
-  submittedUserTexts.push(text);
-}
+// Per-messageID identity classification (replaces text-FIFO echo suppression).
 
 /**
- * Test-only peek of the FIFO head. Exported for src/events.test.ts to assert
- * "FIFO consumed". Returns undefined when the queue is empty.
+ * Record a user message ID minted by this octmux instance. Called from app.tsx
+ * right after the SDK returns the new message ID from promptAsync / session.command.
+ * At turn-boundary classification, own IDs are suppressed (already optimistically
+ * rendered) and foreign IDs emit foreign-user-turn events.
  */
-export function peekSubmittedUserText(): string | undefined {
-  return submittedUserTexts[0];
+export function recordOwnMessageID(id: string): void {
+  ownMessageIDs.add(id);
 }
 
 /**
- * If the FIFO head equals candidate, shift it off and return true (local echo —
- * caller suppresses emission). Otherwise return false (foreign — caller emits
- * foreign-user-turn). Exact string equality; no trimming/normalisation: octmux
- * submits the literal buffer string verbatim.
+ * Classify all unclassified user message IDs. For each:
+ *  - own (in ownMessageIDs): suppressed — delete accumulated text, emit nothing.
+ *  - foreign: join accumulated text parts with "\n", delete accumulated text,
+ *    and emit a foreign-user-turn event (only if non-empty).
+ * Returns 0..N events. DO NOT delete from userMessageIDs — late-arriving text parts
+ * for a classified user ID must still be routed via the userMessageIDs guard
+ * (line ~382) to avoid misrouting as assistant block-start logic.
  */
-function consumeSubmittedUserText(candidate: string): boolean {
-  if (submittedUserTexts.length > 0 && submittedUserTexts[0] === candidate) {
-    submittedUserTexts.shift();
-    return true;
+export function classifyOpenUserTurns(): ReplEvent[] {
+  const events: ReplEvent[] = [];
+  for (const id of userMessageIDs) {
+    if (classifiedUserMessageIDs.has(id)) continue;
+    classifiedUserMessageIDs.add(id);
+    if (ownMessageIDs.has(id)) {
+      // Own turn — already optimistically rendered; suppress.
+      accumulatedUserTexts.delete(id);
+    } else {
+      // Foreign turn — emit event if there is text.
+      const parts = accumulatedUserTexts.get(id);
+      accumulatedUserTexts.delete(id);
+      const joined = (parts ?? []).join("\n");
+      if (joined !== "") {
+        events.push({ kind: "foreign-user-turn", messageID: id, text: joined });
+      }
+    }
   }
-  return false;
-}
-
-/**
- * Flush the open user turn. Joins accumulated text parts with "\n" (Map insertion
- * order preserves text-part arrival order), classifies against the local FIFO, and
- * returns null (local echo suppressed; empty suppressed) or a foreign-user-turn
- * event. Clears per-messageID state and the open-turn pointer. No-op if nothing open.
- */
-function flushOpenUserTurn(): ReplEvent | null {
-  const openID = openUserTurnMessageID;
-  if (openID === null) return null;
-  openUserTurnMessageID = null;
-  classifiedUserMessageIDs.add(openID);
-  const parts = accumulatedUserTexts.get(openID);
-  accumulatedUserTexts.delete(openID);
-  const joined = (parts ?? []).join("\n");
-  if (joined === "") return null;
-  if (consumeSubmittedUserText(joined)) return null;
-  return { kind: "foreign-user-turn", messageID: openID, text: joined };
+  return events;
 }
 
 // Attempt to pair pending task parts with unmatched children.
@@ -271,22 +257,15 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     const info = (event as EventMessageUpdated).properties.info;
     if (info.sessionID === sessionID && info.role === "user") {
       userMessageIDs.add(info.id);
-      // Mobile-Companion Part B: set the open user turn. Flush any prior still-open
-      // one first (defensive: back-to-back foreign turns before an assistant reply).
-      if (openUserTurnMessageID !== null && openUserTurnMessageID !== info.id) {
-        flushOpenUserTurn();
-      }
-      if (!classifiedUserMessageIDs.has(info.id)) {
-        openUserTurnMessageID = info.id;
-      }
     }
     if (info.sessionID === sessionID && info.role === "assistant") {
       const events: ReplEvent[] = [];
-      // Mobile-Companion Part B: assistant message.updated is the primary turn boundary.
-      // Prepend the flushed foreign-user-turn (if any) so it renders before this assistant
-      // turn's block-retag / parent-turn-end / message-completed events.
-      const userTurnEvent = flushOpenUserTurn();
-      if (userTurnEvent) events.push(userTurnEvent);
+      // Per-messageID identity classification: assistant message.updated is the
+      // primary turn boundary. Prepend any classified foreign-user-turn events so
+      // they render before this assistant turn's block-retag / parent-turn-end /
+      // message-completed events.
+      const userTurnEvents = classifyOpenUserTurns();
+      events.push(...userTurnEvents);
       // Summary detection: if this assistant message is marked summary=true,
       // retag any already-open text parts to role "summary".
       if (info.summary === true && !summaryMessageIDs.has(info.id)) {
@@ -694,11 +673,10 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     }
     openParts.clear();
     seenPartIDs.clear();
-    // Mobile-Companion Part B: backstop flush if a foreign turn arrived but no assistant
-    // message.updated followed before idle.
-    const userTurnEvent = flushOpenUserTurn();
-    const userTurn = userTurnEvent ? [userTurnEvent] : [];
-    return [...userTurn, { kind: "parent-turn-end", reason: "idle" }, { kind: "session-idle" }, ...closeEvents];
+    // Per-messageID identity classification: backstop classify if a foreign turn
+    // arrived but no assistant message.updated followed before idle.
+    const userTurnEvents = classifyOpenUserTurns();
+    return [...userTurnEvents, { kind: "parent-turn-end", reason: "idle" }, { kind: "session-idle" }, ...closeEvents];
   }
 
   if (event.type === "session.error") {

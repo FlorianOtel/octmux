@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach } from "bun:test";
-import { filterEvent, resetEventState, recordSubmittedUserText, peekSubmittedUserText } from "./events.ts";
+import { filterEvent, resetEventState, recordOwnMessageID } from "./events.ts";
 
 const PARENT_SID = "ses_parent_harness";
 const CHILD_SID  = "ses_child_planner";
@@ -789,19 +789,18 @@ describe("filterEvent — parallel multi-task dispatch out-of-order", () => {
 describe("filterEvent — Mobile-Companion Part B: foreign-user-turn detection", () => {
   const asArray = (out: any) => Array.isArray(out) ? out : (out ? [out] : []);
 
-  // (a) Local single-part turn → no foreign-user-turn; FIFO consumed
-  test("local single-part turn → no foreign-user-turn; FIFO consumed", () => {
-    recordSubmittedUserText("hello world");
+  // (a) Local single-part turn → no foreign-user-turn; ownership recorded before message
+  test("local single-part turn → no foreign-user-turn; ownership recorded before message", () => {
+    recordOwnMessageID("msg_local");
     filterEvent(userMsgUpdated("msg_local"), PARENT_SID);
     filterEvent(userTextPart("msg_local", "p1", "hello world"), PARENT_SID);
     const out = filterEvent(assistantMsgUpdated("msg_asst_a"), PARENT_SID);
     expect(asArray(out).some((e: any) => e.kind === "foreign-user-turn")).toBe(false);
-    expect(peekSubmittedUserText()).toBeUndefined();  // FIFO consumed
   });
 
   // (b) Foreign single-part turn → foreign-user-turn emitted with reconstructed text
   test("foreign single-part turn → foreign-user-turn emitted with reconstructed text", () => {
-    // no recordSubmittedUserText
+    // no recordOwnMessageID
     filterEvent(userMsgUpdated("msg_f"), PARENT_SID);
     filterEvent(userTextPart("msg_f", "pf1", "from phone"), PARENT_SID);
     const out = filterEvent(assistantMsgUpdated("msg_asst_b"), PARENT_SID);
@@ -847,18 +846,64 @@ describe("filterEvent — Mobile-Companion Part B: foreign-user-turn detection",
     expect(arr.some((e: any) => e.kind === "session-idle")).toBe(true);
   });
 
-  // (f) resetEventState clears FIFO + accumulator; fresh foreign turn emits after reset
-  test("resetEventState clears FIFO + accumulator; fresh foreign turn emits after reset", () => {
-    recordSubmittedUserText("stale");
-    expect(peekSubmittedUserText()).toBe("stale");
+  // (f) resetEventState clears ownIDs; fresh foreign turn emits after reset
+  test("resetEventState clears ownIDs; fresh foreign turn emits after reset", () => {
+    recordOwnMessageID("stale");
+    filterEvent(userMsgUpdated("stale"), PARENT_SID);
+    filterEvent(userTextPart("stale", "p1", "stale text"), PARENT_SID);
     resetEventState();
-    expect(peekSubmittedUserText()).toBeUndefined();
     filterEvent(userMsgUpdated("msg_after"), PARENT_SID);
     filterEvent(userTextPart("msg_after", "p1", "fresh foreign"), PARENT_SID);
     const out = filterEvent(assistantMsgUpdated("msg_asst_f"), PARENT_SID);
     const evt = asArray(out).find((e: any) => e.kind === "foreign-user-turn");
     expect(evt).toBeTruthy();
+    expect(evt.messageID).toBe("msg_after");
     expect(evt.text).toBe("fresh foreign");
+  });
+});
+
+describe("filterEvent — Mobile-Companion Part B: ID model extensions", () => {
+  // (g) Slash-command expanded-template suppression
+  test("Slash-command expanded-template suppression: recordOwnMessageID before multi-line expanded text", () => {
+    const expandedTemplateText = `
+Here is the expanded template you requested:
+
+1. First item of the template
+2. Second item of the template
+3. Third item of the template
+4. Fourth item of the template
+5. Fifth item of the template
+
+[END OF TEMPLATE]
+`;
+    recordOwnMessageID("msg_brain_expanded");
+    filterEvent(userMsgUpdated("msg_brain_expanded"), PARENT_SID);
+    filterEvent(userTextPart("msg_brain_expanded", "p1", expandedTemplateText), PARENT_SID);
+    const out = filterEvent(assistantMsgUpdated("msg_asst_g"), PARENT_SID);
+    const arr = Array.isArray(out) ? out : (out ? [out] : []);
+    expect(arr.some((e: any) => e.kind === "foreign-user-turn")).toBe(false);
+  });
+
+  // (h) Interleave — foreign between two local turns
+  test("Interleave — foreign between two local turns: exactly one foreign-user-turn emitted", () => {
+    recordOwnMessageID("msg_local_a");
+    filterEvent(userMsgUpdated("msg_local_a"), PARENT_SID);
+    filterEvent(userTextPart("msg_local_a", "p1", "local a text"), PARENT_SID);
+    
+    filterEvent(userMsgUpdated("msg_foreign"), PARENT_SID);
+    filterEvent(userTextPart("msg_foreign", "p1", "foreign text"), PARENT_SID);
+    
+    recordOwnMessageID("msg_local_b");
+    filterEvent(userMsgUpdated("msg_local_b"), PARENT_SID);
+    filterEvent(userTextPart("msg_local_b", "p1", "local b text"), PARENT_SID);
+    
+    const out = filterEvent(assistantMsgUpdated("msg_asst_h"), PARENT_SID);
+    const arr = Array.isArray(out) ? out : (out ? [out] : []);
+    expect(arr.some((e: any) => e.kind === "foreign-user-turn")).toBe(true);
+    const evt = arr.find((e: any) => e.kind === "foreign-user-turn");
+    expect(evt).toBeTruthy();
+    expect(evt.messageID).toBe("msg_foreign");
+    expect(evt.text).toBe("foreign text");
   });
 });
 
