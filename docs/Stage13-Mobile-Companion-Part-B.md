@@ -2,8 +2,8 @@
 title: "Stage 13 — Mobile Companion Part B (foreign-user-turn rendering)"
 created_at: 2026-06-15--18-51
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/minimax-m3 Planner + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: Actor (local/qwen3-4b-q6) via /duo pipeline (Brain: local/claude-opus-4-8) — 2026-06-16--11-29
-updated_at: 2026-06-16--11-29
+updated_by: Actor (sohoai/qwen3-4b-q6 + sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-17--02-05
+updated_at: 2026-06-17--02-05
 context: >
   Stage 13 implements Mobile Companion Part B: render foreign (mobile-originated) operator turns in the octmux transcript while suppressing locally-submitted turns. Builds on Part A's whole-turn commitUserInput primitive (commit f5103b0). Unconditional (no flag/env); inert without a mobile peer. Implemented on the feat/mobile-app worktree, not main.
 ---
@@ -50,3 +50,17 @@ context: >
 - Validation cost: submit-time only (not per-keystroke).
 
 **Out of scope:** No change to the mobile app; no redesign of session sharing; no SSE event model changes; no persistence of `activeModel` to disk.
+
+### 2026-06-17--02-05 — Stage 13.x — client-supplied messageID for own-turn echo suppression (regression fix)
+**Implemented by:** Actor (sohoai/qwen3-4b-q6 + sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-17--02-05
+**Commit(s):** `pending`
+
+**Problem:** Two Stage 13 regressions: (1) operator input echoed TWICE during /brain and /duo (orchestra) sessions; (2) at the start of a /brain or /duo session the entire EXPANDED slash-command markdown template was rendered as a giant green-inverted operator-input block.
+
+**Root cause:** Stage 13's text-FIFO echo-suppression compared the raw submitted text against the server's SSE user-message echo. For slash commands (`/brain`, `/duo`) the OpenCode server expands the command into its FULL template before creating the user message (opencode prompt.ts:1540-1589), so the SSE user text = the expanded template, which never equals the raw `/brain ...` line recorded in the FIFO → that turn renders as a foreign-user-turn (regression #2). And because the exact-equality FIFO only shifts on a MATCH (events.ts:157-163), the unmatched `/brain` entry stayed stuck at the head, poisoning every subsequent normal-prompt lookup → those also rendered a second time (regression #1). Native (non-orchestra) sessions were unaffected because they have no slash-command expansion (FIFO stayed clean). Question-modal answers were unaffected (they use commitSystemMessage + tool-result, not the FIFO).
+
+**Solution:** octmux now MINTS its own user-message id (`msg_<ts36><rand36>`, server schema only requires the `msg` prefix per opencode session/schema.ts:10) and passes it as `body.messageID` on both SSE-visible submit paths (`session.promptAsync` default + `session.command` slash forward; server uses the client id verbatim per prompt.ts:722-723). events.ts records own ids in an `ownMessageIDs` Set and classifies each user turn PER messageID identity: own id → suppress; otherwise → emit foreign-user-turn. The text-FIFO machinery (`submittedUserTexts`, `recordSubmittedUserText`, `peekSubmittedUserText`, `consumeSubmittedUserText`, `flushOpenUserTurn`) and the single mutable `openUserTurnMessageID` slot were retired and replaced by `recordOwnMessageID(id)` + `classifyOpenUserTurns()`.
+
+**Interleave safety:** because classification is by id identity (not order/count), a mobile (foreign) turn interleaved between two local turns is judged independently — foreign rendered once, both local suppressed. This was the explicit operator requirement (mobile + octmux operators interleaved on the same shared session). An explicit interleave unit test guards it. Mobile foreign-user-turn rendering is preserved (foreign ids are not in ownMessageIDs → still emitted/rendered).
+
+**Tests:** the 6 Part B tests were migrated to the ID model; 2 new tests added (slash-command expanded-template suppression; interleave foreign-between-two-locals). events.test.ts 48/0; full suite 241 pass / 0 fail. Binary rebuilt via scripts/build.sh.

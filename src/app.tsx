@@ -6,7 +6,7 @@ import * as path from "path";
 import { LineEditor } from "./editor.ts";
 import { replaySession } from "./replay.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
-import { filterEvent, resetEventState, synthesizeSessionIdleEvents, hasOpenStreamingPart, recordSubmittedUserText, type ReplEvent } from "./events.ts";
+import { filterEvent, resetEventState, synthesizeSessionIdleEvents, hasOpenStreamingPart, recordOwnMessageID, type ReplEvent } from "./events.ts";
 import { isSessionDescendant } from "./utils/session-ancestry.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand, parseResyncCommand } from "./commands.ts";
@@ -29,6 +29,15 @@ import { expandCommands } from "./command-registry.ts";
 import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, prettyModelName, contextLabel, validateModel } from "./utils/formatters.ts";
 
 const TOGGLES_CONFIG = loadTogglesConfig();
+
+/**
+ * Mint a fresh user-message ID. Server schema only requires "msg" prefix (opencode
+ * session/schema.ts:10 isStartsWith("msg")). Uniqueness across this session lifetime is
+ * the goal; a collision with a foreign client's id is astronomically unlikely.
+ */
+function mintUserMessageID(): string {
+  return "msg_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
 
 type MessageForUsageScan = {
   info: {
@@ -1192,7 +1201,7 @@ export function App(props: AppProps) {
     // /exit — clean shutdown
     const exitResult = parseExitCommand(text);
     if (exitResult.handled) {
-      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT recordSubmittedUserText (would corrupt the FIFO).
+      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       renderer.commitSystemMessage("exiting…");
       await props.onExit();
@@ -1202,7 +1211,7 @@ export function App(props: AppProps) {
     // /new / /clear — create a new session
     const newResult = parseNewCommand(text);
     if (newResult.handled) {
-      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT recordSubmittedUserText (would corrupt the FIFO).
+      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       try {
         const resp = await props.client.session.create({ query: { directory: process.cwd() } });
@@ -1216,7 +1225,7 @@ export function App(props: AppProps) {
     // /compact / /summarize — compact the current session
     const compactResult = parseCompactCommand(text);
     if (compactResult.handled) {
-      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT recordSubmittedUserText (would corrupt the FIFO).
+      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       if (!activeModel) {
         renderer.commitSystemMessage("/compact requires an active model — use /model first");
@@ -1237,7 +1246,7 @@ export function App(props: AppProps) {
     // /sessions / /resume — pick a past session to resume
     const sessionsResult = parseSessionsCommand(text);
     if (sessionsResult.handled) {
-      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT recordSubmittedUserText (would corrupt the FIFO).
+      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       try {
         const resp = await props.client.session.list();
@@ -1257,7 +1266,7 @@ export function App(props: AppProps) {
     // /fork — fork the current session into a child
     const forkResult = parseForkCommand(text);
     if (forkResult.handled) {
-      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT recordSubmittedUserText (would corrupt the FIFO).
+      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       try {
         const resp = await props.client.session.fork({ path: { id: sessionID } });
@@ -1271,7 +1280,7 @@ export function App(props: AppProps) {
     // /resync — force a full re-fetch of session state (Stage 4.5.3)
     const resyncResult = parseResyncCommand(text);
     if (resyncResult.handled) {
-      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT recordSubmittedUserText (would corrupt the FIFO).
+      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       await handleResync();
       return;
@@ -1279,7 +1288,7 @@ export function App(props: AppProps) {
     // /rename <name> — rename session in DB and tmux windows
     const renameResult = parseRenameCommand(text);
     if (renameResult.handled) {
-      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT recordSubmittedUserText (would corrupt the FIFO).
+      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       if (!renameResult.newLabel) {
         renderer.commitSystemMessage("usage: /rename <name>");
@@ -1298,7 +1307,7 @@ export function App(props: AppProps) {
     // /model — display or set AI model
     const modelResult = parseModelCommand(text);
     if (modelResult.handled) {
-      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT recordSubmittedUserText (would corrupt the FIFO).
+      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       if (modelResult.action === "list") {
         try {
@@ -1369,7 +1378,7 @@ export function App(props: AppProps) {
     // /help — list all known slash commands
     const helpResult = parseHelpCommand(text, opencodeCommands);
     if (helpResult.handled) {
-      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT recordSubmittedUserText (would corrupt the FIFO).
+      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       const lines = (helpResult.reply ?? "").split("\n");
       for (const line of lines) renderer.commitSystemMessage(line);
@@ -1378,7 +1387,7 @@ export function App(props: AppProps) {
     // /show — output gate status
     const showResult = parseShowCommand(text, renderer);
     if (showResult.handled) {
-      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT recordSubmittedUserText (would corrupt the FIFO).
+      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       renderer.commitSystemMessage(showResult.reply ?? "");
       return;
@@ -1386,7 +1395,7 @@ export function App(props: AppProps) {
     // /<key>-output [on|off] — output gate toggle/query
     const outputResult = parseBlockOutputCommand(text, renderer);
     if (outputResult.handled) {
-      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT recordSubmittedUserText (would corrupt the FIFO).
+      // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       renderer.commitSystemMessage(outputResult.reply ?? "");
       setGateStates(prev => {
@@ -1403,10 +1412,12 @@ export function App(props: AppProps) {
       if (opencodeCommands.has(cmdName)) {
         const args = parts.slice(1).join(" ");
         // Mobile-Companion Part B: /cmd forwards produce a user SSE message on the server
-        // (via session.command below), so we MUST record the text for FIFO dedup. The
-        // local-only commands above (/exit, /new, etc.) do NOT and must not push.
+        // (via session.command below), which produces an SSE user message on the server. We mint
+        // and record an own messageID so that SSE echo is recognised and suppressed. The local-only
+        // commands above (/exit, /new, etc.) emit no SSE user message and must not mint/record.
         renderer.commitUserInput(text);
-        recordSubmittedUserText(text);
+        const ownID = mintUserMessageID();
+        recordOwnMessageID(ownID);
         setLastSubmitted(text);
         if (activeModel) {
           const supportsTools = await getToolCallSupport(
@@ -1437,13 +1448,14 @@ export function App(props: AppProps) {
             }
           }
         }
-        setIsGenerating(true);
+       setIsGenerating(true);
         try {
           await props.client.session.command({
             path: { id: sessionID },
             body: {
               command: cmdName,
               arguments: args,
+              messageID: ownID,
               ...(activeModel ? { model: `${activeModel.providerID}/${activeModel.modelID}` } : {}),
             },
           });
@@ -1469,7 +1481,8 @@ export function App(props: AppProps) {
     setLastSubmitted(text);
     // Mobile-Companion Part B: record this locally-submitted text so the SSE echo of
     // our own turn is recognised and suppressed (not re-rendered as a foreign turn).
-    recordSubmittedUserText(text);
+    const ownID = mintUserMessageID();
+    recordOwnMessageID(ownID);
     renderer.commitUserInput(text);
     setIsGenerating(true);
 
@@ -1495,6 +1508,7 @@ export function App(props: AppProps) {
         path: { id: sessionID },
         body: {
           parts: [{ type: "text", text }],
+          messageID: ownID,
           ...(activeModel ? { model: activeModel } : {}),
         },
       });
