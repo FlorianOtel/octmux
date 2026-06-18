@@ -296,6 +296,11 @@ export function App(props: AppProps) {
   const ctrlcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionIDRef = useRef(sessionID);
   const watcherRef = useRef<InstanceType<typeof OrchestraWatcher> | null>(null);
+  // Ref mirror of `activeModel` state for use inside applyReplEvents (avoids deps churn).
+  const activeModelRef = useRef<{ providerID: string; modelID: string } | null>(null);
+  useEffect(() => {
+    activeModelRef.current = activeModel;
+  }, [activeModel]);
 
   // Stage 4.5.3: SSE health tracking and reconciliation
   const [sseHealth, setSseHealth] = useState<"ok" | "reconnecting" | "silent">("ok");
@@ -915,6 +920,22 @@ export function App(props: AppProps) {
         }
         else if (ev.kind === "subagent-activity") {
           watcherRef.current?.notifySubagentActivity(ev.sessionID, ev.ts);
+        }
+        else if (ev.kind === "model-switched") {
+          // A foreign client (e.g. P4OC mobile app) switched the model on a shared session.
+          // Adopt the new model only if it's available locally (validated via validateModel).
+          if (ev.sessionID === sessionIDRef.current) {
+            (async () => {
+              const valid = await validateModel(props.client, ev.providerID, ev.modelID);
+              if (valid) {
+                setActiveModel({ providerID: valid.providerID, modelID: valid.modelID });
+              } else {
+                renderer.commitSystemMessage(
+                  `session model switched to ${ev.providerID}/${ev.modelID} (not available here — keeping ${activeModelRef.current?.modelID ?? "current"})`
+                );
+              }
+            })();
+          }
         }
         else if (ev.kind === "foreign-user-turn") {
           // Mobile-Companion Part B: a foreign client (mobile companion) submitted a user

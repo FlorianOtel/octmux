@@ -2,8 +2,8 @@
 title: "Stage 13 — Mobile Companion Part B (foreign-user-turn rendering)"
 created_at: 2026-06-15--18-51
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/minimax-m3 Planner + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: Actor (sohoai/qwen3-4b-q6) — 2026-06-17--18-43
-updated_at: 2026-06-17--18-43
+updated_by: local/qwen3-4b-q6 — 2026-06-18--05-30
+updated_at: 2026-06-18--05-30
 context: >
   Stage 13 implements Mobile Companion Part B: render foreign (mobile-originated) operator turns in the octmux transcript while suppressing locally-submitted turns. Builds on Part A's whole-turn commitUserInput primitive (commit f5103b0). Unconditional (no flag/env); inert without a mobile peer. Implemented on the feat/mobile-app worktree, not main.
 ---
@@ -85,6 +85,37 @@ present). Full suite: 241 pass / 0 fail.
 - Validation cost: submit-time only (not per-keystroke).
 
 **Out of scope:** No change to the mobile app; no redesign of session sharing; no SSE event model changes; no persistence of `activeModel` to disk.
+
+### 2026-06-18--05-30 — Model Switch Event Handling (status-line update via session.next.model.switched)
+**Implemented by:** local/qwen3-4b-q6 — 2026-06-18--05-30
+**Commit(s):** `pending`
+
+**Problem:** When a foreign client (e.g. P4OC mobile app) switches the model on a shared OpenCode session, octmux's status-line `activeModel` remained stale. The OC backend emits `session.next.model.switched` on the SSE `/event` stream when a prompt runs on a model different from `session.model`, but octmux dropped this event (no `filterEvent` branch), so `activeModel` was never updated in real-time. This caused the status bar to show an outdated model after a foreign client took over the session.
+
+**Root cause:** The SDK (`@opencode-ai/sdk`) has no type for `session.next.model.switched`, so `filterEvent` in `src/events.ts` fell through to `return null` when encountering this event. The existing guard (commit `672e202`) prevented `refreshTokenUsage` from calling `setActiveModel` to avoid foreign-turn hijack, but that guard only addressed the display-only issue; it did not provide real-time model-switch detection via the explicit event.
+
+**Solution:**
+1. **Add event type** (`src/events.ts`): Added `model-switched` variant to the `ReplEvent` union: `| { kind: "model-switched"; sessionID: string; providerID: string; modelID: string }`.
+
+2. **Add filterEvent branch** (`src/events.ts`): Added a new branch in `filterEvent` that handles `session.next.model.switched` events. Because the SDK Event type lacks this variant, we cast locally: `const e = event as unknown as { type: string; properties?: { sessionID?: string; model?: { id?: string; providerID?: string } } }`. The branch gates on `e.properties?.sessionID === sessionID` (harness session only) and validates that `model.providerID` + `model.id` are both present, returning the normalized event or `null`.
+
+3. **Handle in applyReplEvents** (`src/app.tsx`): Added a handler for `ev.kind === "model-switched"` in the `applyReplEvents` sync loop. The handler:
+   - Gates adoption to the current harness session (`ev.sessionID === sessionIDRef.current`)
+   - Runs `validateModel(props.client, ev.providerID, ev.modelID)` in a background async (fire-and-forget, since the loop is sync)
+   - If valid: calls `setActiveModel({ providerID: valid.providerID, modelID: valid.modelID })`
+   - If invalid: commits a system message: `session model switched to ${ev.providerID}/${ev.modelID} (not available here — keeping ${activeModelRef.current?.modelID ?? "current"})`
+   
+   Also added an `activeModelRef` (ref mirror of `activeModel` state with `useEffect` sync) to read the current model for the "keeping X" message without adding `activeModel` to the `applyReplEvents` deps array.
+
+4. **Complements commit `672e202`**: This fix adds real-time model-switch adoption via the explicit `session.next.model.switched` event, gated by the same `validateModel` helper, while leaving `refreshTokenUsage` untouched (as per the original guard). The token-bar context window auto-refreshes when a valid switch is adopted via the existing `getContextWindow` effect.
+
+5. **Binary rebuild**: `bash scripts/build.sh` → `dist/octmux` builds cleanly.
+
+6. **Tests**: Full suite passes (246 pass / 0 fail).
+
+**Out of scope:** No change to `refreshTokenUsage`; no change to the submit-time `validateModel` defense-in-depth; no new UI surfaces or confirmation prompts; no persistence changes; no change to `/model` command, session-switch seeding, or mount seeding.
+
+---
 
 ### 2026-06-17--02-05 — Stage 13.x — client-supplied messageID for own-turn echo suppression (regression fix)
 **Implemented by:** Actor (sohoai/qwen3-4b-q6 + sohoai/glm-5.1) via /brain pipeline (Brain: anthropic/claude-opus-4-8) — 2026-06-17--02-05

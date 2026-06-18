@@ -40,7 +40,8 @@ export type ReplEvent =
   | { kind: "subagent-ended"; sessionID: string }
   | { kind: "subagent-activity"; sessionID: string; ts: number }
   | { kind: "parent-turn-end"; reason: "idle" | "aborted" | "error" }
-  | { kind: "foreign-user-turn"; messageID: string; text: string };
+  | { kind: "foreign-user-turn"; messageID: string; text: string }
+  | { kind: "model-switched"; sessionID: string; providerID: string; modelID: string };
 
 // Track user message IDs so we don't echo the user's own input back to them.
 // opencode fires message.part.updated for user messages too — we skip them.
@@ -690,6 +691,32 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
     const e = event as EventSessionCompacted;
     if (e.properties.sessionID !== sessionID) return null;
     return { kind: "session-compacted", sessionID };
+  }
+
+  // Model switch event: foreign client switched the model on a shared session.
+  // The SDK Event union lacks this type, so we cast locally and gate on sessionID.
+  if ((event as { type: string }).type === "session.next.model.switched") {
+    const e = event as unknown as {
+      type: string;
+      properties?: {
+        sessionID?: string;
+        model?: {
+          id?: string;
+          providerID?: string;
+        };
+      };
+    };
+    if (e.properties?.sessionID === sessionID &&
+        e.properties?.model?.providerID &&
+        e.properties?.model?.id) {
+      return {
+        kind: "model-switched",
+        sessionID: e.properties.sessionID,
+        providerID: e.properties.model.providerID,
+        modelID: e.properties.model.id,
+      };
+    }
+    return null;
   }
 
   if (event.type === "session.idle") {
