@@ -88,7 +88,7 @@ present). Full suite: 241 pass / 0 fail.
 
 ### 2026-06-18--05-30 — Model Switch Event Handling (status-line update via session.next.model.switched)
 **Implemented by:** local/qwen3-4b-q6 — 2026-06-18--05-30
-**Commit(s):** `pending`
+**Commit(s):** `73b5b15`
 
 **Problem:** When a foreign client (e.g. P4OC mobile app) switches the model on a shared OpenCode session, octmux's status-line `activeModel` remained stale. The OC backend emits `session.next.model.switched` on the SSE `/event` stream when a prompt runs on a model different from `session.model`, but octmux dropped this event (no `filterEvent` branch), so `activeModel` was never updated in real-time. This caused the status bar to show an outdated model after a foreign client took over the session.
 
