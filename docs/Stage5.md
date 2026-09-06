@@ -424,7 +424,7 @@ in the planner output.
 
 ### 2026-09-06--13-21 — Stage 5.1.x — --resume/--resume-last/--fork directory-scoping fix
 **Implemented by:** Actor (Claude Haiku 4.5) — 2026-09-06--13-21
-**Commit(s):** _pending — operator commits and backfills this hash_
+**Commit(s):** `4b0ca9a`
 
 **Bug:** `--resume`, `--resume-last`, and `--fork` never rebind the SSE subscription to the resumed session's own directory. The SDK client is created once at startup with the launch `cwd`, and the session lookup (via `bootstrapClient`) reads the target session's `.directory` server-side but that directory is never used. The SSE subscription (`client.global.event({})`) stays bound to the launch directory, so if the resumed session lives in a different project directory, the subscription silently yields zero live events — only heartbeats. AYA experiment -1a passed this by luck because octmux was launched from the session's own directory.
 

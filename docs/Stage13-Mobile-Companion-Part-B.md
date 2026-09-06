@@ -10,7 +10,7 @@ context: >
 
 ### 2026-09-06--13-21 — Stage 13.x — append-cadence flush for foreign user turns (per-messageID debounce)
 **Implemented by:** Actor (Claude Haiku 4.5) — 2026-09-06--13-21
-**Commit(s):** _pending — operator commits and backfills this hash_
+**Commit(s):** `4b0ca9a`
 
 **Problem:** AYA appends one utterance per message to an OpenCode session via `prompt_async` with `noReply: true`, at a cadence of 3–10s per utterance. Because `noReply` returns before `loop()`, no assistant message, busy status, or `session.idle` is emitted. octmux accumulates user text parts in `accumulatedUserTexts` but drains them only at turn boundaries (assistant `message.updated` or `session.idle`), so an operator attached to the session sees *nothing* for the entire meeting, then the whole backlog bursts in immediately ahead of the first answer they ask for. The design preserves the eight existing `foreign-user-turn` contract tests (Part A invariants).
 

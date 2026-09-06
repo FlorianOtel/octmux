@@ -29,7 +29,7 @@ context: >
 
 ## 0. Resolution -- what was implemented in octmux
 
-Implemented on octmux `main` from HEAD `c959e0a`. Commit: `_pending -- backfill this hash_`.
+Implemented on octmux `main` from HEAD `c959e0a`. Commit: `4b0ca9a`.
 Pipeline artefacts (research, plan, review) are at
 `.claude/orchestra/sessions/20260906T104118Z-3198564/`.
 
