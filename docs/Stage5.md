@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-06-17--00-00
+updated_by: Actor (Claude Haiku 4.5) — 2026-09-06--13-21
+updated_at: 2026-09-06--13-21
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -421,6 +421,20 @@ in the planner output.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-09-06--13-21 — Stage 5.1.x — --resume/--resume-last/--fork directory-scoping fix
+**Implemented by:** Actor (Claude Haiku 4.5) — 2026-09-06--13-21
+**Commit(s):** _pending — operator commits and backfills this hash_
+
+**Bug:** `--resume`, `--resume-last`, and `--fork` never rebind the SSE subscription to the resumed session's own directory. The SDK client is created once at startup with the launch `cwd`, and the session lookup (via `bootstrapClient`) reads the target session's `.directory` server-side but that directory is never used. The SSE subscription (`client.global.event({})`) stays bound to the launch directory, so if the resumed session lives in a different project directory, the subscription silently yields zero live events — only heartbeats. AYA experiment -1a passed this by luck because octmux was launched from the session's own directory.
+
+**Fix:** (1) Rename the original client to `bootstrapClient` for session lookup. (2) Capture the resolved session's own `.directory` in each of the three resume/fork branches. (3) After the if/else chain, derive `effectiveCwd` — use the resolved directory if it differs from launch cwd, otherwise use cwd. (4) Rebind the client: if `effectiveCwd === cwd`, reuse `bootstrapClient`; otherwise create a new client with `effectiveCwd`. (5) Update the `<App>` prop from `cwd={cwd}` to `cwd={effectiveCwd}` so the five raw `fetch()` sites that send `x-opencode-directory` stay consistent with the rebound client (per memory `feedback-oc-directory-header`).
+
+**Scope note:** this step fixes only the post-hoc rebinding for SSE subscription directory. It does NOT fix `session.list()`'s own directory-scoping for `--resume-last` (server-side concern), `--fork`'s child-creation directory semantics (separate design decision), or `OrchestraWatcher`'s `process.cwd()` matching (deliberately left unchanged — resuming into a foreign directory may leave the orchestra badge unresolved).
+
+**Verification:** no behavioural change for the common case (resolved session in launch directory → `effectiveCwd === cwd`, `client === bootstrapClient`, zero code path difference); cross-directory verification is covered by the E2E acceptance run.
+
+---
 
 ### 2026-06-15--22-40 — Stage 5.9.1 — silence git stderr leak on the non-repo `-w` path
 

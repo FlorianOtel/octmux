@@ -257,17 +257,21 @@ process.on("SIGTERM", async () => { await serverHandle?.dispose(); await rendere
 // all raw fetch() calls so OC's directory-scoped endpoints return the right data.
 const cwd = process.cwd();
 
-const client    = createOpencodeClient({ baseUrl, directory: cwd });
+// Bootstrap client for session lookup. The actual subscription directory is determined by
+// the resolved session's own .directory (server-side: workspace-routing.ts:181-182),
+// not by the launch cwd.
+const bootstrapClient = createOpencodeClient({ baseUrl, directory: cwd });
 
 // Determine which session to use: resume by ID, resume last, fork, or create new.
 // Capture both banner and sessionLabel: banner for startup confirmation, sessionLabel for chrome.
 let sessionID: string;
 let sessionLabel: string;
 let startupBanner: string | null = null;
+let resolvedDirectory: string | undefined;
 if (resumeArg) {
   // --resume <id>: validate that the session exists
   try {
-    const resp = await client.session.get({ path: { id: resumeArg } });
+    const resp = await bootstrapClient.session.get({ path: { id: resumeArg } });
     if (!resp.data?.id) {
       console.error(`octmux: session not found: ${resumeArg}`);
       process.exit(1);
@@ -276,6 +280,7 @@ if (resumeArg) {
     const title = resp.data.title ?? "";
     sessionLabel = title || sessionID.slice(0, 8);
     startupBanner = `resumed session ${sessionID.slice(0, 8)}${title ? ` — "${title}"` : ""}`;
+    resolvedDirectory = resp.data.directory;
   } catch (err) {
     console.error(`octmux: failed to resume session ${resumeArg}: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -283,7 +288,7 @@ if (resumeArg) {
 } else if (resumeLast) {
   // --resume-last: find the most recently updated session
   try {
-    const resp = await client.session.list();
+    const resp = await bootstrapClient.session.list();
     const sessions = resp.data ?? [];
     if (sessions.length === 0) {
       console.error("octmux: no sessions found to resume");
@@ -295,6 +300,7 @@ if (resumeArg) {
     const title = sessions[0].title ?? "";
     sessionLabel = title || sessionID.slice(0, 8);
     startupBanner = `resumed session ${sessionID.slice(0, 8)}${title ? ` — "${title}"` : ""} (most recent)`;
+    resolvedDirectory = sessions[0].directory;
   } catch (err) {
     console.error(`octmux: failed to list sessions: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -302,12 +308,12 @@ if (resumeArg) {
 } else if (forkArg) {
   // --fork <id>: validate parent exists, then fork it and attach to the child.
   try {
-    const parent = await client.session.get({ path: { id: forkArg } });
+    const parent = await bootstrapClient.session.get({ path: { id: forkArg } });
     if (!parent.data?.id) {
       console.error(`octmux: parent session not found: ${forkArg}`);
       process.exit(1);
     }
-    const child = await client.session.fork({ path: { id: forkArg }, query: { directory: cwd } });
+    const child = await bootstrapClient.session.fork({ path: { id: forkArg }, query: { directory: cwd } });
     if (!child.data?.id) {
       console.error(`octmux: fork returned no child session for parent ${forkArg}`);
       process.exit(1);
@@ -315,6 +321,7 @@ if (resumeArg) {
     sessionID = child.data.id;
     sessionLabel = sessionID.slice(0, 8);
     startupBanner = `forked from ${forkArg.slice(0, 8)} → ${sessionID.slice(0, 8)}`;
+    resolvedDirectory = child.data.directory;
   } catch (err) {
     console.error(`octmux: failed to fork session ${forkArg}: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -322,10 +329,17 @@ if (resumeArg) {
 } else {
   // Default: create a new session anchored to octmux's launch directory.
   // Without this, OC inherits the daemon's cwd ($HOME) instead of where octmux was invoked.
-  const session = await client.session.create({ query: { directory: cwd } });
+  const session = await bootstrapClient.session.create({ query: { directory: cwd } });
   sessionID = session.data!.id;
   sessionLabel = sessionID.slice(0, 8);
 }
+
+// Rebind the client to the resolved session's own directory if it differs from launch cwd.
+// This ensures the SSE subscription subscribes to events in the correct project directory.
+const effectiveCwd = resolvedDirectory && resolvedDirectory !== cwd ? resolvedDirectory : cwd;
+const client = effectiveCwd === cwd
+  ? bootstrapClient
+  : createOpencodeClient({ baseUrl, directory: effectiveCwd });
 
 const eventStream = await client.global.event({});
 
@@ -406,7 +420,7 @@ const appElement = (
     onExit={async () => { await serverHandle?.dispose(); await renderer.dispose(); }}
     baseUrl={baseUrl}
     renderer={renderer}
-    cwd={cwd}
+    cwd={effectiveCwd}
     onRedraw={() => onRedraw()}
     setPasteCallback={pasteFilter.setPasteCallback}
     singleMode={single}

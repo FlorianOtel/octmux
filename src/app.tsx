@@ -5,8 +5,9 @@ import type { Command as OcCommand } from "@opencode-ai/sdk/client";
 import * as path from "path";
 import { LineEditor } from "./editor.ts";
 import { replaySession } from "./replay.ts";
+import { UserTurnDebouncer } from "./user-turn-debouncer.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
-import { filterEvent, resetEventState, synthesizeSessionIdleEvents, hasOpenStreamingPart, recordOwnMessageID, recordOwnCommandPrefix, type ReplEvent } from "./events.ts";
+import { filterEvent, resetEventState, synthesizeSessionIdleEvents, hasOpenStreamingPart, recordOwnMessageID, recordOwnCommandPrefix, classifyUserTurn, type ReplEvent } from "./events.ts";
 import { isSessionDescendant } from "./utils/session-ancestry.ts";
 import { mintUserMessageID } from "./message-id.ts";
 import { formatLine } from "./blocks.ts";
@@ -753,6 +754,10 @@ export function App(props: AppProps) {
     await replaySession(props.client, renderer, sid, editor);
   }, [props.client, renderer, editor]);
 
+  // Per-messageID debouncer for foreign user turns (Stage 13.x).
+  const userTurnDebouncerRef = useRef<UserTurnDebouncer | null>(null);
+  if (!userTurnDebouncerRef.current) userTurnDebouncerRef.current = new UserTurnDebouncer();
+
   // Stage 4.5.3: Shared helper for processing ReplEvents from both live SSE and reconciler.
   // Routes all event mutations through a single code path to guarantee multi-window FIFO safety.
   // Permission responses are fired in background without awaiting (mirrors original code).
@@ -944,11 +949,34 @@ export function App(props: AppProps) {
           // own generating event in normal order.
           renderer.commitUserInput(ev.text);
         }
+        else if (ev.kind === "foreign-user-part") {
+          userTurnDebouncerRef.current?.arm(ev.messageID);
+        }
       } catch (err) {
         renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }, [props.client, renderer, refreshTokenUsage]);
+
+  // Reassign every render — same pattern as runReconcilerPassRef (~:411-455) —
+  // so onFire always calls the CURRENT applyReplEvents/isGeneratingRef closures.
+  useEffect(() => {
+    userTurnDebouncerRef.current?.setCallbacks({
+      isHeld: () => isGeneratingRef.current,
+      onFire: (messageID) => {
+        const events = classifyUserTurn(messageID);
+        if (events.length > 0) applyReplEvents(events);
+      },
+    });
+  });
+
+  // Release anything that elapsed while isGenerating was true — keyed on STATE,
+  // not on a single event kind, so it fires uniformly whichever path ended the
+  // turn (session-idle, parent-turn-end/abort/error, Ctrl-C, switchSession,
+  // session-compacted — all flip isGenerating false).
+  useEffect(() => {
+    if (!isGenerating) userTurnDebouncerRef.current?.flushHeld();
+  }, [isGenerating]);
 
   // One-shot: fetch initial model from server and seed token-usage from the
   // latest assistant message. Fires on mount and on session switch (sessionID
@@ -1130,6 +1158,7 @@ export function App(props: AppProps) {
       setIsGenerating(false);
     }
     resetEventState();
+    userTurnDebouncerRef.current?.reset();
     renderer.clearAll();
     setProcTimes({ thinking: null, tools: null, generating: null });
     setLastSubmitted("");

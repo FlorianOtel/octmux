@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach } from "bun:test";
-import { filterEvent, resetEventState, recordOwnMessageID } from "./events.ts";
+import { filterEvent, resetEventState, recordOwnMessageID, recordOwnCommandPrefix, classifyUserTurn, classifyOpenUserTurns } from "./events.ts";
 
 const PARENT_SID = "ses_parent_harness";
 const CHILD_SID  = "ses_child_planner";
@@ -913,6 +913,128 @@ Here is the expanded template you requested:
     expect(evt).toBeTruthy();
     expect(evt.messageID).toBe("msg_foreign");
     expect(evt.text).toBe("foreign text");
+  });
+});
+
+describe("classifyUserTurn — per-id classification for app-layer debounce", () => {
+  // (a) untracked messageID → returns []
+  test("untracked messageID returns empty array", () => {
+    resetEventState();
+    const out = classifyUserTurn("msg_unknown");
+    expect(out).toEqual([]);
+  });
+
+  // (b) foreign messageID with multi-part accumulated text → single foreign-user-turn with "\n"-joined text
+  test("foreign messageID with multi-part text returns joined foreign-user-turn", () => {
+    resetEventState();
+    filterEvent(userMsgUpdated("msg_foreign_multi"), PARENT_SID);
+    filterEvent(userTextPart("msg_foreign_multi", "p1", "part 1"), PARENT_SID);
+    filterEvent(userTextPart("msg_foreign_multi", "p2", "part 2"), PARENT_SID);
+
+    const out = classifyUserTurn("msg_foreign_multi");
+    expect(out.length).toBe(1);
+    expect(out[0]).toEqual({ kind: "foreign-user-turn", messageID: "msg_foreign_multi", text: "part 1\npart 2" });
+  });
+
+  // (c) own messageID → returns [] and does not leak into later classifyOpenUserTurns()
+  test("own messageID returns empty array and does not appear in classifyOpenUserTurns", () => {
+    resetEventState();
+    recordOwnMessageID("msg_own");
+    filterEvent(userMsgUpdated("msg_own"), PARENT_SID);
+    filterEvent(userTextPart("msg_own", "p1", "own text"), PARENT_SID);
+
+    const ownOut = classifyUserTurn("msg_own");
+    expect(ownOut).toEqual([]);
+
+    const allOut = classifyOpenUserTurns();
+    expect(allOut).toEqual([]);
+  });
+
+  // (d) idempotent: second call on the same messageID → returns []
+  test("second call on same messageID is idempotent (returns empty)", () => {
+    resetEventState();
+    filterEvent(userMsgUpdated("msg_idempotent"), PARENT_SID);
+    filterEvent(userTextPart("msg_idempotent", "p1", "text"), PARENT_SID);
+
+    const first = classifyUserTurn("msg_idempotent");
+    expect(first.length).toBe(1);
+
+    const second = classifyUserTurn("msg_idempotent");
+    expect(second).toEqual([]);
+  });
+
+  // (e) regression: two foreign IDs where first is command-prefix-suppressed
+  //     Classified via one classifyOpenUserTurns() call; second (sibling) id still emits.
+  //     This reproduces the old bug where the early return aborted the loop.
+  test("regression: prefix-suppressed id does not abort sibling classification", () => {
+    resetEventState();
+    recordOwnCommandPrefix("# command-prefix:");
+
+    filterEvent(userMsgUpdated("msg_prefixed"), PARENT_SID);
+    filterEvent(userTextPart("msg_prefixed", "p1", "# command-prefix: text"), PARENT_SID);
+
+    filterEvent(userMsgUpdated("msg_sibling"), PARENT_SID);
+    filterEvent(userTextPart("msg_sibling", "p2", "sibling text"), PARENT_SID);
+
+    const out = classifyOpenUserTurns();
+    // prefixed id should be suppressed, sibling should emit
+    const siblingEvent = out.find((e: any) => e.messageID === "msg_sibling");
+    expect(siblingEvent).toBeTruthy();
+    expect(siblingEvent.kind).toBe("foreign-user-turn");
+    expect(siblingEvent.text).toBe("sibling text");
+
+    const prefixedEvent = out.find((e: any) => e.messageID === "msg_prefixed");
+    expect(prefixedEvent).toBeFalsy();
+  });
+});
+
+describe("filterEvent — foreign-user-part signal (Stage 13.x)", () => {
+  // (a) foreign + unclassified messageID → returns { kind: "foreign-user-part", messageID }
+  test("foreign unclassified text part returns foreign-user-part signal", () => {
+    resetEventState();
+    filterEvent(userMsgUpdated("msg_fp_foreign"), PARENT_SID);
+
+    const out = filterEvent(userTextPart("msg_fp_foreign", "p1", "text"), PARENT_SID);
+    expect(out).toEqual({ kind: "foreign-user-part", messageID: "msg_fp_foreign" });
+  });
+
+  // (b) own messageID → returns null (not the signal)
+  test("own messageID text part returns null (no signal)", () => {
+    resetEventState();
+    recordOwnMessageID("msg_fp_own");
+    filterEvent(userMsgUpdated("msg_fp_own"), PARENT_SID);
+
+    const out = filterEvent(userTextPart("msg_fp_own", "p1", "text"), PARENT_SID);
+    expect(out).toBeNull();
+  });
+
+  // (c) already-classified messageID (classify first, then late straggler part) → returns null
+  test("already-classified messageID straggler part returns null (no signal)", () => {
+    resetEventState();
+    filterEvent(userMsgUpdated("msg_fp_late"), PARENT_SID);
+    filterEvent(userTextPart("msg_fp_late", "p1", "text"), PARENT_SID);
+
+    // Classify via the debouncer call
+    classifyUserTurn("msg_fp_late");
+
+    // Late-arriving part for the same messageID
+    const out = filterEvent(userTextPart("msg_fp_late", "p2", "straggler"), PARENT_SID);
+    expect(out).toBeNull();
+  });
+
+  // (d) synthetic/ignored parts → still return null (guard still applies)
+  test("synthetic/ignored text parts return null (guard applied)", () => {
+    resetEventState();
+    filterEvent(userMsgUpdated("msg_fp_synth"), PARENT_SID);
+
+    const outSynthetic = filterEvent(userTextPart("msg_fp_synth", "p1", "text", { synthetic: true }), PARENT_SID);
+    expect(outSynthetic).toBeNull();
+
+    resetEventState();
+    filterEvent(userMsgUpdated("msg_fp_ignored"), PARENT_SID);
+
+    const outIgnored = filterEvent(userTextPart("msg_fp_ignored", "p1", "text", { ignored: true }), PARENT_SID);
+    expect(outIgnored).toBeNull();
   });
 });
 

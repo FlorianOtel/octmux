@@ -41,6 +41,7 @@ export type ReplEvent =
   | { kind: "subagent-activity"; sessionID: string; ts: number }
   | { kind: "parent-turn-end"; reason: "idle" | "aborted" | "error" }
   | { kind: "foreign-user-turn"; messageID: string; text: string }
+  | { kind: "foreign-user-part"; messageID: string }
   | { kind: "model-switched"; sessionID: string; providerID: string; modelID: string };
 
 // Track user message IDs so we don't echo the user's own input back to them.
@@ -124,6 +125,9 @@ const summaryMessageIDs = new Set<string>();
 const partIDToMessageID = new Map<string, string>();
 
 // Reset event tracking state on session switch.
+// Note: foreign-user-part is computed purely from existing sets already cleared here
+// (userMessageIDs, ownMessageIDs, classifiedUserMessageIDs, accumulatedUserTexts).
+// No new module-level state is needed.
 export function resetEventState(): void {
   userMessageIDs.clear();
   openParts.clear();
@@ -168,6 +172,42 @@ export function recordOwnCommandPrefix(prefix: string): void {
 }
 
 /**
+ * Private helper: classify a single user message ID and return events.
+ *
+ * This extraction (rather than a literal return-in-loop) fixes a bug where one
+ * command-prefix-suppressed ID would abort classification of *other* pending IDs
+ * via an early return. Returning [] for just that ID lets the caller's for-loop
+ * continue to classify siblings. The extraction is also needed to share logic with
+ * the new per-id export classifyUserTurn.
+ */
+function classifyOneUserTurn(id: string): ReplEvent[] {
+  if (classifiedUserMessageIDs.has(id)) return [];
+  classifiedUserMessageIDs.add(id);
+  if (ownMessageIDs.has(id)) {
+    // Own turn — already optimistically rendered; suppress.
+    accumulatedUserTexts.delete(id);
+    return [];
+  }
+  // Foreign turn — check prefix backstop before emitting event.
+  const parts = accumulatedUserTexts.get(id);
+  accumulatedUserTexts.delete(id);
+  const joined = (parts ?? []).join("\n");
+  // Backstop: if the user turn starts with our custom command prefix,
+  // suppress it (same as own-turn) to prevent the full .md command from
+  // being rendered as user input.
+  for (const prefix of ownCommandPrefixes) {
+    if (joined.startsWith(prefix)) {
+      // Suppress — same as own-turn, emit nothing
+      return [];
+    }
+  }
+  if (joined !== "") {
+    return [{ kind: "foreign-user-turn", messageID: id, text: joined }];
+  }
+  return [];
+}
+
+/**
  * Classify all unclassified user message IDs. For each:
  *  - own (in ownMessageIDs): suppressed — delete accumulated text, emit nothing.
  *  - foreign: join accumulated text parts with "\n", delete accumulated text,
@@ -178,32 +218,17 @@ export function recordOwnCommandPrefix(prefix: string): void {
  */
 export function classifyOpenUserTurns(): ReplEvent[] {
   const events: ReplEvent[] = [];
-  for (const id of userMessageIDs) {
-    if (classifiedUserMessageIDs.has(id)) continue;
-    classifiedUserMessageIDs.add(id);
-    if (ownMessageIDs.has(id)) {
-      // Own turn — already optimistically rendered; suppress.
-      accumulatedUserTexts.delete(id);
-    } else {
-      // Foreign turn — check prefix backstop before emitting event.
-      const parts = accumulatedUserTexts.get(id);
-      accumulatedUserTexts.delete(id);
-      const joined = (parts ?? []).join("\n");
-      // Backstop: if the user turn starts with our custom command prefix,
-      // suppress it (same as own-turn) to prevent the full .md command from
-      // being rendered as user input.
-      for (const prefix of ownCommandPrefixes) {
-        if (joined.startsWith(prefix)) {
-          // Suppress — same as own-turn, emit nothing
-          return events;
-        }
-      }
-      if (joined !== "") {
-        events.push({ kind: "foreign-user-turn", messageID: id, text: joined });
-      }
-    }
-  }
+  for (const id of userMessageIDs) events.push(...classifyOneUserTurn(id));
   return events;
+}
+
+/**
+ * Classify a single user message ID by its ID (app-layer debounce call path).
+ * Returns 0..1 events. Idempotent: a second call for the same ID returns [].
+ */
+export function classifyUserTurn(messageID: string): ReplEvent[] {
+  if (!userMessageIDs.has(messageID)) return [];
+  return classifyOneUserTurn(messageID);
 }
 
 // Attempt to pair pending task parts with unmatched children.
@@ -419,6 +444,13 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
         const arr = accumulatedUserTexts.get(part.messageID) ?? [];
         arr.push(part.text);
         accumulatedUserTexts.set(part.messageID, arr);
+        // App-layer debounce "arm" signal (Stage 13.x): emit foreign-user-part for this
+        // text part. Suppressed for own turns and already-classified ids (stray/late
+        // duplicate delivery). The synthetic/ignored guard above still returns null before
+        // reaching this point.
+        if (!ownMessageIDs.has(part.messageID) && !classifiedUserMessageIDs.has(part.messageID)) {
+          return { kind: "foreign-user-part", messageID: part.messageID };
+        }
         return null;
       }
       // First time (len=0 creation): open block and emit generating.

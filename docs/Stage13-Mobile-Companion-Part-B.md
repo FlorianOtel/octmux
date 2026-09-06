@@ -2,10 +2,26 @@
 title: "Stage 13 — Mobile Companion Part B (foreign-user-turn rendering)"
 created_at: 2026-06-15--18-51
 created_by: OpenCode Brain pipeline (Anthropic Opus 4.7 orchestrator + sohoai/minimax-m3 Planner + sohoai/qwen3-4b-q6 + sohoai/glm-5.1 Actors)
-updated_by: local/qwen3-4b-q6 — 2026-06-18--05-30
-updated_at: 2026-06-18--05-30
+updated_by: Actor (Claude Haiku 4.5) — 2026-09-06--13-21
+updated_at: 2026-09-06--13-21
 context: >
   Stage 13 implements Mobile Companion Part B: render foreign (mobile-originated) operator turns in the octmux transcript while suppressing locally-submitted turns. Builds on Part A's whole-turn commitUserInput primitive (commit f5103b0). Unconditional (no flag/env); inert without a mobile peer. Implemented on the feat/mobile-app worktree, not main.
+---
+
+### 2026-09-06--13-21 — Stage 13.x — append-cadence flush for foreign user turns (per-messageID debounce)
+**Implemented by:** Actor (Claude Haiku 4.5) — 2026-09-06--13-21
+**Commit(s):** _pending — operator commits and backfills this hash_
+
+**Problem:** AYA appends one utterance per message to an OpenCode session via `prompt_async` with `noReply: true`, at a cadence of 3–10s per utterance. Because `noReply` returns before `loop()`, no assistant message, busy status, or `session.idle` is emitted. octmux accumulates user text parts in `accumulatedUserTexts` but drains them only at turn boundaries (assistant `message.updated` or `session.idle`), so an operator attached to the session sees *nothing* for the entire meeting, then the whole backlog bursts in immediately ahead of the first answer they ask for. The design preserves the eight existing `foreign-user-turn` contract tests (Part A invariants).
+
+**Fix:** per-messageID debounce with the timer owned by the app layer (not `events.ts`):
+1. `src/events.ts` gains `classifyUserTurn(messageID)` — a single-id variant of `classifyOpenUserTurns()`, reusing own-turn suppression and the `ownCommandPrefixes` backstop, and a new lightweight `ReplEvent` variant `{ kind: "foreign-user-part"; messageID }` emitted from the user-text branch when the part is accumulated, the ID is foreign, and not yet classified.
+2. `src/user-turn-debouncer.ts` (new module) owns the debounce: on `foreign-user-part`, (re)arm a ~250 ms timer keyed on messageID; on fire, call `classifyUserTurn(id)` and hand events to `applyReplEvents` — the existing pattern the reconciler already uses.
+3. Hold while `isGenerating`: flushes are suppressed during streaming assistant answer, released when turn ends, so the answer renders as one intact block.
+4. Bug fix (handover §5.4): the old `classifyOpenUserTurns` used `return events;` inside the loop, aborting classification of every *other* pending id once one prefix-matched id was found; extracted `classifyOneUserTurn(id)` returning `[]` just for that id lets the loop continue — fixes the sibling-id suppression bug.
+
+**Tests:** 9 new tests for `classifyUserTurn` and `foreign-user-part` in `src/events.test.ts`; 9 new tests for the debouncer module. All eight existing `foreign-user-turn` tests (a)–(h) pass unchanged.
+
 ---
 
 ### 2026-06-17--11-34 — Stage 13.x — early "generating" signal on turn-created (TTFT blind-window fix)
