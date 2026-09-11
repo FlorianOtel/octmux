@@ -28,7 +28,7 @@ context: >
 
 ### 2026-09-11--16-36 — Stage 8.1.7 — Stall watchdog blind spot for hung Task-tool dispatches
 **Implemented by:** OpenCode (Claude Sonnet 5) — 2026-09-11--16-36
-**Commit(s):** `_pending — operator commits and backfills this hash_`
+**Commit(s):** `ab2c159`
 
 **Incident**: session `ses_f745c04b5ffeJyHtX3cG0M4lp8` (a `/brain` pipeline on project
 `AYA--ai-assistant`) dispatched a `task` tool call to an `actor-heavy` subagent
