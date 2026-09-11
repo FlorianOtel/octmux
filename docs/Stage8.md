@@ -2,8 +2,8 @@
 title: "Stage 8 — Live cost display (OC SDK) + orchestra inflight badge"
 created_at: 2026-05-29--08-27
 created_by: Claude Code (Claude Haiku 4.5)
-updated_by: Actor via /brain pipeline (Brain: claude-opus-4-8)
-updated_at: 2026-06-15--12-06
+updated_by: OpenCode (Claude Sonnet 5)
+updated_at: 2026-09-11--16-36
 context: >
   octmux's status bar shows live `Σ$X.XX` cost (from OC SDK `AssistantMessage.cost`,
   summed over parent session + one-level children) and an orchestra inflight badge
@@ -25,6 +25,71 @@ context: >
 ---
 
 ## Implementation log
+
+### 2026-09-11--16-36 — Stage 8.1.7 — Stall watchdog blind spot for hung Task-tool dispatches
+**Implemented by:** OpenCode (Claude Sonnet 5) — 2026-09-11--16-36
+**Commit(s):** `_pending — operator commits and backfills this hash_`
+
+**Incident**: session `ses_f745c04b5ffeJyHtX3cG0M4lp8` (a `/brain` pipeline on project
+`AYA--ai-assistant`) dispatched a `task` tool call to an `actor-heavy` subagent
+(`sohoai/glm-5.3`). The subagent's own model stream opened (SSE headers + a `reasoning`
+part with `time.start` recorded) then went silent forever — confirmed via
+`SoHoAI-gateway.log`: the LiteLLM router logged `200 OK` for the stream-open call at
+21:13:10, then zero further log lines of any kind for **11h37m**, no exception, no
+close. Root cause on the SoHoAI-gateway side was a missing idle-chunk timeout in its
+streaming proxy loop; root cause on the opencode-client side was that the `sohoai`
+provider had no `chunkTimeout`/`headerTimeout` configured (both fixed outside this
+repo — `~/.config/opencode/opencode.json` and the SoHoAI gateway respectively). This
+entry covers the octmux-side gap surfaced by the same incident.
+
+**Bug**: octmux's existing "stall watchdog" (`src/app.tsx`, SSE-silent-for-3min poll,
+introduced pre-Stage-8) only fires when the harness's newest assistant message has
+**zero parts**. Once a `task` tool call is dispatched, that message always has
+non-empty parts (its own text plus the tool-call part itself), so the watchdog bails
+out immediately and permanently for the rest of that turn — it is effectively dead
+code for every `/brain`/`/duo` Task dispatch, which is the majority of long-running
+octmux sessions. The operator had zero explicit in-transcript indication that anything
+was wrong for the full 11h37m; the only passive signal was the subagent's badge-row
+spinner freezing (`StatusLine.tsx` `ACTIVITY_FREEZE_MS = 120_000`) — easy to miss in a
+busy status bar, and (see note below) not even reliably followed by row removal.
+
+**Fix**: Extended the stall-watchdog effect in `src/app.tsx` with a second check layer.
+When the harness's newest assistant message has non-empty parts AND its last part is a
+`task` tool call still `state.status === "running"`, the watchdog now also polls the
+paired child session (`state.metadata.sessionId`, already present on the tool part —
+no dependency on `events.ts`'s internal SSE-pairing maps) via
+`session.messages({ path: { id: childSessionID } })` and checks *that* session's own
+newest-turn staleness independently of the harness's SSE clock. If the child's newest
+part is more than 3 minutes old with no `time.completed`, it shows an explicit
+`renderer.commitSystemMessage(...)` banner naming the stalled subagent's session ID,
+mirroring the existing zero-parts banner. Two new pure, exported helpers carry the
+logic and are unit-tested in isolation (matching the `pickPostSummaryAssistantTokenUsage`
+convention of colocating testable pure helpers in `app.tsx`):
+- `findRunningTaskChildSessionID(parts)` — returns the paired child session ID for a
+  running `task` tool call, or `null`.
+- `isTurnStale(parts, completedAt, now, thresholdMs)` — true if a turn shows no
+  timestamped progress within `thresholdMs` and isn't `completed`.
+
+**Test coverage**: new `src/stall-watchdog.test.ts`, 12 tests (5 for
+`findRunningTaskChildSessionID`, 7 for `isTurnStale`, including the exact incident
+shape — an unclosed `reasoning` part with `time.start` and no `time.end`). Full suite:
+287 pass / 1 pre-existing unrelated fail (`message-id.test.ts` hex-temporal-ordering,
+a hardcoded future-timestamp fixture that real time has since overtaken — not touched
+by this change).
+
+**Related discrepancy found during this investigation (not fixed here, flagging for a
+future entry)**: the Stage 8.1.6 log above states Layer C (`sweepStaleSubagents`) is
+"called on a 30s timer in `src/app.tsx`" — it is not. `sweepStaleSubagents()` is
+implemented and unit-tested (`src/orchestra-watch.test.ts`) but has no call site
+anywhere in `src/app.tsx`; `git log -S sweepStaleSubagents -- src/app.tsx` returns no
+hits. In practice this means a subagent row is never age-evicted — it freezes at 120s
+(cosmetic, `StatusLine.tsx`) and then stays frozen-but-visible indefinitely unless a
+genuine SSE lifecycle event (`session.idle`/`session.deleted`/task-tool
+completed-or-errored) fires `notifySubagentEnded`/`notifyAllSubagentsEnded`. This is
+lower-severity than the watchdog gap fixed above (the row staying visible is arguably
+more informative than silently vanishing), but the doc claim is inaccurate and worth
+reconciling — either wire up the 30s call the Stage 8.1.6 entry describes, or correct
+that entry to describe freeze-only behavior.
 
 ### 2026-06-15--12-06 — Stage 8.1.6 — Layered defense against orphaned subagent rows (interrupt-robust)
 **Implemented by:** Actor (sohoai/qwen3-4b-q6) — 2026-06-15--12-06

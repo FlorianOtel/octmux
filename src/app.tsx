@@ -162,6 +162,58 @@ export function pickPostSummaryAssistantTokenUsage(messages: MessageForUsageScan
   return { used, providerID: postSummaryModel.providerID, modelID: postSummaryModel.modelID };
 }
 
+type PartForStallCheck = {
+  type?: string;
+  tool?: string;
+  state?: { status?: string; metadata?: { sessionId?: string } };
+  time?: { start?: number; end?: number };
+};
+
+/**
+ * Pure helper for the stall watchdog (2026-09-11 incident, see docs/StageN.md):
+ * a harness turn can have non-empty `parts` (its own text plus the `task`
+ * tool-call part itself) yet still be genuinely stalled, because a `task`
+ * tool call stays `status: "running"` until the dispatched subagent's own
+ * model stream produces a result — and that stream can go silent forever
+ * with no further SSE event on the harness session (the subagent's session
+ * is a separate SSE-event source). The plain "does the newest message have
+ * any parts yet" check is blind to this case.
+ *
+ * Returns the subagent's session ID if the newest assistant message's LAST
+ * part is a `task` tool call still in `running` state and already paired to
+ * a child session, else null (not a task dispatch, already resolved, or not
+ * paired yet — too early to judge).
+ */
+export function findRunningTaskChildSessionID(parts: PartForStallCheck[]): string | null {
+  const last = parts[parts.length - 1];
+  if (!last || last.type !== "tool" || last.tool !== "task") return null;
+  if (last.state?.status !== "running") return null;
+  return last.state.metadata?.sessionId ?? null;
+}
+
+/**
+ * True if a turn shows no forward progress within `thresholdMs`: either it
+ * has no parts at all, or the newest timestamp across all parts (`time.start`
+ * / `time.end`, whichever is latest) is older than `now - thresholdMs`. A
+ * `completed` turn is never stale.
+ */
+export function isTurnStale(
+  parts: PartForStallCheck[],
+  completedAt: number | null | undefined,
+  now: number,
+  thresholdMs: number,
+): boolean {
+  if (completedAt != null) return false;
+  if (parts.length === 0) return true;
+  let newest = 0;
+  for (const p of parts) {
+    if (p.time?.start) newest = Math.max(newest, p.time.start);
+    if (p.time?.end) newest = Math.max(newest, p.time.end);
+  }
+  if (newest === 0) return true;
+  return now - newest >= thresholdMs;
+}
+
 function formatOptionsBlock(qs: QuestionType[]): string {
   return qs.map((q, qi) => {
     const opts = q.options
@@ -547,7 +599,12 @@ export function App(props: AppProps) {
     }
   }, [isGenerating]);
 
-  // Stall watchdog: detect when generation stalls (SSE silent for 3 min, but async generation ongoing)
+  // Stall watchdog: detect when generation stalls (SSE silent for 3 min, but async generation ongoing).
+  // 2026-09-11 incident: a Task-tool dispatch to a subagent left the harness's newest
+  // assistant message with non-empty parts (its own text + the running `task` tool
+  // call), so the original zero-parts check below never fires — even though the
+  // subagent's own session had gone silent for 11+ hours. Layer 2 below closes that
+  // gap by checking the paired child session's own staleness independently.
   useEffect(() => {
     if (!isGenerating) {
       stallBannerShownRef.current = false;
@@ -564,12 +621,33 @@ export function App(props: AppProps) {
         const newest = assistants[assistants.length - 1];
         const parts = newest.parts ?? [];
         const completed = (newest.info as { time?: { completed?: number | null } }).time?.completed;
-        if (parts.length !== 0 || completed != null) return;
+        if (completed != null) return;
+
+        if (parts.length === 0) {
+          stallBannerShownRef.current = true;
+          renderer.commitSystemMessage("Generation stalled — press Ctrl-C to abort");
+          return;
+        }
+
+        // Layer 2: harness turn has content, but its last part may be a `task`
+        // tool call blocking on a subagent that has itself gone silent.
+        const childSessionID = findRunningTaskChildSessionID(parts as PartForStallCheck[]);
+        if (!childSessionID) return;
+        const childResp = await props.client.session.messages({ path: { id: childSessionID } });
+        const childMsgs = childResp.data ?? [];
+        const childAssistants = childMsgs.filter(m => m.info.role === "assistant");
+        if (childAssistants.length === 0) return;
+        const childNewest = childAssistants[childAssistants.length - 1];
+        const childCompleted = (childNewest.info as { time?: { completed?: number | null } }).time?.completed;
+        if (!isTurnStale((childNewest.parts ?? []) as PartForStallCheck[], childCompleted, Date.now(), 180_000)) return;
+
+        stallBannerShownRef.current = true;
+        renderer.commitSystemMessage(
+          `Subagent stalled (session ${childSessionID.slice(0, 12)}…) — no response for 3+ min. Press Ctrl-C to abort.`
+        );
       } catch {
         return;
       }
-      stallBannerShownRef.current = true;
-      renderer.commitSystemMessage("Generation stalled — press Ctrl-C to abort");
     }, 30_000);
     return () => clearInterval(t);
   }, [isGenerating, props.client, renderer]);
