@@ -158,7 +158,7 @@ When finishing a phase:
 
 ### 2026-09-13--21-56 — Stage 4.5.3.1: Fix dead `sseHealth: "silent"` state (SSE ok badge never degraded)
 **Implemented by:** OpenCode (Claude Sonnet 5) — 2026-09-13--21-56
-**Commit(s):** `_pending — operator commits and backfills this hash_`
+**Commit(s):** `60f60a2`
 
 **Context.** During debugging of an unrelated incident (a hung `/brain` Task-tool
 subagent stream, see `docs/Stage8.md` Stage 8.1.7), the operator asked why octmux's
