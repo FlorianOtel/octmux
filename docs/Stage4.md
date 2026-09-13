@@ -2,8 +2,8 @@
 title: "octmux — Stage 4: Status line + async streaming + Esc-interrupt + rich parts (planned)"
 created_at: 2026-05-21--20-18
 created_by: Claude Code (Claude Sonnet 4.6)
-updated_by: Anthropic Opus 4.7 (post-/brain non-pipeline hotfix)
-updated_at: 2026-06-07--19-50
+updated_by: OpenCode (Claude Sonnet 5)
+updated_at: 2026-09-13--21-56
 context: >
   Stage 4 is the next major phase focusing on the status line, async streaming,
   Esc-interrupt capability, and rich part rendering. This document contains
@@ -155,6 +155,74 @@ When finishing a phase:
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-09-13--21-56 — Stage 4.5.3.1: Fix dead `sseHealth: "silent"` state (SSE ok badge never degraded)
+**Implemented by:** OpenCode (Claude Sonnet 5) — 2026-09-13--21-56
+**Commit(s):** `_pending — operator commits and backfills this hash_`
+
+**Context.** During debugging of an unrelated incident (a hung `/brain` Task-tool
+subagent stream, see `docs/Stage8.md` Stage 8.1.7), the operator asked why octmux's
+`SSE ok` status-line badge never flagged anything wrong during an 11h37m hang. The
+short answer turned out to be correct and unrelated to that incident — `SSE ok` only
+measures the octmux↔opencode transport link, several hops upstream of where that
+specific stall occurred — but re-reading the `sseHealth` state machine this Stage
+introduced turned up a second, independent, pre-existing bug: the `"silent"` state
+could never actually be displayed, regardless of cause.
+
+**Bug.** Per this Stage's own design (§"Changes to reconciler polling effect" above):
+`sseHealth` is `"ok"` in steady state, `"reconnecting"` when the SSE transport itself
+breaks, and `"silent"` when >8s pass with no SSE event while generating. The
+silence-detection check (`if (isGeneratingRef.current && Date.now() -
+lastSseEventTimeRef.current > 8000) setSseHealth(prev => prev === "reconnecting" ?
+prev : "silent")`) lived *inside* `runReconcilerPassRef`'s pass — but that pass is
+itself only invoked by a `setInterval` that this Stage's own Layer-1 gate arms
+exclusively when `sseHealth !== "ok"` (`if (!isGenerating || sseHealth === "ok")
+return;`). Net effect: to detect "ok → silent" you first needed to already be
+non-`"ok"` — and the only other way to become non-`"ok"` is a genuine transport break
+(`"reconnecting"`), at which point the ternary explicitly declined to overwrite it
+with `"silent"` anyway. `"silent"` was therefore dead code from the moment this Stage
+shipped: the badge could only ever show `"ok"` or `"reconnecting"`, never `"silent"`,
+no matter how long SSE actually went quiet while the transport stayed nominally open.
+
+This is the exact same architectural mismatch this Stage's own iteration 3 (§"Bug 2 —
+MCP question modal never opens", line 547 above) and Stage 4.5.4.2 (unconditional
+discovery loop) already diagnosed and fixed for two *other* pieces of logic that used
+to live inside the same conditionally-armed reconciler pass: "a check nested inside a
+pass that only runs once a condition is already true can never be the thing that
+first detects that condition." Both of those were fixed by extracting the check into
+its own always-on interval. The silence-detection preamble was never given the same
+treatment and regressed into unreachable code as a result.
+
+**Fix.** Extracted the silence-detection preamble out of `runReconcilerPassRef` into
+its own unconditional `useEffect` (3s interval, no dependency gate — mirrors the
+Stage 4.5.4.2 discovery-loop pattern exactly) in `src/app.tsx`. `setSseHealth(prev =>
+prev === "ok" ? "silent" : prev)` — same intent as the original ternary (never
+downgrade an active `"reconnecting"` transport-break indication to the milder
+`"silent"`), just now reachable from the state it actually needs to fire from.
+`runReconcilerPassRef`'s own pass keeps its Layer 1 gate unchanged; it now correctly
+gets ARMED once the new unconditional check flips `sseHealth` to `"silent"`, which
+also means the reconciler's REST-based idle-synthesis fallback (Layers 2-4, designed
+for exactly the "transport fine but no deltas arriving" scenario) now actually gets a
+chance to run in that scenario for the first time, not just the badge display.
+
+**Does NOT relate to** the SoHoAI/opencode provider-timeout work (`docs/Stage8.md`
+Stage 8.1.7, `opencode.json` `chunkTimeout`/`headerTimeout`, SoHoAI `router.py`
+`IDLE_CHUNK_TIMEOUT_S`) — that incident's stall was in opencode server's own outbound
+HTTP call to a model provider, invisible to the octmux↔opencode SSE link this badge
+measures. The two fixes are independent layers; this entry is purely about restoring
+`sseHealth`'s own designed behavior.
+
+**Test coverage:** none added — this is a timing-dependent `useEffect`/`setInterval`
+change in a large, untested React component (`src/app.tsx` has no dedicated test
+file; see the `pickPostSummaryAssistantTokenUsage`-style pure-helper convention used
+elsewhere in this file for anything that *can* be isolated). Verified via full suite
+(275 pass / 1 pre-existing unrelated fail — `message-id.test.ts` hex-temporal-ordering,
+a hardcoded future-timestamp fixture overtaken by real time) and a targeted `tsc
+--noEmit` diff confirming no new type errors relative to `main`.
+
+**Files modified:** `src/app.tsx` only.
+
+---
 
 ### 2026-06-06--20-51 — Stage 4.4.5: default-model + ctx-window display at startup
 

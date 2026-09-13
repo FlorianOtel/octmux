@@ -471,11 +471,11 @@ export function App(props: AppProps) {
       // Stage 4.5.3 redesigned reconciler: four-layer guard on idle synthesis.
       // Layer 1 (trigger gate) + Layer 2 (recency) + Layer 3 (openParts) guard
       // the idle synthesis path. Question/permission discovery runs separately via runDiscoveryPassRef.
-
-      // Preamble: SSE silence detection (updates sseHealth state)
-      if (isGeneratingRef.current && Date.now() - lastSseEventTimeRef.current > 8000) {
-        setSseHealth(prev => prev === "reconnecting" ? prev : "silent");
-      }
+      // SSE silence detection (sseHealth "ok" -> "silent") runs separately too, on its own
+      // unconditional interval below (Stage 4.5.3.1) — it used to live here, but this whole
+      // pass is itself gated on `sseHealth !== "ok"` (see the polling effect below), which
+      // made the "ok" -> "silent" transition structurally unreachable: you needed to
+      // already be unhealthy to detect you'd gone unhealthy.
 
       // Idle synthesis path: guarded by layers 1–4
       // Layer 1: skip if SSE is healthy
@@ -572,6 +572,28 @@ export function App(props: AppProps) {
       } catch {}
     };
   });  // re-assign every render so closure captures current refs/state
+
+  // Stage 4.5.3.1: SSE silence detection — unconditional, fires every 3s regardless of
+  // sseHealth. Bug fix: this check used to live inside runReconcilerPassRef (above),
+  // which is itself only armed once sseHealth !== "ok" (the polling effect right below,
+  // introduced in the same Stage 4.5.3 this is a point-fix to). That made the
+  // "ok" -> "silent" transition dead code: the only way sseHealth could ever be
+  // non-"ok" here was via a genuine transport break (setSseHealth("reconnecting") in
+  // the SSE loop), at which point this check's ternary explicitly declined to
+  // overwrite "reconnecting" with "silent" anyway — so "silent" could never actually be
+  // displayed. Mirrors the Stage 4.5.4.2 fix applied to discovery for the same root cause
+  // (a check nested inside a conditionally-armed pass can't detect the condition that
+  // would arm it). This does NOT affect the earlier, separate SoHoAI/opencode timeout
+  // work (docs/Stage8.md Stage 8.1.7) — this is the octmux<->opencode SSE transport
+  // link, several hops upstream of where that incident's stall actually occurred.
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (isGeneratingRef.current && Date.now() - lastSseEventTimeRef.current > 8000) {
+        setSseHealth(prev => (prev === "ok" ? "silent" : prev));
+      }
+    }, 3000);
+    return () => clearInterval(t);
+  }, []);
 
   // Stage 4.5.3 redesign: Idle-synthesis polling — arms ONLY when SSE is degraded.
   // In steady-state SSE, NO polling. Belt-and-suspenders:
