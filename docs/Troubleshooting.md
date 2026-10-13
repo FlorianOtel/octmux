@@ -2,8 +2,8 @@
 title: "octmux — Troubleshooting Guide"
 created_at: 2026-05-19--17-46
 created_by: Claude Code (claude-code-kimi-k2.7)
-updated_by: Claude Code (Claude Sonnet 4.6)
-updated_at: 2026-05-20--10-45
+updated_by: Claude Code (Claude Haiku 5.5)
+updated_at: 2026-10-13--16-41
 context: >
   This document collects runtime errors, warnings, and edge cases encountered
   while running octmux against the opencode server. Each entry includes the
@@ -136,8 +136,7 @@ code. Evidence:
 
 The `_eventsCount: 1` (single event type) with a listener count of 11 suggests an
 opencode internal stream repeatedly adds listeners and fails to remove previous
-ones. Octmux opens a **persistent SSE stream** via `client.global.event({})`
-(`src/index.ts:129`), which likely triggers the leaky path in opencode's SSE
+ones. Octmux opens a **persistent SSE stream** via `backend.subscribeEvents()` (`V1Backend`, forwarding to `client.global.event({})`; `src/index.ts:129`), which likely triggers the leaky path in opencode's SSE
 handler.
 
 ### Impact
@@ -165,6 +164,7 @@ const proc = Bun.spawn([bin, "serve", "--port", String(port)], {
 Report to opencode with:
 - Full stack trace (as shown above).
 - opencode version (`opencode --version`).
+- octmux: opens this stream via `backend.subscribeEvents()` in `V1Backend`.
 - Reproduction: "Connect any client that opens `client.global.event({})` and
   observe `MaxListenersExceededWarning` after a few events."
 
