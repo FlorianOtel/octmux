@@ -3,7 +3,7 @@ title: "Stage 14 — OpenCode v2 detection, Basic auth, octmux.json config"
 created_at: 2026-10-13--13-25
 created_by: Claude Code (Claude Haiku 5.5)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-13--14-09
+updated_at: 2026-10-13--23-29
 context: >
   Operator request: octmux must support the OpenCode v2 API, which the MBP desktop
   app serves (OpenCode server 2.0.28, reached over an SSH tunnel). Stage 14 is
@@ -12,7 +12,8 @@ context: >
   and a loud v1 fallback. Native v2 session support is later work. The /brain
   session directory for this run is
   /mnt/nfs/Florian/Gin-AI/projects/octmux/.claude/orchestra/sessions/20261013T104013Z-1717914.
-  The design decisions are in that session's DECISIONS-draft.md (D1–D14, F1–F5).
+  The design decisions (D1–D17, F1–F5, M1–M8) are recorded in
+  docs/OpenCode-v2-decision-record.md §3.
 ---
 
 # Stage 14 — OpenCode v2 detection, Basic auth, octmux.json config

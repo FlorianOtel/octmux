@@ -2,8 +2,8 @@
 title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
-updated_by: Claude Code (Claude Haiku 5.5)
-updated_at: 2026-10-13--22-50
+updated_by: Claude Code (Claude Opus 5.5)
+updated_at: 2026-10-13--23-29
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -12,11 +12,10 @@ context: >
   sub-stages. 15.1 introduces a protocol-neutral `Backend` interface with the
   existing v1 wire code behind a `V1Backend` adapter, and zero behaviour change.
   15.2 adds `V2Backend` and the v2 core (sessions, prompts, events). 15.3 brings
-  v2 to feature parity with v1 and is shipped. The design decisions and the sub-stage plan are in
-  the /brain session directory
-  /mnt/nfs/Florian/Gin-AI/projects/octmux/.claude/orchestra/sessions/20261013T123149Z-1871118
-  (PLAN.md, review-comments.md). The v2 wire shapes are in
-  `docs/OpenCode-v2-protocol-capture.md`.
+  v2 to feature parity with v1 and is shipped. The architecture of the v1/v2 adaptation layer is
+  described end to end in `docs/OpenCode-v1-v2-adaptation-layer.md`. Every design
+  decision of Stages 14 and 15 is in `docs/OpenCode-v2-decision-record.md`. The v2 wire
+  shapes are in `docs/OpenCode-v2-protocol-capture.md`.
 ---
 
 # Stage 15 — OpenCode v2 native session support, Backend seam
@@ -44,8 +43,10 @@ v2 is at feature parity with v1, apart from the limits listed under "Known limit
 `Backend` (`src/backend/types.ts`) has three kinds of member:
 
 - `session: BackendSession` — session-scoped operations with flat named arguments:
-  `getMessages`, `getChildren`, `get`, `abort`, `create`, `compact`, `list`, `fork`,
-  `update`, `sendCommand`, `sendPrompt`, `setModel`. The interface doc-comment
+  `get`, `abort`, `create`, `compact`, `list`, `fork`, `update`, `sendCommand`,
+  `sendPrompt`, `setModel`. `getMessages` and `getChildren` are on `V1BackendSession`
+  only; `V2Backend` reads messages and children through its internal `fetchMessages`
+  and `fetchChildren`. The interface doc-comment
   states the resolution convention: a method whose call sites read the response
   resolves with the SDK response's `data`; a method whose call sites do not read it
   resolves `void`, or `{ interrupted }` for `abort`.
@@ -65,7 +66,7 @@ described in "`ReplEvent` v2-only kinds" below.
 
 ### Flat session arguments and `SessionRecord`
 
-Session methods take named arguments, for example `getMessages(sessionID)`,
+Session methods take named arguments, for example `get(sessionID)`,
 `compact(sessionID, model)`, `sendPrompt({ sessionID, text, promptID?, model? })`,
 and `replyPermission({ sessionID, permissionID, decision, message? })`. The SDK
 option-object wrapper (`{ path, query, body }`) does not appear in the interface.
@@ -129,8 +130,8 @@ they are inert on the v1 path:
 - `compaction-started`, `compaction-progress`, `compaction-ended`, `compaction-failed`.
 - `model-selected`: the model bound to the session. Kept distinct from the v1
   `model-switched` kind.
-- `resync-needed`: internal. Set when a durable `seq` gap is detected, so the caller
-  clears and replays.
+- `resync-needed`: internal. Set when a durable `seq` gap is detected. The caller runs an
+  incremental resync (`getMissedHistory`); nothing on screen is cleared.
 
 Two existing kinds gained a field:
 
@@ -243,8 +244,9 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
   generating state.
 - Own echo: octmux mints a prompt id for each prompt (`recordOwnMessageID`). The
   inbox echo that carries it is suppressed as an own turn. Own commands are matched
-  by the prefix of their expanded text (`recordOwnCommandPrefix`). Foreign user turns
-  are rendered through `classifyUserTurn`.
+  by the echo slot and, as a backstop, the prefix of their expanded text
+  (`recordOwnCommandPrefix`). A foreign user turn is emitted as `foreign-user-turn`
+  directly from `userInboxItem`; v2 `classifyUserTurn` returns `[]`.
 - Command echo slot: a command's POST returns no id, and one `user` item comes back per
   command. `recordOwnCommandPrefix` also arms one pending echo slot. The next user item that is
   not an own prompt and not already shown takes the slot and is suppressed, whatever its text.

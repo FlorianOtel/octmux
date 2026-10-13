@@ -52,7 +52,7 @@ Set `server.directory` when the OpenCode server runs on another host, or in a co
 - Cannot be combined with `--auto-spawn`. The spawned server is local, so octmux exits 2 and names the config file.
 - `--resume`, `--resume-last`, and `--fork` still use the resolved session's own directory, as they do without this key.
 - When set, octmux prints `octmux: using server directory <dir> (from <config path>)` at startup.
-- Local-only things still use the local working directory: the git branch and project name in the status line, and the orchestra session files. External commands are still read from `~/.config/opencode/commands/`.
+- Local-only things still use the local working directory: the git branch in the status line and the orchestra session files. The project name in the status line is the basename of `server.directory`. External commands are still read from `~/.config/opencode/commands/`.
 
 ### Substitution
 
