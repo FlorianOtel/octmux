@@ -6,6 +6,10 @@ import { execFileSync } from "node:child_process";
 import { readlinkSync } from "node:fs";
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { findFreePort, spawnOpencodeServer, type ServerHandle } from "./server-lifecycle.ts";
+import { getAuthHeaders, setAuthPassword } from "./auth-headers.ts";
+import { loadOctmuxConfig, type OctmuxConfig } from "./octmux-config.ts";
+import { detectProtocol, compareVersions, BUNDLED_OC_CLIENT_VERSION } from "./protocol-detect.ts";
+import { redactUrl } from "./utils/redact-url.ts";
 import { App } from "./app.tsx";
 import { Visibility } from "./renderer/visibility.ts";
 import { BlockBufferRenderer } from "./renderer/block-buffer.ts";
@@ -34,6 +38,7 @@ Display mode (required — select one):
 
 Options:
   --endpoint <url>  endpoint of running opencode server (default: http://127.0.0.1:4096)
+  --config <path>   path to octmux.json (default: ~/.config/octmux/octmux.json)
   --auto-spawn      spawn a new opencode server automatically (⚠ see below)
   --no-tmux-guard   skip tmux pane-context checks (for --multi-window in CI)
   --resume <id>     resume a past session by ID
@@ -78,6 +83,9 @@ const forkArg      = forkIdx !== -1 && args[forkIdx + 1] && !args[forkIdx + 1].s
 const worktreeIdx  = args.findIndex(a => a === "-w" || a === "--worktree");
 const worktreeFlag = worktreeIdx !== -1;
 const worktreeArg  = worktreeFlag && args[worktreeIdx + 1] && !args[worktreeIdx + 1].startsWith("-") ? args[worktreeIdx + 1] : undefined;
+// --config <path>: optional explicit config file. A missing value is a usage error (checked below).
+const configIdx    = args.indexOf("--config");
+const configPathArg = configIdx !== -1 && args[configIdx + 1] && !args[configIdx + 1].startsWith("--") ? args[configIdx + 1] : undefined;
 
 // --resume, --resume-last, --fork are mutually exclusive (each picks a different initial session).
 if ([resumeArg, resumeLast, forkArg].filter(Boolean).length > 1) {
@@ -91,18 +99,57 @@ if (worktreeFlag && (resumeArg || resumeLast || forkArg)) {
   process.exit(2);
 }
 
-// Validate and normalise the --endpoint URL (strip trailing slash).
+// --config must be followed by a path. Same exit code as the other usage errors.
+if (configIdx !== -1 && configPathArg === undefined) {
+  console.error("octmux: --config requires a path argument");
+  process.exit(2);
+}
+
+// ─── Config file + auth password (must run before any SDK client is built) ───
+// Loaded here, BEFORE endpoint resolution and BEFORE bootstrapClient is created.
+// The v1 SDK snapshots headers at createOpencodeClient() time, so the password
+// must already be stored by setAuthPassword() when the clients are constructed.
+// Null means no config file at the default path, which is normal.
+let loadedConfig: { config: OctmuxConfig; path: string } | null = null;
+try {
+  loadedConfig = loadOctmuxConfig(configPathArg);
+} catch (err) {
+  // Config errors are already self-describing and name the file, so only the prefix is added here.
+  console.error(`octmux: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+setAuthPassword(loadedConfig?.config.server?.password);
+
+// ─── Endpoint resolution ─────────────────────────────────────────────────────
+// Precedence: --endpoint flag > config server.url > DEFAULT_ENDPOINT.
+// The flag and the config value go through the same URL validation and normalisation
+// (new URL(), then strip the trailing slash).
 const DEFAULT_ENDPOINT = "http://127.0.0.1:4096";
+const configUrlRaw = loadedConfig?.config.server?.url;
 let endpointUrl: string;
+// Records where the endpoint came from, so the unreachable message can say so.
+let endpointSource: "flag" | "config" | "default";
 if (endpointArg !== undefined) {
   try {
     endpointUrl = new URL(endpointArg).toString().replace(/\/$/, "");
   } catch {
-    console.error(`octmux: invalid --endpoint URL: ${endpointArg}`);
+    // The value is deliberately not echoed: an unparseable string may still carry credentials.
+    console.error("octmux: invalid --endpoint URL (not parseable)");
     process.exit(2);
   }
+  endpointSource = "flag";
+} else if (configUrlRaw !== undefined) {
+  try {
+    endpointUrl = new URL(configUrlRaw).toString().replace(/\/$/, "");
+  } catch {
+    // The value is deliberately not echoed: a URL can carry credentials.
+    console.error(`octmux: invalid server.url in ${loadedConfig?.path}: not a valid URL`);
+    process.exit(1);
+  }
+  endpointSource = "config";
 } else {
   endpointUrl = DEFAULT_ENDPOINT;
+  endpointSource = "default";
 }
 
 // No display mode selected — operator must choose explicitly.
@@ -195,21 +242,13 @@ if (worktreeFlag) {
 
 // ─── Server lifecycle ─────────────────────────────────────────────────────────
 
-async function isOpencodeHealthy(url: string): Promise<boolean> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 3_000);
-  try {
-    const resp = await fetch(`${url}/health`, { signal: ctrl.signal }).catch(() => null);
-    return resp?.ok ?? false;
-  } catch { return false; }
-  finally { clearTimeout(timer); }
-}
-
 let baseUrl: string;
 let serverHandle: ServerHandle | null = null;
 
 if (autoSpawn) {
   // Explicit opt-in: spawn a new opencode instance on any free port.
+  // If a config server.url is also present, --auto-spawn wins (it is checked first here),
+  // and the config URL is ignored. The spawned server is local v1, with no detection call.
   const port = await findFreePort(4096, 4106);
   if (port === null) { console.error("no free port in [4096, 4106]"); process.exit(1); }
   console.log(`spawning opencode server on port ${port}…`);
@@ -221,14 +260,60 @@ if (autoSpawn) {
   }
   baseUrl = serverHandle.url;
 } else {
-  // Default (no flags) or explicit --endpoint: connect to a running server.
+  // Default (no flags), config server.url, or explicit --endpoint: connect to a running server.
   // Default endpoint is http://127.0.0.1:4096 — the systemd user service.
   baseUrl = endpointUrl;
-  const isDefault = endpointArg === undefined;
-  if (!(await isOpencodeHealthy(baseUrl))) {
-    if (isDefault) {
+
+  // Probe the endpoint and learn which protocol it speaks (v2, v1, or neither).
+  // Each outcome below either continues (v1 only) or exits with a message that names
+  // the file and key to fix. Secrets are never printed.
+  const protocol = await detectProtocol(baseUrl);
+  const hasPassword = loadedConfig?.config.server?.password !== undefined;
+  // Every message below that shows the endpoint uses this credential-free form.
+  const displayUrl = redactUrl(baseUrl);
+  // Path shown in messages. When no config file exists, loadOctmuxConfig returns null
+  // and the path that was checked is the default location.
+  const configPathLabel = loadedConfig?.path ?? "~/.config/octmux/octmux.json";
+
+  if (protocol.kind === "v1") {
+    // Legacy v1 server: warn loudly, then fall through to the existing v1 code path unchanged.
+    console.warn(`⚠ octmux: OpenCode v1 server detected at ${displayUrl} — falling back to the v1 API (v2 not available on this server).`);
+  } else if (protocol.kind === "v1-unauthorized" || protocol.kind === "v2-unauthorized") {
+    // The server answered 401, so it requires a password. The two cases differ only in the name.
+    const serverLabel = protocol.kind === "v1-unauthorized" ? "OpenCode v1 server" : "OpenCode v2 server";
+    if (!hasPassword) {
+      console.error(`octmux: ${serverLabel} at ${displayUrl} requires authentication — set server.password in ${configPathLabel}`);
+    } else {
+      // A password was sent and rejected. Name the file, never the value.
+      console.error(`octmux: credentials from ${configPathLabel} (server.password) were rejected by ${displayUrl}`);
+    }
+    process.exit(1);
+  } else if (protocol.kind === "v2-authorized") {
+    // A v2 server is reachable and auth works, but this build has no native v2 session
+    // support, so octmux always exits here. Version gating runs first, so the operator
+    // sees a mismatch warning before the final message.
+    const { version } = protocol;
+    const gate = compareVersions(version, BUNDLED_OC_CLIENT_VERSION);
+    if (gate === "major-mismatch") {
+      console.error(`octmux: OpenCode server ${version} major version differs from bundled client ${BUNDLED_OC_CLIENT_VERSION} — refusing`);
+      process.exit(1);
+    } else if (gate === "server-newer-minor") {
+      console.error(`octmux: OpenCode server ${version} is newer than the bundled client ${BUNDLED_OC_CLIENT_VERSION} (same major version)`);
+    } else if (gate === "server-older-minor") {
+      console.warn(`⚠ octmux: OpenCode server ${version} is OLDER than the bundled client ${BUNDLED_OC_CLIENT_VERSION} — some requests may be rejected`);
+    } else if (gate === "unparseable") {
+      console.warn(`⚠ octmux: could not compare OpenCode server version ${version} with bundled client ${BUNDLED_OC_CLIENT_VERSION}`);
+    }
+    // gate === "exact" prints nothing extra.
+    console.error(`octmux: OpenCode v2 server ${version} detected at ${displayUrl}; auth OK. Native v2 session support is not yet implemented in this octmux build.`);
+    process.exit(1);
+  } else {
+    // "unreachable": no protocol identified at this endpoint. Keep the rich hints for the
+    // default and config-sourced endpoints. An explicit --endpoint gets the short form.
+    if (endpointSource !== "flag") {
+      const origin = endpointSource === "config" ? `config ${loadedConfig?.path}` : "default";
       console.error(
-        `✗  no opencode server at ${baseUrl} (default).\n` +
+        `✗  no opencode server at ${displayUrl} (${origin}).\n` +
         `\n` +
         `Start the server first, then retry:\n` +
         `  systemctl --user start opencode-server  # systemd user service\n` +
@@ -240,10 +325,12 @@ if (autoSpawn) {
         `--auto-spawn is available but use with caution:\n` +
         `  Multiple opencode instances risk SQLite locking errors and memory\n` +
         `  bloat from duplicate MCP/LSP processes. Prefer the systemd service.\n` +
-        `  See scripts/opencode-server.service.`
+        `  See scripts/opencode-server.service.\n` +
+        `\n` +
+        `probe detail: ${protocol.detail}`
       );
     } else {
-      console.error(`health: failed — no opencode server at ${baseUrl}`);
+      console.error(`health: failed — no opencode server at ${displayUrl} (${protocol.detail})`);
     }
     process.exit(1);
   }
@@ -260,7 +347,7 @@ const cwd = process.cwd();
 // Bootstrap client for session lookup. The actual subscription directory is determined by
 // the resolved session's own .directory (server-side: workspace-routing.ts:181-182),
 // not by the launch cwd.
-const bootstrapClient = createOpencodeClient({ baseUrl, directory: cwd });
+const bootstrapClient = createOpencodeClient({ baseUrl, directory: cwd, headers: getAuthHeaders() });
 
 // Determine which session to use: resume by ID, resume last, fork, or create new.
 // Capture both banner and sessionLabel: banner for startup confirmation, sessionLabel for chrome.
@@ -339,7 +426,7 @@ if (resumeArg) {
 const effectiveCwd = resolvedDirectory && resolvedDirectory !== cwd ? resolvedDirectory : cwd;
 const client = effectiveCwd === cwd
   ? bootstrapClient
-  : createOpencodeClient({ baseUrl, directory: effectiveCwd });
+  : createOpencodeClient({ baseUrl, directory: effectiveCwd, headers: getAuthHeaders() });
 
 const eventStream = await client.global.event({});
 

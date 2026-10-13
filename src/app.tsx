@@ -9,6 +9,7 @@ import { UserTurnDebouncer } from "./user-turn-debouncer.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
 import { filterEvent, resetEventState, synthesizeSessionIdleEvents, hasOpenStreamingPart, recordOwnMessageID, recordOwnCommandPrefix, classifyUserTurn, type ReplEvent } from "./events.ts";
 import { isSessionDescendant } from "./utils/session-ancestry.ts";
+import { getAuthHeaders } from "./auth-headers.ts";
 import { mintUserMessageID } from "./message-id.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand, parseResyncCommand } from "./commands.ts";
@@ -513,7 +514,7 @@ export function App(props: AppProps) {
       // Question/permission discovery: run unconditionally (safe modal recovery, no stream mutation)
       // 1. Missed question discovery
       try {
-        const r = await fetch(`${props.baseUrl}/question`, { headers: { "x-opencode-directory": props.cwd } });
+        const r = await fetch(`${props.baseUrl}/question`, { headers: { "x-opencode-directory": props.cwd, ...getAuthHeaders() } });
         if (r.ok) {
           const list = await r.json() as Array<{
             id: string; sessionID: string;
@@ -547,7 +548,7 @@ export function App(props: AppProps) {
 
       // 2. Missed permission discovery
       try {
-        const r = await fetch(`${props.baseUrl}/permission`, { headers: { "x-opencode-directory": props.cwd } });
+        const r = await fetch(`${props.baseUrl}/permission`, { headers: { "x-opencode-directory": props.cwd, ...getAuthHeaders() } });
         if (r.ok) {
           const list = await r.json() as Array<{
             id: string; sessionID: string; permission: string; patterns?: string[];
@@ -970,7 +971,7 @@ export function App(props: AppProps) {
           // Fire in background — do not block the event-application loop.
           (async () => {
             try {
-              const r = await fetch(`${props.baseUrl}/question`, { headers: { "x-opencode-directory": props.cwd } });
+              const r = await fetch(`${props.baseUrl}/question`, { headers: { "x-opencode-directory": props.cwd, ...getAuthHeaders() } });
               if (!r.ok) return;
               const all = await r.json() as Array<{
                 id: string; sessionID: string;
@@ -1211,7 +1212,7 @@ export function App(props: AppProps) {
         if (q) {
           fetch(`${props.baseUrl}/question/${q.reqID}/reject`, {
             method: "POST",
-            headers: { "Content-Type": "application/json", "x-opencode-directory": props.cwd },
+            headers: { "Content-Type": "application/json", "x-opencode-directory": props.cwd, ...getAuthHeaders() },
             body: JSON.stringify({}),
           }).catch(() => {});
         }
@@ -1297,7 +1298,7 @@ export function App(props: AppProps) {
     if (!question) return;
     await fetch(`${props.baseUrl}/question/${question.reqID}/reply`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-opencode-directory": props.cwd },
+      headers: { "Content-Type": "application/json", "x-opencode-directory": props.cwd, ...getAuthHeaders() },
       body: JSON.stringify({ answers }),
     }).catch(() => {});
     setQuestion(null);

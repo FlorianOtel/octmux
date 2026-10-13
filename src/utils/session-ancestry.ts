@@ -5,6 +5,8 @@
  * during SSE degradation.
  */
 
+import { getAuthHeaders } from "../auth-headers.ts";
+
 // Module-scope cache of session list with TTL.
 type SessionCacheEntry = {
   list: Array<{ id: string; parentID?: string | null }>;
@@ -31,7 +33,7 @@ export async function getSessionList(
   cwd: string
 ): Promise<Array<{ id: string; parentID?: string | null }>> {
   try {
-    const r = await fetch(`${baseUrl}/session`, { headers: { "x-opencode-directory": cwd } });
+    const r = await fetch(`${baseUrl}/session`, { headers: { "x-opencode-directory": cwd, ...getAuthHeaders() } });
     if (!r.ok) {
       // Return last cached list on error, or empty
       return sessionCache?.list ?? [];

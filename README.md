@@ -14,9 +14,107 @@ octmux --version          show version
 
 Flags:
   --no-tmux-guard         allow running outside tmux (scripts / CI)
+  --config <path>         octmux config file (default: ~/.config/octmux/octmux.json)
 ```
 
 `--multi-window` and `--multi-pane` are mutually exclusive. Both require an actual tmux pane (stale-env inherited terminals are detected and rejected).
+
+## Configuration
+
+octmux reads an optional config file at `~/.config/octmux/octmux.json`. Pass `--config <path>` to read a different file.
+
+- The default file is optional. If it does not exist, octmux runs without it.
+- A file named by `--config` must exist. If it is missing, octmux exits 1.
+- `--config` without a path exits 2.
+- The format is JSONC: `//` and `/* */` comments and trailing commas are allowed.
+- A working example is in `config/octmux.example.json`.
+
+### Keys
+
+Any key not listed here is an error, so a typo such as `passwrod` fails at startup.
+
+| Key | Type | Effect |
+|---|---|---|
+| `$schema` | string | Editor hint. Accepted and not used. |
+| `server.url` | string | Server endpoint. Used when `--endpoint` is not given. |
+| `server.password` | string | Basic-auth password. The username is always `opencode`. |
+
+### Substitution
+
+`server.url` and `server.password` accept these tokens. Tokens are expanded only in parsed values, so text inside comments is ignored.
+
+- `{env:NAME}` is replaced by the value of environment variable `NAME`. If the variable is unset or empty, octmux exits 1.
+- `{file:PATH}` is replaced by the file's contents, with surrounding whitespace trimmed.
+  - A leading `~/` expands to your home directory.
+  - Other relative paths resolve against the directory that holds the config file, not the working directory.
+  - A missing or unreadable file exits 1. The error names the resolved path.
+
+### Fail-loud rules
+
+Each of these exits 1 and names the config file:
+
+- malformed JSON, or a root value that is not an object
+- an unknown key, such as `server.passwrod`
+- a value that is not a string
+- an unset or empty `{env:NAME}` variable
+- a missing or unreadable `{file:PATH}` file
+- a password that resolves to an empty string
+
+### File permissions
+
+Secret files must be private to their owner. Permission checks run before any secret file is read.
+
+- A literal password (any text outside a token) is stored in the config file, so the config file must have no group or other permission bits.
+- Each `{file:PATH}` file must have no group or other permission bits.
+- A password built only from `{env:NAME}` tokens stores nothing on disk, so no file check applies.
+
+A failing check prints the file and the fix, for example:
+
+```
+chmod 600 ~/.config/octmux/octmux.json
+```
+
+### Precedence
+
+- Endpoint: `--endpoint <url>` beats `server.url`, which beats the default `http://127.0.0.1:4096`.
+- Password: only `server.password` supplies it. There is no flag for it.
+- `--auto-spawn` ignores `server.url` and skips protocol detection.
+
+### Authentication
+
+Every request to the server carries an HTTP Basic `Authorization` header built from `opencode` and `server.password`. The password is never printed. Endpoint URLs in messages have any username and password removed.
+
+### Protocol detection
+
+Unless `--auto-spawn` is given, octmux probes the endpoint at startup. Each probe times out after 3 seconds.
+
+1. `GET /api/info` identifies a v2 server. A JSON 200 response with a `version` field means v2 and authorized. A JSON 401 response with `_tag: UnauthorizedError` means v2 and a password is required.
+2. If step 1 is inconclusive, `GET /global/health` identifies a v1 server. A JSON 200 response means v1. Any 401 response means v1 and a password is required.
+3. If neither probe identifies a server, the endpoint is unreachable.
+
+A 200 response with `text/html` is never taken as identification, because both server versions serve a web page for unknown paths. A network error on step 1 ends detection at once.
+
+| Detected | Behaviour | Exit |
+|---|---|---|
+| v1 | Prints a `⚠ octmux: OpenCode v1 server detected …` warning, then runs the v1 client. | continues |
+| v1 or v2, 401, no password configured | Names `server.password` and the config path. | 1 |
+| v1 or v2, 401, password rejected | Names the config path and `server.password`. Does not print the password. | 1 |
+| v2, authorized | Prints a version-gate message if one applies, then `OpenCode v2 server <version> detected at <url>; auth OK. Native v2 session support is not yet implemented in this octmux build.` | 1 |
+| Unreachable | Prints the "no opencode server" hint. For `--endpoint` it prints the shorter `health: failed` form. | 1 |
+
+Native v2 session support is not implemented, so a v2 server is detected and then octmux exits.
+
+### Version gate
+
+The gate compares the server's MAJOR and MINOR version with the bundled client, `@opencode/client` 2.0.28. PATCH is ignored.
+
+| Result | Message |
+|---|---|
+| Different MAJOR | Refuses with `… major version differs from bundled client … — refusing`. Exit 1. |
+| Server has a newer MINOR | Prints `… is newer than the bundled client … (same major version)`. |
+| Server has an older MINOR | Warns that some requests may be rejected. |
+| Version cannot be parsed | Warns that the versions could not be compared. |
+| Exact MINOR match | Prints nothing extra. |
 
 ## Output architecture
 

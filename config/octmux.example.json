@@ -1,0 +1,23 @@
+{
+  // Example octmux config. Copy to ~/.config/octmux/octmux.json (or pass --config <path>).
+  // The file is JSONC: comments and trailing commas are allowed.
+  // Keys octmux does not know are an error, so typos fail loudly.
+
+  // Editor hint only. octmux accepts this key but does not use it.
+  "$schema": "https://opencode.ai/config.json",
+
+  "server": {
+    // Endpoint of the OpenCode server. Overridden by --endpoint <url> when given.
+    // Default when neither is set: http://127.0.0.1:4096
+    "url": "http://127.0.0.1:49374",
+
+    // Basic-auth password (username is always "opencode"). Three forms are accepted:
+    //   "hunter2"                            literal text: the config file must be chmod 600
+    //   "{env:OCTMUX_PASSWORD}"              read from an environment variable (must be set and non-empty)
+    //   "{file:~/.config/octmux/secret}"     read from a file, trimmed; the file must be chmod 600
+    // {file:PATH}: "~/" expands to your home directory, other relative paths resolve
+    // against the directory holding this config file.
+    // Use a {file:} or {env:} reference rather than a literal value, so no secret sits in this file.
+    "password": "{file:~/.config/octmux/oc-mbp.password}"
+  }
+}

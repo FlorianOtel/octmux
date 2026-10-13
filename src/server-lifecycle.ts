@@ -3,6 +3,7 @@ import { execSync } from "child_process";
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { getAuthHeaders } from "./auth-headers.ts";
 
 // Checks if a port is free by attempting to bind a server to it.
 async function checkPort(port: number): Promise<boolean> {
@@ -58,7 +59,7 @@ export async function waitForHealth(url: string, timeoutMs: number): Promise<voi
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1000);
     try {
-      const resp = await fetch(`${url}/health`, { signal: controller.signal }).catch(() => null);
+      const resp = await fetch(`${url}/health`, { signal: controller.signal, headers: getAuthHeaders() }).catch(() => null);
       if (resp?.ok) {
         clearTimeout(timer);
         return;
