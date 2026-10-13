@@ -3,7 +3,7 @@ title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
 updated_by: Claude Code (Claude Haiku 5.5)
-updated_at: 2026-10-13--20-52
+updated_at: 2026-10-13--22-50
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -12,7 +12,7 @@ context: >
   sub-stages. 15.1 introduces a protocol-neutral `Backend` interface with the
   existing v1 wire code behind a `V1Backend` adapter, and zero behaviour change.
   15.2 adds `V2Backend` and the v2 core (sessions, prompts, events). 15.3 brings
-  v2 to feature parity with v1. The design decisions and the sub-stage plan are in
+  v2 to feature parity with v1 and is shipped. The design decisions and the sub-stage plan are in
   the /brain session directory
   /mnt/nfs/Florian/Gin-AI/projects/octmux/.claude/orchestra/sessions/20261013T123149Z-1871118
   (PLAN.md, review-comments.md). The v2 wire shapes are in
@@ -32,10 +32,10 @@ OpenCode wire protocol is in use. The seam is the `Backend` interface in
 | 15.1 | `Backend` interface; `V1Backend` adapter; all call sites use `Backend` | shipped |
 | 15.2a | Backend contract reshape on the v1 side: flat session arguments, `SessionRecord`, v2-only `ReplEvent` kinds, history split, `v1-queries` | shipped |
 | 15.2 | `V2Backend` and the v2 core: sessions, prompts, commands, compaction, model select, permissions, forms, streaming events, replay, resync, startup | shipped |
-| 15.3 | v2 parity with v1 features | next |
+| 15.3 | v2 parity with v1 features | shipped |
 
 A v2 server is served natively by `V2Backend` (see "Native v2 backend" below).
-Stage 15.3 brings the v2 path to feature parity with v1.
+v2 is at feature parity with v1, apart from the limits listed under "Known limits" below.
 
 ## Backend seam design
 
@@ -114,6 +114,11 @@ the parent's cost still counts.
 them to `applyHistory`. A translation error keeps the operations produced so far and
 omits the final editor seed.
 
+`translateHistory` adds an "Interrupted" system message immediately after the `turn-end` of an
+assistant message whose error is `MessageAbortedError`. This is the same check as the live path
+(`src/events.ts`). `translateHistoryV2` adds the same marker for an idle item whose outcome is
+`interrupted` (see "Queries and history").
+
 ### `ReplEvent` v2-only kinds
 
 Stage 15.2a adds these kinds to `ReplEvent` (`src/events.ts`). v1 never emits them, so
@@ -191,7 +196,10 @@ startup, `V1Backend` or `V2Backend`. The startup flow is shared by both protocol
   everywhere: the catalog key, the entry `id`, the default model and the
   `switchModel` body (`model.id`). `ModelInfo.modelID` is the upstream API name, and
   octmux does not use it. `model.default` is reduced to `providerID` and `id`.
-  `setModel` sends nothing when the model equals the one last sent for that session.
+  `setModel` sends nothing when the model equals the one last recorded for that session. The
+  record is set by each `setModel` that octmux sends, and by each `session.model.selected`
+  event for the REPL's session. `translateAndTrackModel` (`src/backend/v2.ts`) wraps
+  `translateEvent` to record the events, so the cache follows a switch made elsewhere.
 - `listProviders` is built from `model.list()`. It never calls `/api/provider`.
 - `listPermissions` uses the location-scoped request route, reshaped to the v1
   `GET /permission` shape. Child sessions share the directory, so the list is expected
@@ -237,6 +245,14 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
   inbox echo that carries it is suppressed as an own turn. Own commands are matched
   by the prefix of their expanded text (`recordOwnCommandPrefix`). Foreign user turns
   are rendered through `classifyUserTurn`.
+- Command echo slot: a command's POST returns no id, and one `user` item comes back per
+  command. `recordOwnCommandPrefix` also arms one pending echo slot. The next user item that is
+  not an own prompt and not already shown takes the slot and is suppressed, whatever its text.
+  The live inbox path and the resync path both claim user items through `claimUserItem`, so an
+  echo seen only through resync also takes its slot. The prefix match runs only when no slot is
+  pending, as a backstop for an echo that arrives with no slot armed. `V2Backend.sendCommand`
+  releases one slot (`releaseCommandEcho`) when `ensureModel` or the POST throws. `resetEventState`
+  clears all slots on a session switch.
 - Subagents: a `session.created` whose `parentID` is the REPL's session registers a
   child. The child is linked to the parent `subagent` tool call primarily by the call's
   `session.tool.progress` `metadata.sessionID`. Title pairing (the child's `title` equals
@@ -251,7 +267,9 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
   produce `form-replied`.
 - Compaction: `compaction-started`, `compaction-progress` (not rendered),
   `compaction-ended` (a divider, then the summary block), and `compaction-failed`.
-  The `compaction-ended` token total is the sum of the reported token parts.
+  The `compaction-ended` token total is the sum of the reported token parts. The server skips one
+  durable `seq` between `compaction.started` and `compaction.ended`. The `ended` frame therefore
+  arrives as a gap, is dropped, and a resync follows (see "App integration").
 - `model.selected` produces `model-selected`.
 - Durable `seq`: a duplicate is ignored. A gap closes the open blocks with
   `block-end`, then emits `resync-needed`. The gapped frame itself is dropped.
@@ -270,6 +288,10 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
   yet rendered. An assistant message counts as ended when it is completed, has a
   finish or an error, or is followed by an idle. The translator records every id it
   renders live, and every id that `getHistory` returns.
+- Idle items: an idle item whose `outcome` is `interrupted` renders one "Interrupted" system
+  message after the turn's `turn-end`. `isCompleteRenderable` is false for idle items, so
+  `getMissedHistory` never selects them. The marker therefore appears on full replay only, and an
+  incremental resync shows none.
 
 ### App integration (`src/app.tsx`, `src/components/FormModal.tsx`)
 
@@ -281,11 +303,18 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
 - Resync: a `resync-needed` event runs through `ResyncGate`, which coalesces runs and
   allows one run at a time. A run renders the missed messages from `getMissedHistory`,
   reconciles the generating state from `backend.isSessionActive`, and runs the discovery
-  pass. It does not clear the renderer or replay the whole session.
+  pass. It does not clear the renderer or replay the whole session. A resync also ends the compacting
+  state when `shouldEndCompacting` (`src/resync-gate.ts`) is true: the missed ops contain a
+  `compaction-divider`, or `isSessionActive` reports the session as not active.
 - Retry lines, the compaction state, the exit-code marker and `model-selected` are
-  handled in `app.tsx`. `model-selected` skips the model octmux last sent, and adopts
-  any other model with the `model-switched` wording.
+  handled in `app.tsx`. `model-selected` is compared with `activeModelRef`. An equal model does
+  nothing. Any other model is adopted (`adoptSessionModel`) with the `model-switched` wording.
 - `/new` uses the server directory.
+- Status line: the project label is `deriveProjectName(serverDirectory)`, the basename of the
+  server directory (`src/utils/formatters.ts`). With `server.directory` unset it equals the
+  basename of the launch directory.
+- Error hint: an error line appends `abandonHint(badge)` (`src/utils/formatters.ts`) only while an
+  orchestra run is active. A brain run names `/brain-abandon`, and a duo run names `/duo-abandon`.
 
 ### Startup (`src/index.tsx`)
 
@@ -322,12 +351,31 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
   switch or resync after it completes.
 - The compaction summary carries no id on the live frame. A later gap may render it
   again.
-- The resync path is covered by unit tests. Live, it was seen only on a benign
-  auto-title gap. A real dropped frame has not been observed live.
+- The resync path is covered by unit tests. Live, it was seen on a benign
+  auto-title gap and on the server's compaction seq skip. A real dropped frame has not been
+  observed live.
 - Subagents of subagents (grandchildren) are not tracked live.
 - The child's model is `""` when `session.created` omits it.
 - `permission.replied` does not clear a modal that was answered elsewhere. This
   matches v1.
+- The orchestra badge and the subagent rows need the OpenCode server on the same host as octmux.
+  The sidecar files under `~/.config/opencode/orchestra/sessions/` are read from octmux's local
+  disk, and the harness session is matched by the local cwd. This is pre-existing: v1 with a
+  remote `--endpoint` has the same limit. It is fenced off for oconona (C3.1, docs only); see
+  `~/Gin-AI/tmp/oconona-OCv2-support.md`.
+- A foreign turn that arrives before a command's echo takes the echo slot and is swallowed. The
+  echo then renders as a user line, unless its text starts with the recorded prefix.
+- A failed compaction whose frames fall in the seq hole unlocks input without an error line.
+  This is not tested live.
+- The "Interrupted" marker shows only on full replay, not after an incremental resync.
+- A compaction rendered through resync appears in replay form: a summarized line, the summary
+  with prefixed lines, and a divider after it. A live compaction renders differently.
+- Auto-compaction is out of scope. Only the reason `manual` has been observed.
+- `--auto-spawn` starts a local server and skips protocol detection, so it runs the v1 client. `--worktree`
+  creates its worktree on the octmux host, so it suits a server on the same host. Both are refused with
+  `server.directory` (exit 2).
+- Two `/model` switches made back to back, before the first `session.model.selected` event
+  arrives, can briefly show the stale model. The event carries no client id. This is accepted.
 
 ## Current state
 
@@ -338,9 +386,81 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
   forms, streaming events, replay, incremental resync, and `server.directory`.
 - `ReplEvent` carries the v2-only kinds. v1 never emits them.
 - `/api/provider` is never called.
-- Stage 15.3 brings the remaining v1 features to v2.
+- v2 is at feature parity with v1. The limits are listed under "Known limits".
 
 ---
+
+### 2026-10-13--22-50 — Stage 15.3 — OpenCode v2 parity
+
+**Implemented by:** Claude Code (Claude Haiku 5.5) — 2026-10-13--22-50
+**Commit(s):** `a7a65a0`
+
+- Command echo (`src/backend/v2-events.ts`, `src/backend/v2.ts`, `src/backend/types.ts` doc
+  comment): one pending echo slot per own command. `recordOwnCommandPrefix` arms the slot, and
+  `claimUserItem` is the one claim rule for the live inbox path and the resync path. `V2Backend`
+  releases the slot when a command fails (`releaseCommandEcho`). `/review`, `/init` and `/rag`
+  render once, without their expanded templates.
+- `/model` (`src/backend/v2.ts`, `src/app.tsx`): the `V2Backend` model cache follows
+  `session.model.selected`, so a switch made elsewhere is adopted and a later own reselect sends
+  `switchModel`. `app.tsx` compares `model-selected` with `activeModelRef`. The one-shot
+  `lastRequestedModelRef` is removed.
+- `/compact` (`src/resync-gate.ts`, `src/app.tsx`): a resync ends the compacting state through
+  `shouldEndCompacting`, because the server skips one durable seq between `compaction.started`
+  and `compaction.ended`.
+- Replay "Interrupted" marker (`src/replay.ts`, `src/backend/v2-queries.ts`): v1 uses
+  `MessageAbortedError`, and v2 uses the idle outcome `interrupted`. The marker follows the
+  turn's `turn-end`. It appears on full replay only.
+- Status line (`src/utils/formatters.ts` `deriveProjectName`, `src/app.tsx`): the label is the
+  basename of the server directory.
+- Hint gating (`src/utils/formatters.ts` `abandonHint`, `src/app.tsx`): the error line appends
+  `/brain-abandon` or `/duo-abandon` only while an orchestra run is active.
+- Deliberate v1 output changes:
+  - replay shows "Interrupted" after an aborted turn;
+  - the abandon hint no longer appears after Ctrl-C without an active orchestra run.
+- C3.1 (orchestra on a remote host): fenced off. Docs only, no code. See the Known limits.
+- Tests: `src/backend/v2-events.test.ts`, `src/backend/v2.test.ts`,
+  `src/backend/v2-queries.test.ts`, `src/replay.test.ts`, `src/resync-gate.test.ts`,
+  `src/utils/formatters.test.ts`.
+- Defects found and fixed during the stage:
+  - Review 1 (MAJOR): the echo slot leaked when a command failed before its echo arrived. A
+    failed command now releases its slot. A test covers the prefix-only path with the slot at 0.
+  - Review 2 (MAJOR): the slot leaked when a successful command's echo was seen only through
+    resync. The live and resync paths now share `claimUserItem`.
+  - Live `/compact` wedge (shipped in 15.2): input stayed locked after a compaction, because
+    the server skips durable seq N+1 between `compaction.started` (N) and `compaction.ended`
+    (N+2). The gap dropped `compaction.ended`, and nothing cleared `isCompacting`. Seen at 46→48
+    live and 83→85 in capture 3b. Fixed by `shouldEndCompacting`.
+- Verification:
+  - `bun test src/`: 743 pass, 0 fail.
+  - tsgo: 67 errors, the same multiset as the baseline at `b1e205d`.
+  - v1 smoke test against `127.0.0.1:4096`: 8/8.
+  - v2 live checklist on OpenCode 2.0.28 (MBP): 11/11 after FIX-3. The items are: a subagent
+    dispatch, with the child permission surfacing in the parent modal; `/review` and `/rag` each
+    render once (the `# /`-prefixed custom commands were not run, because they act on the
+    orchestra state); `/fork`, `/rename`, `/sessions` and `/new`;
+    `/model` select changes the next `session.step.started.model`; a foreign REST `/model`
+    switch is adopted; a later own reselect sends `switchModel`; a foreign REST prompt renders;
+    `--multi-window`; `/compact`; `--resume` shows the "Interrupted" marker; the status line
+    shows the server directory basename.
+  - Fresh reviews: four rounds were dispatched. Round 3 was stopped unfinished when FIX-3 was about
+    to change the tree. Rounds 1, 2 and 4 completed with FIX, FIX and PASS. Round 4 is the final
+    verdict, with two minors recorded below.
+  - Pre-existing items were classified by A/B against `b1e205d`, the 15.2 build.
+- Remaining pre-existing follow-ups (not in 15.3):
+  - v1 `/compact` prints a second divider before the last summary line. Same at `b1e205d`.
+  - Burst-typed input (a paste, or multi-char input) leaves the cursor at 0, so Backspace deletes
+    the first char. Same at `b1e205d`.
+  - The session picker labels any session with `parentID` as a fork
+    (`SessionPickerModal.tsx:35`). On v2 the subagent child is labelled a fork, and a real v2
+    `/fork` (no `parentID`) gets no label.
+  - `/fork` and `/new` print only the 8-char id prefix.
+  - `GET /api/session` ignores the `location[directory]` filter (server side).
+  - `isRendered`'s `userText` parameter is unused in production. Only the tests reach the prefix
+    branch.
+  - Carried from 15.2: tmux-window line buffers are keyed by role (F-d); short session-id
+    prefixes collide in the pickers; tall pickers leave stale rows after Esc; an occasional 3 s
+    health-probe timeout right after a previous octmux exit; replay hides tool output when
+    tools-output is off.
 
 ### 2026-10-13--20-52 — Stage 15.2 — native OpenCode v2 core
 

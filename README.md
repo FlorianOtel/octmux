@@ -116,10 +116,10 @@ A 200 response with `text/html` is never taken as identification, because both s
 | v1 | Prints a `⚠ octmux: OpenCode v1 server detected …` warning, then runs the v1 client. | continues |
 | v1 or v2, 401, no password configured | Names `server.password` and the config path. | 1 |
 | v1 or v2, 401, password rejected | Names the config path and `server.password`. Does not print the password. | 1 |
-| v2, authorized | Prints a version-gate message if one applies, then `OpenCode v2 server <version> detected at <url>; auth OK. Native v2 session support is not yet implemented in this octmux build.` | 1 |
+| v2, authorized | Prints a version-gate message if one applies. A different MAJOR version refuses (see Version gate). Prints `octmux: using server directory <dir> (from <path>)` when `server.directory` is set. Then runs the native v2 client. | continues; 1 on a MAJOR mismatch |
 | Unreachable | Prints the "no opencode server" hint. For `--endpoint` it prints the shorter `health: failed` form. | 1 |
 
-Native v2 session support is not implemented, so a v2 server is detected and then octmux exits.
+A v2 server is supported natively, with the same features as v1. The optional `server.directory` config key names the server-side directory that new sessions use. It must be absolute, and `--worktree` and `--auto-spawn` are refused with it (exit 2). The orchestra badge needs the OpenCode server on the same host as octmux. `--auto-spawn` starts a local server and skips detection, so it always runs the v1 client. `--worktree` creates its worktree on the octmux host, so it suits a server on the same host.
 
 ### Version gate
 
