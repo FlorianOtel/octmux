@@ -1,6 +1,49 @@
 import { test, expect, describe } from "bun:test";
 import { LineEditor, PASTE_COLLAPSE_LINE_THRESHOLD } from "./editor.ts";
 
+// Stage 3E.2.1 — insert() with a multi-character chunk (keys typed faster than one
+// read, tmux send-keys, a paste without bracketed paste, or yank) moves the cursor
+// past the whole chunk.
+test("insert — multi-char chunk moves the cursor past it, so Backspace deletes the last char", () => {
+  const editor = new LineEditor();
+  editor.insert("abc");
+  expect(editor.getCol()).toBe(3);
+  editor.backspace();
+  expect(editor.getLines()).toEqual(["ab"]);
+  editor.insert("xyz");
+  expect(editor.getLines()).toEqual(["abxyz"]);
+  expect(editor.getCol()).toBe(5);
+});
+
+test("insert — multi-char chunk in the middle of a line", () => {
+  const editor = new LineEditor();
+  editor.insert("ad");
+  editor.moveBackward();
+  editor.insert("bc");
+  expect(editor.getLines()).toEqual(["abcd"]);
+  expect(editor.getCol()).toBe(3);
+});
+
+test("insert — multi-char chunk typed on a pasted-block row goes on a new row, cursor at its end", () => {
+  const editor = new LineEditor();
+  editor.insertText(Array.from({ length: PASTE_COLLAPSE_LINE_THRESHOLD }, (_, i) => `l${i}`).join("\n"));
+  editor.moveUpRow(); // onto the collapsed block row
+  editor.insert("xy");
+  expect(editor.getRow()).toBe(1);
+  expect(editor.getLines()[1]).toBe("xy");
+  expect(editor.getCol()).toBe(2);
+});
+
+test("insert — yank of a multi-char kill ring leaves the cursor at the end", () => {
+  const editor = new LineEditor();
+  editor.insert("hello");
+  editor.moveLineStart();
+  editor.killToEnd();
+  editor.yank();
+  expect(editor.getLines()).toEqual(["hello"]);
+  expect(editor.getCol()).toBe(5);
+});
+
 // Stage 3E.7.1 — Fix #6 + regression guards for LineEditor.insertText
 
 test("insertText — cursor lands at end of trimmed last segment (Fix #6)", () => {
@@ -60,7 +103,7 @@ test("Emacs/edit ops round-trip — killToEnd/yank restores text", () => {
   // yank: restore " world" - inserts at cursor position 5
   editor.yank();
   expect(editor.getText()).toBe("hello world");
-  expect(editor.getCol()).toBe(6); // insert(' ') at 5, cursor moves to 6
+  expect(editor.getCol()).toBe(11); // yank inserts " world" at 5; the cursor lands after it
 });
 
 test("Emacs/edit ops round-trip — killWordBackward/yank restores word (insertText variant)", () => {
@@ -82,7 +125,7 @@ test("Emacs/edit ops round-trip — killWordBackward/yank restores word (insertT
   // yank: restore "foo "
   editor.yank();
   expect(editor.getText()).toBe("foo bar baz");
-  expect(editor.getCol()).toBe(1);
+  expect(editor.getCol()).toBe(4); // after the yanked "foo "
 });
 
 test("Emacs/edit ops round-trip — killWordForward/yank restores word (insertText variant)", () => {
@@ -125,7 +168,7 @@ test("Emacs/edit ops round-trip — killToStart/yank restores text (loadText+mov
   // insert() inserts at cursor and moves cursor forward
   editor.yank();
   expect(editor.getText()).toBe("foo bar");
-  expect(editor.getCol()).toBe(1);
+  expect(editor.getCol()).toBe(7); // after the yanked "foo bar"
 });
 
 test("Emacs/edit ops round-trip — killWordBackward/yank restores word (loadText+moveLineEnd variant)", () => {
@@ -147,7 +190,7 @@ test("Emacs/edit ops round-trip — killWordBackward/yank restores word (loadTex
   // yank: restore "foo "
   editor.yank();
   expect(editor.getText()).toBe("foo bar baz");
-  expect(editor.getCol()).toBe(1);
+  expect(editor.getCol()).toBe(4); // after the yanked "foo "
 });
 
 test("Emacs/edit ops round-trip — killWordForward/yank restores word (loadText+moveLineEnd variant)", () => {

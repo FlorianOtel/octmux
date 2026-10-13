@@ -64,20 +64,24 @@ export class LineEditor extends EventEmitter {
   // Edit operations (buffer manipulations, made public)
   // -----------------------------------------------------------------------
 
+  // `char` may hold several characters: keys typed faster than one read (or sent
+  // as one chunk by tmux / a paste without bracketed-paste mode) arrive as one
+  // input string, and yank inserts the whole kill ring. The cursor always moves
+  // past everything inserted.
   insert(char: string): void {
     if (this._isBlock(this.row)) {
       // On a block row at col 0: preserve the block, insert a new plain row
-      // AFTER the block row with the char; cursor moves to new row col 1.
+      // AFTER the block row with the text; cursor moves to the end of it.
       const newRow = this.row + 1;
       this.lines.splice(newRow, 0, char);
       this.row = newRow;
-      this.col = 1;
+      this.col = char.length;
       this.emit("changed");
       return;
     }
     const line = this.lines[this.row] as string;
     this.lines[this.row] = line.slice(0, this.col) + char + line.slice(this.col);
-    this.col++;
+    this.col += char.length;
     this.emit("changed");
   }
 

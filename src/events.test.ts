@@ -580,6 +580,28 @@ describe("filterEvent — session.updated activity routing", () => {
       expect((autoUnset as any).kind).toBe("compaction-divider");
       expect((autoUnset as any).auto).toBe(false);
     });
+
+    // Stage 5.6.1 — OC sends message.part.updated for one compaction part more than
+    // once during /compact. Only the first update may print a divider.
+    test("repeated updates of one compaction part emit one divider; resetEventState re-arms it", () => {
+      const update = {
+        type: "message.part.updated",
+        properties: {
+          part: { id: "prt_comp_dup", sessionID: PARENT_SID, messageID: "msg_dup", type: "compaction", auto: false },
+        },
+      } as any;
+      expect((filterEvent(update, PARENT_SID) as any).kind).toBe("compaction-divider");
+      expect(filterEvent(update, PARENT_SID)).toBeNull();
+      expect(filterEvent(update, PARENT_SID)).toBeNull();
+
+      // A different compaction part (a later /compact) still gets its divider.
+      const next = { ...update, properties: { part: { ...update.properties.part, id: "prt_comp_next" } } };
+      expect((filterEvent(next, PARENT_SID) as any).kind).toBe("compaction-divider");
+
+      // After a session switch the same part id renders again (e.g. resumed into view).
+      resetEventState();
+      expect((filterEvent(update, PARENT_SID) as any).kind).toBe("compaction-divider");
+    });
   });
 });
 

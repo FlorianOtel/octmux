@@ -134,6 +134,12 @@ const completedAssistantMessageIDs = new Set<string>();
 // session switch via resetEventState().
 const generatingEmittedMessageIDs = new Set<string>();
 
+// Tracks compaction part IDs for which we've already emitted compaction-divider.
+// OC broadcasts message.part.updated for the same compaction part more than once
+// during a /compact, and each one would otherwise print another divider. Cleared on
+// session switch via resetEventState().
+const dividedCompactionPartIDs = new Set<string>();
+
 // Tracks child session IDs for sessions whose parentID matches the harness session.
 // Populated on session.created; cleared on session.deleted or when the paired
 // parent Task tool transitions to completed/error.
@@ -177,6 +183,7 @@ export function resetEventState(): void {
   detectedQuestionToolCallIDs.clear();
   completedAssistantMessageIDs.clear();
   generatingEmittedMessageIDs.clear();
+  dividedCompactionPartIDs.clear();
   trackedChildSessions.clear();
   openTaskPartIDs.clear();
   taskToChild.clear();
@@ -470,6 +477,9 @@ export function filterEvent(event: Event, sessionID: string): ReplEvent | ReplEv
 
     // --- compaction parts ---
     if (part.type === "compaction") {
+      // One divider per compaction part, however many updates OC sends for it.
+      if (dividedCompactionPartIDs.has(part.id)) return null;
+      dividedCompactionPartIDs.add(part.id);
       const compPart = part as unknown as { auto?: boolean };
       return { kind: "compaction-divider", sessionID, auto: !!compPart.auto };
     }
