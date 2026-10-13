@@ -3,7 +3,7 @@ title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
 updated_by: Claude Code (Claude Haiku 5.5)
-updated_at: 2026-10-13--17-51
+updated_at: 2026-10-13--20-52
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -31,11 +31,11 @@ OpenCode wire protocol is in use. The seam is the `Backend` interface in
 |---|---|---|
 | 15.1 | `Backend` interface; `V1Backend` adapter; all call sites use `Backend` | shipped |
 | 15.2a | Backend contract reshape on the v1 side: flat session arguments, `SessionRecord`, v2-only `ReplEvent` kinds, history split, `v1-queries` | shipped |
-| 15.2 | `V2Backend` and the v2 core (sessions, prompts, events) | next |
-| 15.3 | v2 parity with v1 features | planned |
+| 15.2 | `V2Backend` and the v2 core: sessions, prompts, commands, compaction, model select, permissions, forms, streaming events, replay, resync, startup | shipped |
+| 15.3 | v2 parity with v1 features | next |
 
-Stage 15.1 does not make v2 usable. A v2 server still exits with the Stage 14
-message "native v2 session support is not yet implemented".
+A v2 server is served natively by `V2Backend` (see "Native v2 backend" below).
+Stage 15.3 brings the v2 path to feature parity with v1.
 
 ## Backend seam design
 
@@ -53,10 +53,12 @@ message "native v2 session support is not yet implemented".
   `translateEvent`, `hasPendingToolCalls`, `getLatestAssistantActivity`,
   `getTokenUsage`, `getHistory`, `resetEventState`, `synthesizeSessionIdleEvents`,
   `hasOpenStreamingPart`, `recordOwnMessageID`, `recordOwnCommandPrefix`,
-  `classifyUserTurn`.
+  `classifyUserTurn`, `getMissedHistory`. `getMissedHistory` is the incremental
+  resync read (see "Native v2 backend").
 - Flat operations: `listCommands`, `getDefaultModelConfig`, `listProviders`,
   `listQuestions`, `listPermissions`, `rejectQuestion`, `replyQuestion`,
-  `replyPermission`, `isSessionDescendant`, `subscribeEvents`.
+  `replyPermission`, `isSessionDescendant`, `subscribeEvents`, `listForms`,
+  `replyForm`, `cancelForm`, `isSessionActive`.
 
 `ReplEvent` is re-exported from `src/events.ts`. It carries the v2-only kinds
 described in "`ReplEvent` v2-only kinds" below.
@@ -135,9 +137,8 @@ Two existing kinds gained a field:
 
 `listProviders()` wraps the v1 `client.provider.list()`. It is not the v2 route
 `/api/provider`, which returns plaintext API keys and must never be called from
-octmux. The interface doc-comment carries this warning. A future v2 implementation
-must back `listProviders` with a provider-metadata route that does not expose
-credentials.
+octmux. The interface doc-comment carries this warning. `V2Backend` backs `listProviders` with the v2 model catalog (`model.list()`), which
+carries no credentials. The v2 route `/api/provider` is never called.
 
 ### Module placement
 
@@ -152,36 +153,259 @@ not moved:
   behind `BackendEvents`").
 - `src/utils/session-ancestry.ts` — `isSessionDescendant`, with its cached session list.
 
-`app.tsx`, `index.tsx`, `orchestra-watch.ts` and `utils/formatters.ts` import
-`Backend` and nothing v1-specific from the seam.
+`app.tsx`, `orchestra-watch.ts` and `utils/formatters.ts` import `Backend` and
+nothing protocol-specific from the seam. `app.tsx` has no protocol branch.
+`index.tsx` is the only file that picks a protocol (see "Who constructs backends").
 
 ### Who constructs backends
 
-`src/index.tsx` constructs two `V1Backend` instances:
+`src/index.tsx` constructs two backend instances of the protocol it detected at
+startup, `V1Backend` or `V2Backend`. The startup flow is shared by both protocols.
 
-- `bootstrapBackend` wraps `bootstrapClient`, which is built with the launch
-  working directory. It serves the startup session operations: resume, resume-last,
-  fork and create.
-- `backend` wraps the real `client`, which is built with the effective working
-  directory. That is the launch directory (or the `--worktree` directory once
-  octmux has chdir'd into it), unless `--resume` / `--resume-last` / `--fork`
-  resolves a session whose own `directory` differs from the launch directory,
-  in which case that session directory is used. It is passed to `<App backend={…}>`. `App` builds the
+- `bootstrapBackend` wraps `bootstrapClient`, which is built with the server
+  directory (`server.directory` when set, otherwise the launch working directory).
+  It serves the startup session operations: resume, resume-last, fork and create.
+- `backend` wraps the real client, which is built with the effective server
+  directory. That is the server directory, unless `--resume` / `--resume-last` /
+  `--fork` resolves a session whose own `directory` differs from it, in which case
+  that session directory is used. The comparison is with the server directory, not
+  the local working directory. It is passed to `<App backend={…}>`. `App` builds the
   `OrchestraWatcher` from it, and uses it for the initial SSE subscription and
   for every reconnect.
 
+## Native v2 backend
+
+### `V2Backend` (`src/backend/v2.ts`)
+
+- Built on the `@opencode/client` SDK. Every call goes through the SDK, not raw
+  `fetch()`. The SDK sends the directory as `location` (`{ directory }`) on v2
+  routes, so v2 has no `x-opencode-directory` header.
+- Session records: `location.directory` becomes `SessionRecord.directory`. The bound
+  model becomes `{ providerID, id }`.
+- Session lists are filtered by directory (`session.list`), or by `parentID` for
+  children. Messages are cursor-paged. `collectPages` follows `cursor.next` and stops
+  when the cursor is absent or repeats. The filter is sent on every page. The first
+  message page sets `order: "asc"`. Later pages send `cursor` alone, because the
+  cursor already encodes order and direction.
+- Models are keyed by `ModelInfo.id` (the short name, for example `glm-5.3-flash`)
+  everywhere: the catalog key, the entry `id`, the default model and the
+  `switchModel` body (`model.id`). `ModelInfo.modelID` is the upstream API name, and
+  octmux does not use it. `model.default` is reduced to `providerID` and `id`.
+  `setModel` sends nothing when the model equals the one last sent for that session.
+- `listProviders` is built from `model.list()`. It never calls `/api/provider`.
+- `listPermissions` uses the location-scoped request route, reshaped to the v1
+  `GET /permission` shape. Child sessions share the directory, so the list is expected
+  to include their asks.
+- Forms: `listForms`, `replyForm`, and `cancelForm` (`session.form.cancel`).
+- Writes (`sendPrompt`, `sendCommand`, `compact`, `setModel`, `create`, `fork`,
+  `update`, `replyPermission`, `replyForm`, `cancelForm`) go through one `write()`
+  helper. An error status throws a readable `Error`. A `LocationNotFoundError` names
+  the missing directory and the config key `server.directory`, and the config file
+  path when one is loaded. Other tagged errors read `<_tag>: <message>`. A transport
+  failure is rethrown. `abort` is the one exception: it swallows the error status and
+  returns `{ interrupted }`.
+- Reads resolve `undefined` or `void` on an error status. A transport failure is
+  rethrown.
+- `fork` ignores `directory` on v2. The fork keeps the parent's location.
+
+### `V2EventTranslator` (`src/backend/v2-events.ts`)
+
+One translator instance per backend. `translate(frame, currentSessionID)` maps one
+frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not render.
+
+- Envelope: `{ type, data, durable? }`. The session is read from the frame. Durable
+  frames carry a per-session `seq`.
+- Attribution: frames of the REPL's session are handled directly. Frames of a tracked
+  child session go to the child path. Every other session is ignored.
+- Blocks: each block is keyed `${messageID}:${index}`. The index is the content
+  position of the part in its message, allocated in start order. Tool blocks use the
+  call `id` as the part id, and their result uses `${callID}-result`. The same keys
+  are used by `translateHistoryV2`, so a live block and a replayed one share a part id.
+  Stream ordinals are per kind, so they cannot serve as keys.
+- Text start does not close an open reasoning block. In v2 the two can overlap.
+- Tools: the tool lifecycle maps to the v1 block events. Input is not rendered, as in
+  v1. A completed shell tool carries `block-end.exitCode`, and a non-zero exit shows
+  a marker line.
+- Turn end: `parent-turn-end`, then `session-idle`, then the block ends, in the v1
+  order. v2 has no `session.idle`, so `execution.failed` and `execution.interrupted`
+  also produce `session-idle`. A failed step (`session.step.failed`) produces no
+  error line. `execution.failed` carries the same error, and an aborted step on
+  Ctrl-C must not show one.
+- Retries: `turn-retry` produces one line per attempt. It does not change the
+  generating state.
+- Own echo: octmux mints a prompt id for each prompt (`recordOwnMessageID`). The
+  inbox echo that carries it is suppressed as an own turn. Own commands are matched
+  by the prefix of their expanded text (`recordOwnCommandPrefix`). Foreign user turns
+  are rendered through `classifyUserTurn`.
+- Subagents: a `session.created` whose `parentID` is the REPL's session registers a
+  child. The child is linked to the parent `subagent` tool call primarily by the call's
+  `session.tool.progress` `metadata.sessionID`. Title pairing (the child's `title` equals
+  the call's description) is the fallback, used only while the progress frame has not
+  yet linked the child. The call's input supplies the description. Child frames never reach the parent's blocks. A
+  child is removed on its terminal frame, or when the parent `subagent` call ends
+  first.
+- Permissions: `permission.asked` produces `permission-asked` with `resources`. The
+  app's discovery pass also feeds in v1-shaped `permission.asked` inputs. Those are
+  accepted only for the REPL's session or its descendants.
+- Forms: `form.created` produces `form-asked`. `form.replied` and `form.cancelled`
+  produce `form-replied`.
+- Compaction: `compaction-started`, `compaction-progress` (not rendered),
+  `compaction-ended` (a divider, then the summary block), and `compaction-failed`.
+  The `compaction-ended` token total is the sum of the reported token parts.
+- `model.selected` produces `model-selected`.
+- Durable `seq`: a duplicate is ignored. A gap closes the open blocks with
+  `block-end`, then emits `resync-needed`. The gapped frame itself is dropped.
+
+### Queries and history (`src/backend/v2-queries.ts`)
+
+- Pure translators and scans over a v2 message list. Each mirrors its v1 counterpart
+  in `src/backend/v1-queries.ts` and `src/replay.ts`. The v1 stall threshold and
+  `isTurnStale` are reused.
+- `getHistory` returns `translateHistoryV2` output. It uses the first completed
+  compaction, as v1 does. Blocks follow stored content order, which is start order.
+- `hasPendingToolCalls` and `getLatestAssistantActivity` follow the v1 rules.
+- `getTokenUsage` reads the newest post-compaction assistant message. The running
+  cost sums the session and its direct children, on a best-effort basis.
+- `getMissedHistory` (the resync read) returns only the complete messages that are not
+  yet rendered. An assistant message counts as ended when it is completed, has a
+  finish or an error, or is followed by an idle. The translator records every id it
+  renders live, and every id that `getHistory` returns.
+
+### App integration (`src/app.tsx`, `src/components/FormModal.tsx`)
+
+- `FormModal` shows one field at a time. `form-modal-logic.ts` builds the answer, and
+  the footer hint depends on the field type. Submit calls `replyForm`. Esc and Ctrl-C
+  call `cancelForm`. Form input is active only when no picker is open and no
+  compaction is running.
+- Discovery on attach lists permissions, questions and forms, oldest first.
+- Resync: a `resync-needed` event runs through `ResyncGate`, which coalesces runs and
+  allows one run at a time. A run renders the missed messages from `getMissedHistory`,
+  reconciles the generating state from `backend.isSessionActive`, and runs the discovery
+  pass. It does not clear the renderer or replay the whole session.
+- Retry lines, the compaction state, the exit-code marker and `model-selected` are
+  handled in `app.tsx`. `model-selected` skips the model octmux last sent, and adopts
+  any other model with the `model-switched` wording.
+- `/new` uses the server directory.
+
+### Startup (`src/index.tsx`)
+
+- One startup flow serves v1 and v2. Protocol detection selects the backend.
+- A v2 server starts and serves sessions. A major version mismatch refuses to start. Minor
+  gate warnings are kept. No success line is printed.
+- `server.directory` in `octmux.json` is the server-side directory. It must be
+  absolute after substitution. It is the location for v2, and the `directory` for v1.
+  When set, startup prints a line naming it and the file. When unset, the launch
+  directory is used.
+- `server.directory` is refused with `--worktree` and with `--auto-spawn`, both with
+  exit 2. A local worktree or a locally spawned server cannot be the one that the
+  server directory names.
+- The default session creation at startup, when it fails, prints
+  `octmux: could not create a session: <message>` and exits 1.
+
+### Renderer and input fixes (v1 and v2)
+
+- Non-text streaming (summary, reasoning and the like) accumulates complete lines per
+  block. A per-block tail (`_nonTextTails` in `src/renderer/block-buffer.ts`) holds the
+  partial line. The tail is flushed at `endBlock` and `retagBlock`. Thinking tails are
+  flushed before the next text block. All tails are flushed before the turn separator.
+- Paste filter: a lone ESC at the end of a chunk is released after 40 ms when no
+  continuation arrives. Markers and escape sequences are handled as before. Escape
+  therefore reaches the modals.
+- Child stdio: the git branch lookup and the tmux `execFile` calls capture stdout
+  and ignore stderr. Child stderr therefore never writes behind Ink.
+
+### Known limits
+
+- A message that is only partly received at a gap is not repaired. `getMissedHistory`
+  renders only complete messages.
+- A message whose opening frame was lost is not rendered until the next session
+  switch or resync after it completes.
+- The compaction summary carries no id on the live frame. A later gap may render it
+  again.
+- The resync path is covered by unit tests. Live, it was seen only on a benign
+  auto-title gap. A real dropped frame has not been observed live.
+- Subagents of subagents (grandchildren) are not tracked live.
+- The child's model is `""` when `session.created` omits it.
+- `permission.replied` does not clear a modal that was answered elsewhere. This
+  matches v1.
+
 ## Current state
 
-- A v2 server is detected by the Stage 14 probes, and the `--config` / Basic-auth
-  path works against it.
-- A v2 server is not used for sessions, prompts or events. octmux prints the
-  Stage 14 message and exits 1.
-- The Backend session API uses flat named arguments and `SessionRecord`. The v1
-  path is the only implementation.
+- A v1 or v2 server is detected at startup by the Stage 14 probes. The matching
+  backend (`V1Backend` or `V2Backend`) serves the session.
+- The Backend session API uses flat named arguments and `SessionRecord`.
+- v2 covers sessions, prompts, commands, compaction, model select, permissions,
+  forms, streaming events, replay, incremental resync, and `server.directory`.
 - `ReplEvent` carries the v2-only kinds. v1 never emits them.
-- `V2Backend` is Stage 15.2.
+- `/api/provider` is never called.
+- Stage 15.3 brings the remaining v1 features to v2.
 
 ---
+
+### 2026-10-13--20-52 — Stage 15.2 — native OpenCode v2 core
+
+**Implemented by:** Claude Code (Claude Haiku 5.5) — 2026-10-13--20-52
+**Commit(s):** `390aa04`
+
+- `V2Backend` (`src/backend/v2.ts`) on `@opencode/client`. Covers sessions, prompts
+  with a client prompt id, commands, compaction, model select (`ModelInfo.id`),
+  permissions (location-scoped), forms (list, reply, cancel), and cursor-only paging.
+  `listProviders` uses `model.list()`. `/api/provider` is never called. Write errors
+  are readable (`LocationNotFoundError` names `server.directory`).
+- `V2EventTranslator` (`src/backend/v2-events.ts`): streaming text, reasoning and tools
+  keyed by message and start order, shared with history. Tool exit markers. Turn ends
+  and retries. Own-echo suppression. Subagents. Permissions (including discovery
+  input). Forms. Compaction. `model-selected`. Durable `seq` gaps produce
+  `resync-needed`.
+- v2 queries and history: `src/backend/v2-queries.ts` (`translateHistoryV2`, the v2
+  events reads, `getMissedHistory`), and `src/backend/v2-ancestry.ts`.
+- App: `FormModal` (`src/components/FormModal.tsx`, `form-modal-logic.ts`,
+  `form-state.ts`). Permission resources. Retry lines, compaction state, exit marker.
+  Incremental resync through `ResyncGate` (`src/resync-gate.ts`), with discovery.
+  `model-selected` handling. `turn-status.ts`.
+- Startup: one flow for v1 and v2. v2 no longer exits. `server.directory` in
+  `octmux.json`, refused with `--worktree` and `--auto-spawn` (exit 2). The default
+  session creation failure is reported and exits 1.
+- Renderer and input (v1 and v2): non-text streaming (summary, reasoning) accumulates
+  complete lines instead of one prefixed line per delta. Reasoning tails are flushed
+  before the turn separator (D-B). A lone ESC held by the paste filter is released after
+  40 ms, so Escape reaches the modals. Child stderr from git and tmux no longer writes
+  behind Ink (G1).
+- Verification:
+  - `bun test src/`: 712 pass, 0 fail.
+  - tsgo: 67 errors, the same multiset as the baseline. None in `src/backend/v2*`.
+  - Fresh reviewers: A (protocol layer) PASS, with one dead-code note fixed. B
+    (integration and UI) FIX, with four findings fixed. Targeted re-review PASS.
+  - Live checklist on OpenCode 2.0.28, with re-checks after each live fix.
+  - v1 regression smoke tests against the local v1 server.
+  - A/B checks against the previous build for the pre-existing bugs listed below.
+- Live defects found and fixed:
+  - D1: v2 write errors were swallowed. They now reject with a readable message.
+  - D2: models were keyed by `modelID`. They are now keyed by `ModelInfo.id`.
+  - D-A: the first prompt of a new session rendered twice. A benign seq gap triggered a
+    full clear and replay. It is now an incremental resync that renders only the
+    unrendered messages.
+  - D-B: a reasoning block with no trailing newline was lost, or rendered after the
+    turn separator. Fixed in the renderer.
+  - G1: a frozen "generating 0:00" line after each v2 turn. Git's stderr was written
+    to the TTY behind Ink.
+  - G3: `getMissedHistory` skipped an interrupted or failed assistant message that had
+    no completion time. It now counts such messages as ended.
+  - G2: the v2 context meter stuck at about 8.0K. No defect was reproduced. Two paged
+    regression tests were added. The final live re-check matched the status-line context
+    value to `input + cache.read + cache.write` of the newest assistant message on all 9
+    turns (8.0K to 8.1K).
+  - Pre-existing, found while testing and fixed in this stage: non-text streaming
+    fragmented into one line per delta, and a lone ESC held by the paste filter that
+    never reached modals.
+- Remaining pre-existing follow-ups (not in 15.2):
+  - Replay shows no "Interrupted" marker for an aborted turn, and hides tool output
+    when tools-output is off.
+  - The "/brain-abandon" hint appears after Ctrl-C even without an active `/brain`.
+  - An occasional 3 s health-probe timeout right after a previous octmux exit.
+  - Tmux-window line buffers are keyed by role (F-d).
+  - Short session-id prefixes collide in the pickers.
+  - Tall pickers leave stale rows after Esc.
 
 ### 2026-10-13--17-51 — Stage 15.2a — Backend contract reshape on the v1 side
 
