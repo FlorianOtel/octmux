@@ -2,7 +2,13 @@
  * Tests for `src/resync-gate.ts` (Stage 15.2, C2.6b): the one-in-flight coalescing gate and the generating-flag decision.
  */
 import { describe, expect, test } from "bun:test";
-import { ResyncGate, decideResync } from "./resync-gate.ts";
+import { ResyncGate, decideResync, shouldEndCompacting } from "./resync-gate.ts";
+import type { HistoryOp } from "./replay.ts";
+
+/** A compaction divider op, as the v2 translator produces it when a compaction completes. */
+const DIVIDER: HistoryOp = { op: "compaction-divider", auto: false };
+/** A plain turn-end op, standing in for any non-divider history. */
+const TURN_END: HistoryOp = { op: "turn-end" };
 
 describe("ResyncGate", () => {
   test("the first request starts a run", () => {
@@ -63,5 +69,27 @@ describe("decideResync", () => {
   test("unknown REST answer never changes the flag, in either direction", () => {
     expect(decideResync(true, undefined)).toBe("none");
     expect(decideResync(false, undefined)).toBe("none");
+  });
+});
+
+describe("shouldEndCompacting", () => {
+  test("divider rendered from missed history and session active: the compaction completed, so end it", () => {
+    expect(shouldEndCompacting([TURN_END, DIVIDER], true)).toBe(true);
+  });
+
+  test("no divider but REST says the session is idle: no compaction can still run, so end it", () => {
+    expect(shouldEndCompacting([TURN_END], false)).toBe(true);
+  });
+
+  test("no divider and session still active: the compaction is still running, keep it", () => {
+    expect(shouldEndCompacting([TURN_END], true)).toBe(false);
+  });
+
+  test("no divider and unknown REST answer: an unknown answer is not a signal, keep it", () => {
+    expect(shouldEndCompacting([TURN_END], undefined)).toBe(false);
+  });
+
+  test("nothing missed and unknown REST answer: keep it", () => {
+    expect(shouldEndCompacting([], undefined)).toBe(false);
   });
 });

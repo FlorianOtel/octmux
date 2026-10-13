@@ -27,7 +27,7 @@ import {
 } from "@opencode/client";
 import type { Command } from "@opencode-ai/sdk/client";
 import { getAuthHeaders } from "../auth-headers.ts";
-import type { FormField } from "../events.ts";
+import type { FormField, ReplEvent } from "../events.ts";
 import { V2EventTranslator } from "./v2-events.ts";
 import type {
   Backend,
@@ -379,11 +379,18 @@ export class V2Backend implements Backend {
       // v2 has no client-side id for commands, so `promptID` is dropped (the request has no field for
       // it). The expanded template comes back as an ordinary `user` item (capture §4.12). The
       // ownership check for command echoes is handled in the translator (C2.4), not here.
+      // The echo slot is armed by the caller before this call. If `ensureModel` or the POST fails, no echo
+      // arrives, so this method releases the slot and rethrows the same error unchanged.
       sendCommand: async (options) => {
-        if (options.model) await this.ensureModel(options.sessionID, options.model);
-        await this.write(() =>
-          this.client.session.command({ sessionID: options.sessionID, name: options.name, text: options.args }),
-        );
+        try {
+          if (options.model) await this.ensureModel(options.sessionID, options.model);
+          await this.write(() =>
+            this.client.session.command({ sessionID: options.sessionID, name: options.name, text: options.args }),
+          );
+        } catch (err) {
+          this.translator.releaseCommandEcho();
+          throw err;
+        }
       },
 
       // Session-level model select. The SDK `session.switchModel` is the v2 route. See `ensureModel`.
@@ -407,9 +414,17 @@ export class V2Backend implements Backend {
         ),
 
       // D-A fix: the resync path. Renders only the complete messages the translator has not rendered, and records them.
+      // The predicate returns true when the item is already shown or suppressed, so the item is skipped.
+      // A user item is claimed with `claimUserItem`, the same rule the live inbox path uses. Its command echo slot is
+      // consumed here, so a command echo seen only through resync does not leave a slot pending. The claim has side
+      // effects, which is safe: `translateMissedHistoryV2` calls the predicate only for complete renderable items
+      // (`isCompleteRenderable(...) && !isRendered(...)`, v2-queries.ts), so an in-flight item is never claimed.
+      // Other kinds use `isRendered`, which is side-effect free. `message.text` is a required string on user items.
       getMissedHistory: async (sessionID) => {
         const missed = await fetchMissedHistoryV2((id) => this.fetchMessages(id), sessionID, (message) =>
-          this.translator.isRendered(message.id, message.type === "user" ? message.text : undefined),
+          message.type === "user"
+            ? this.translator.claimUserItem(message.id, message.text)
+            : this.translator.isRendered(message.id),
         );
         this.translator.markRendered(missed.renderedIDs);
         return missed.ops;
@@ -417,7 +432,7 @@ export class V2Backend implements Backend {
 
       // --- C2.4a: the translator members forward to this backend's own V2EventTranslator (src/backend/v2-events.ts).
       // Each backend has its own instance, so no state is shared between backends (P6). ---
-      translateEvent: (event, sessionID) => this.translator.translate(event, sessionID),
+      translateEvent: (event, sessionID) => this.translateAndTrackModel(event, sessionID),
       resetEventState: () => this.translator.resetEventState(),
       synthesizeSessionIdleEvents: () => this.translator.synthesizeSessionIdleEvents(),
       hasOpenStreamingPart: () => this.translator.hasOpenStreamingPart(),
@@ -485,6 +500,27 @@ export class V2Backend implements Backend {
       }),
     );
     this.lastModelBySession.set(sessionID, { providerID: model.providerID, modelID: model.modelID });
+  }
+
+  /**
+   * Translates one frame, and records any `model-selected` event in the setModel cache.
+   *
+   * The server binds the model per session. A switch made by another client (a foreign REST call) reaches
+   * here as `session.model.selected`. Without this, the cache keeps the old model, and a later select of
+   * that old model would skip `switchModel` while the server is on another model.
+   *
+   * The result is returned unchanged, in the same shape the translator gave it (null, one event, or a list).
+   */
+  private translateAndTrackModel(frame: unknown, sessionID: string): ReplEvent | ReplEvent[] | null {
+    const result = this.translator.translate(frame, sessionID);
+    // Normalise to a list only for the scan. The original value is what gets returned.
+    const events = result === null ? [] : Array.isArray(result) ? result : [result];
+    for (const ev of events) {
+      if (ev.kind === "model-selected") {
+        this.lastModelBySession.set(ev.sessionID, { providerID: ev.providerID, modelID: ev.modelID });
+      }
+    }
+    return result;
   }
 
   /**

@@ -2,13 +2,12 @@ import { Box, Static, Text, useStdout, useInput, measureElement } from "ink";
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import type { Command as OcCommand } from "@opencode-ai/sdk/client";
 import type { Backend } from "./backend/types.ts";
-import * as path from "path";
 import { LineEditor } from "./editor.ts";
 import { UserTurnDebouncer } from "./user-turn-debouncer.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
 import type { ReplEvent } from "./events.ts";
 import { mintUserMessageID } from "./message-id.ts";
-import { applyHistory } from "./replay.ts";
+import { applyHistory, type HistoryOp } from "./replay.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand, parseResyncCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
@@ -23,7 +22,7 @@ import { QuestionModal } from "./components/QuestionModal.tsx";
 import { FormModal } from "./components/FormModal.tsx";
 import { advanceForm, INITIAL_FORM_PROGRESS, type FormProgress } from "./components/form-state.ts";
 import { formatCompactionFailedLine, formatRetryLine, generatingStartAfterMessageCompleted, isNewRetryAttempt } from "./turn-status.ts";
-import { ResyncGate, decideResync } from "./resync-gate.ts";
+import { ResyncGate, decideResync, shouldEndCompacting } from "./resync-gate.ts";
 import type { BackendForm } from "./backend/types.ts";
 import { SubprocessStatus } from "./components/SubprocessStatus.tsx";
 import { ModelPickerModal, type ModelPickerItem } from "./components/ModelPickerModal.tsx";
@@ -32,7 +31,7 @@ import { SessionPickerModal, type SessionPickerItem } from "./components/Session
 import { SlashCompletionOverlay } from "./components/SlashCompletionOverlay.tsx";
 import { ToggleStatusLine } from "./components/ToggleStatusLine.tsx";
 import { expandCommands } from "./command-registry.ts";
-import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, prettyModelName, contextLabel, validateModel } from "./utils/formatters.ts";
+import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, prettyModelName, contextLabel, validateModel, deriveProjectName, abandonHint } from "./utils/formatters.ts";
 
 const TOGGLES_CONFIG = loadTogglesConfig();
 
@@ -244,8 +243,8 @@ export function App(props: AppProps) {
     });
   }, [renderer]);
 
-  // Project name: basename of current working directory
-  const projectName = path.basename(process.cwd());
+  // Project name: basename of the configured server directory (the directory the OC session runs in).
+  const projectName = deriveProjectName(props.serverDirectory);
 
   const { rows, columns } = useTerminalSize();
   // A.3: measure the actual non-ActiveBlock dynamic region (chrome + any mounted modal).
@@ -704,9 +703,6 @@ export function App(props: AppProps) {
   const compactionAutoRef = useRef<boolean>(false);
   // Stage 15.2 (C2.6b): counter for the part IDs of rendered compaction summaries. Each summary block needs its own ID.
   const compactionSummaryCountRef = useRef<number>(0);
-  // Stage 15.2 (C2.6b): the model octmux last sent with a prompt or command. The v2 `model-selected` event that
-  // octmux's own switch produces matches it, so that event is not shown as a foreign switch (see that handler).
-  const lastRequestedModelRef = useRef<{ providerID: string; modelID: string } | null>(null);
   // Stage 15.2 (C2.6b): the v2 resync runner (see the effect after applyReplEvents). Created once, like userTurnDebouncerRef.
   const resyncGateRef = useRef<ResyncGate | null>(null);
   if (!resyncGateRef.current) resyncGateRef.current = new ResyncGate();
@@ -764,7 +760,8 @@ export function App(props: AppProps) {
           // Append operator guidance so the user knows the next action to take.
           // Brain timeouts may be transient; we don't auto-abandon — that's
           // the operator's decision.
-          renderer.commitError(ev.message + " — run /brain-abandon to clean up the session");
+          // The abandon hint is shown only while an orchestra run is active (brain or duo badge present).
+          renderer.commitError(ev.message + abandonHint(watcherRef.current?.getBadge() ?? null));
           setIsGenerating(false);
           // Clear any orphaned subagent rows that may have been left open if the
           // brain session errored mid-pipeline (e.g. provider timeout during Phase 2).
@@ -983,22 +980,20 @@ export function App(props: AppProps) {
             renderer.commitError(formatCompactionFailedLine(ev.message));
           }
         }
-        // Stage 15.2 (C2.6b): the server reports the model bound to the session. octmux's own switch also
-        // produces this event, so the model octmux last sent is skipped (once). Any other model is adopted
-        // in the same way as `model-switched`.
+        // Stage 15.2 (C2.6b): the server reports the model bound to the session. A model equal to the one
+        // octmux already shows is ignored; this covers octmux's own switch and a no-change report. Any other
+        // model is adopted in the same way as `model-switched`.
         else if (ev.kind === "model-selected") {
           if (ev.sessionID === sessionIDRef.current) {
-            const requested = lastRequestedModelRef.current;
-            if (requested && requested.providerID === ev.providerID && requested.modelID === ev.modelID) {
-              lastRequestedModelRef.current = null;
-            } else {
-              adoptSessionModel(ev.providerID, ev.modelID);
-            }
+            const current = activeModelRef.current;
+            const isCurrent = current !== null && current.providerID === ev.providerID && current.modelID === ev.modelID;
+            if (!isCurrent) adoptSessionModel(ev.providerID, ev.modelID);
           }
         }
-        // Stage 15.2 (C2.6b, PLAN-C2C3.md §C step 10): a durable seq gap means frames were missed. Clear the
-        // scrollback, replay history, and reconcile the generating flag. Runs through the coalescing gate,
-        // so at most one resync is in flight. Only the v2 translator emits this kind.
+        // Stage 15.2 (C2.6b, PLAN-C2C3.md §C step 10): a durable seq gap means frames were missed. Renders only
+        // the missed complete messages (nothing is cleared), then reconciles the generating and compacting state
+        // with REST. Runs through the coalescing gate, so at most one resync is in flight. Only the v2 translator
+        // emits this kind.
         else if (ev.kind === "resync-needed") {
           if (ev.sessionID === sessionIDRef.current) void runResyncRef.current?.();
         }
@@ -1014,13 +1009,18 @@ export function App(props: AppProps) {
   useEffect(() => {
     const resyncOnce = async (): Promise<void> => {
       const sid = sessionIDRef.current;
+      // The ops rendered in step 1. Kept outside the try so step 3 can read them. Empty when the fetch failed.
+      let missedOps: HistoryOp[] = [];
       // 1. Render only what the stream missed (D-A fix). Nothing is cleared: lines already printed in --single mode
       //    cannot be erased, so a full replay would print the earlier turns a second time. A gap with nothing missing
       //    (for example an auto-title `session.renamed` after a skipped seq) renders nothing. Best-effort, as runReplay is.
       try {
         const missed = await props.backend.events.getMissedHistory(sid);
         // The operator may have switched sessions during the fetch. Those ops belong to the old session, so they are dropped.
-        if (sid === sessionIDRef.current) applyHistory(renderer, editor, missed);
+        if (sid === sessionIDRef.current) {
+          applyHistory(renderer, editor, missed);
+          missedOps = missed;
+        }
       } catch {
         // Replay is best-effort, not critical to the session.
       }
@@ -1034,6 +1034,9 @@ export function App(props: AppProps) {
       // The operator may have switched sessions while the calls above were awaited. The reconcile then belongs
       // to a session that is no longer on screen, so it is skipped.
       if (sid !== sessionIDRef.current) return;
+      // The v2 seq hole swallows `compaction.ended`, so the resync ends the compacting state itself (FIX-3).
+      // setIsCompacting(false) when the flag is already false is harmless: React bails out.
+      if (shouldEndCompacting(missedOps, active)) setIsCompacting(false);
       const action = decideResync(isGeneratingRef.current, active);
       if (action === "end-turn") {
         // The idle path the reconciler also uses. Subagent rows are swept first, as for parent-turn-end.
@@ -1652,8 +1655,6 @@ export function App(props: AppProps) {
         props.backend.events.recordOwnCommandPrefix("# /" + cmdName);
 
         setIsGenerating(true);
-        // Stage 15.2 (C2.6b): remember the model this command sends, for the model-selected skip.
-        lastRequestedModelRef.current = activeModel;
         try {
           await props.backend.session.sendCommand({
             sessionID,
@@ -1706,8 +1707,6 @@ export function App(props: AppProps) {
       }
     }
 
-    // Stage 15.2 (C2.6b): remember the model this prompt sends, for the model-selected skip.
-    lastRequestedModelRef.current = activeModel;
     try {
       await props.backend.session.sendPrompt({
         sessionID,

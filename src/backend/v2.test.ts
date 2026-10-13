@@ -626,6 +626,33 @@ describe("V2Backend.setModel idempotency (capture §4.3 model select)", () => {
   });
 });
 
+describe("V2Backend.setModel cache follows a foreign model switch (C3.6 defect 1)", () => {
+  test("a session.model.selected frame updates the cache, so a select of the foreign model skips switchModel", async () => {
+    const { client, calls } = makeFake({});
+    const backend = new V2Backend(BASE, CWD, client);
+    // A foreign client switched ses_a to glm-5.3-flash. The frame has the shape of capture 3 (events.sse:365).
+    // The translator emits model-selected only for the REPL's current session, so ses_a is passed as currentSessionID.
+    const frame = {
+      id: "evt_0",
+      created: 1,
+      type: "session.model.selected",
+      location: { directory: "/tmp/octmux-test" },
+      data: { sessionID: "ses_a", model: { id: "glm-5.3-flash", providerID: "sohoai" } },
+      durable: { aggregateID: "ses_a", seq: 0, version: 1 },
+    };
+    expect(backend.events.translateEvent(frame as never, "ses_a")).toEqual({
+      kind: "model-selected",
+      sessionID: "ses_a",
+      providerID: "sohoai",
+      modelID: "glm-5.3-flash",
+    });
+    await backend.session.setModel("ses_a", { providerID: "sohoai", modelID: "glm-5.3-flash" });
+    expect(calls.filter((c) => c.method === "session.switchModel")).toHaveLength(0);
+    await backend.session.setModel("ses_a", { providerID: "sohoai", modelID: "glm-5.1" });
+    expect(calls.filter((c) => c.method === "session.switchModel")).toHaveLength(1);
+  });
+});
+
 describe("V2Backend.session.sendCommand (capture §4.12 session command)", () => {
   test("calls session.command with name and text, and no client id", async () => {
     const { client, calls } = makeFake({});
@@ -646,6 +673,118 @@ describe("V2Backend.session.sendCommand (capture §4.12 session command)", () =>
       model: { providerID: "sohoai", modelID: "glm-5.1" },
     });
     expect(calls.map((c) => c.method)).toEqual(["session.switchModel", "session.command"]);
+  });
+});
+
+// ─── Command echo slot on a failed sendCommand (review issue 1, FIX-1) ───
+
+/**
+ * A live v2 user inbox frame in the envelope `V2EventTranslator` reads (capture §2a, §4.5). It carries no `durable`,
+ * so the seq check is skipped. The same fixture shape is used by `src/backend/v2-events.test.ts`.
+ */
+function inboxFrame(inboxID: string, text: string): unknown {
+  return {
+    id: "evt_live",
+    created: 1,
+    type: "session.inbox.enqueued",
+    data: { sessionID: "ses_a", inboxID, item: { type: "user", payload: { text } } },
+  };
+}
+
+describe("V2Backend.sendCommand releases its echo slot when the request fails (FIX-1)", () => {
+  test("a failed session.command rejects with the same error, and the next foreign turn renders", async () => {
+    const { client } = makeFake({ "session.command": statusError(500) });
+    const backend = new V2Backend(BASE, CWD, client);
+    backend.events.recordOwnCommandPrefix("# /review");
+
+    expect(
+      await rejectionMessage(backend.session.sendCommand({ sessionID: "ses_a", name: "review", args: "" })),
+    ).toBe("OpenCode server returned HTTP 500");
+    // No echo comes back for a failed POST, so the slot must be gone: the foreign turn is not swallowed.
+    expect(backend.events.translateEvent(inboxFrame("msg_for_1", "from mobile") as never, "ses_a")).toEqual({
+      kind: "foreign-user-turn",
+      messageID: "msg_for_1",
+      text: "from mobile",
+    });
+  });
+
+  test("a failed switchModel (model given) rejects with the same error, skips the POST, and releases the slot", async () => {
+    const { client, calls } = makeFake({ "session.switchModel": statusError(502) });
+    const backend = new V2Backend(BASE, CWD, client);
+    backend.events.recordOwnCommandPrefix("# /review");
+
+    expect(
+      await rejectionMessage(
+        backend.session.sendCommand({
+          sessionID: "ses_a",
+          name: "review",
+          args: "",
+          model: { providerID: "sohoai", modelID: "glm-5.1" },
+        }),
+      ),
+    ).toBe("OpenCode server returned HTTP 502");
+    // The command POST never ran, so no echo can come back.
+    expect(calls.map((c) => c.method)).toEqual(["session.switchModel"]);
+    expect(backend.events.translateEvent(inboxFrame("msg_for_1", "from mobile") as never, "ses_a")).toEqual({
+      kind: "foreign-user-turn",
+      messageID: "msg_for_1",
+      text: "from mobile",
+    });
+  });
+
+  test("a successful sendCommand keeps its slot, so the echo is swallowed and the next item renders", async () => {
+    const { client } = makeFake({});
+    const backend = new V2Backend(BASE, CWD, client);
+    backend.events.recordOwnCommandPrefix("# /review");
+
+    await backend.session.sendCommand({ sessionID: "ses_a", name: "review", args: "" });
+    // The echo takes the slot, whatever its text (the template need not start with the command name).
+    expect(backend.events.translateEvent(inboxFrame("msg_echo_1", "Review the diff.") as never, "ses_a")).toBeNull();
+    expect(backend.events.translateEvent(inboxFrame("msg_for_1", "from mobile") as never, "ses_a")).toEqual({
+      kind: "foreign-user-turn",
+      messageID: "msg_for_1",
+      text: "from mobile",
+    });
+  });
+});
+
+describe("V2Backend.events.getMissedHistory consumes a command echo slot the live stream never saw (FIX-2)", () => {
+  // The expanded template of a command need not start with the command name (a `rag.md`-style template). The resync
+  // path must claim it by the same slot rule as the live path, so the slot is spent and does not swallow a later turn.
+  const TEMPLATE = "Review the diff against the base branch and report findings.";
+  const messages = [
+    { id: "msg_echo_1", type: "user", time: { created: 1 }, text: TEMPLATE },
+    {
+      id: "msg_asst_1",
+      type: "assistant",
+      agent: "build",
+      model: { id: "glm-5.3-flash", providerID: "sohoai" },
+      time: { created: 2, completed: 3 },
+      content: [{ type: "text", text: "No issues found." }],
+      finish: "stop",
+      cost: 0,
+      tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    },
+    { id: "msg_idle_1", type: "idle", time: { created: 4 }, outcome: "succeeded" },
+  ];
+
+  test("a resync-only command echo is not rendered, and its slot does not swallow a later live foreign turn", async () => {
+    const { client } = makeFake({ "message.list": { data: messages, cursor: { next: null } } });
+    const backend = new V2Backend(BASE, CWD, client);
+    // The command was sent (its slot is armed), but its echo is missed by the live stream.
+    backend.events.recordOwnCommandPrefix("# /review");
+
+    const ops = await backend.events.getMissedHistory("ses_a");
+    // The echo is claimed by the slot, so it renders no user-input op. The assistant reply is still rendered.
+    expect(ops.some((op) => op.op === "user-input")).toBe(false);
+    expect(ops.some((op) => op.op === "block")).toBe(true);
+
+    // The slot was consumed by resync, so a later genuine foreign turn renders.
+    expect(backend.events.translateEvent(inboxFrame("msg_for_1", "from mobile") as never, "ses_a")).toEqual({
+      kind: "foreign-user-turn",
+      messageID: "msg_for_1",
+      text: "from mobile",
+    });
   });
 });
 

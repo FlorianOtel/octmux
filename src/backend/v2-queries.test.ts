@@ -261,9 +261,9 @@ describe("translateHistoryV2", () => {
   });
 
   // Capture §4.4 interrupt during a running tool, and §4.8. The tool is `error` with `aborted`, the assistant
-  // finishes with `error`, and the idle item is `interrupted`. v1 shows no interrupt marker in replay (it
-  // writes "Interrupted" only on a live Ctrl-C in app.tsx), so the history must show none either.
-  test("interrupted turn: aborted tool is an error block, the idle marker adds nothing, no interrupt message", () => {
+  // finishes with `error`, and the idle item is `interrupted`. The idle renders the "Interrupted" marker right after
+  // the turn-end, as v1 does for a `MessageAbortedError` message (`src/replay.ts`).
+  test("interrupted turn: aborted tool is an error block, and the idle renders Interrupted after the turn-end", () => {
     const aborted = tool("call_2c5x770y", "shell", errorState("aborted", "Tool execution interrupted", { command: "sleep 60" }));
     const ops = translateHistoryV2([
       user("usr_1", "run it"),
@@ -274,9 +274,9 @@ describe("translateHistoryV2", () => {
       { op: "user-input", text: "run it" },
       { op: "block", partID: "call_2c5x770y", role: "tool-call", meta: { toolName: "shell" }, status: "error" },
       { op: "turn-end" },
+      { op: "system-message", text: "Interrupted" },
       { op: "seed-history", texts: ["run it"] },
     ]);
-    expect(ops.some((op) => op.op === "system-message")).toBe(false);
   });
 
   // Capture §4.8 failed turn (capture 3). The failed assistant has `content: []` and `finish: "error"`. The idle
@@ -990,6 +990,22 @@ describe("translateMissedHistoryV2 (D-A fix)", () => {
   test("a user item whose own text prefix matches is left to the caller's predicate", () => {
     const messages = [user("usr_cmd", "# /brain-abandon\n\nClean up.")];
     expect(translateMissedHistoryV2(messages, () => true)).toEqual({ ops: [], renderedIDs: [] });
+  });
+
+  // An interrupted turn's idle is never selected, so a resync never renders its "Interrupted" marker. Only a full
+  // replay shows it. The user and the aborted assistant are still selected, and their ids are recorded.
+  test("an interrupted idle is never selected on resync, so the Interrupted marker is never rendered", () => {
+    const aborted = assistant("ast_abort", [text("partial")], {
+      time: { created: T, streamed: T + 1 },
+      finish: "error",
+      error: { type: "aborted", message: "Step interrupted" },
+    } as Partial<AssistantMsg>);
+    const messages = [user("usr_1", "go"), aborted, idle("idl_1", "interrupted")];
+    const result = translateMissedHistoryV2(messages, () => false);
+    expect(result.renderedIDs).toEqual(["usr_1", "ast_abort"]);
+    expect(result.renderedIDs).not.toContain("idl_1");
+    expect(result.ops.some((op) => op.op === "system-message")).toBe(false);
+    expect(result.ops[result.ops.length - 1]).toEqual({ op: "seed-history", texts: ["go"] });
   });
 
   test("a completed compaction not yet rendered gives the collapse line, summary and divider, once", () => {

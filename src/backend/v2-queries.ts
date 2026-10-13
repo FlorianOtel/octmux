@@ -123,9 +123,12 @@ function toolOutputText(content: ReadonlyArray<ToolContentLike> | undefined): st
  *   - Then `compaction-divider` with `auto` set when `reason === "auto"`, then `turn-end`. v1's summary
  *     message does both.
  *   - `running` and `failed` compactions give nothing. v1 has no equivalent in the message list.
- * - `idle` (`outcome` succeeded, failed or interrupted): nothing. The turn end is already marked by the
- *   assistant message. This keeps an interrupted turn's replay the same as v1's: no "Interrupted" marker,
- *   because v1 writes that marker only on a live Ctrl-C (`src/app.tsx`).
+ * - `idle`: only `outcome` `interrupted` renders, as one `system-message` "Interrupted" after the turn's `turn-end`.
+ *   The turn end is already marked by the assistant message, so the marker follows it. v1 writes the same marker in
+ *   the normal-rendering branch of `translateHistory` (`src/replay.ts`) when the assistant message's error is
+ *   `MessageAbortedError`. `succeeded` and `failed` give nothing. An idle item is never selected by
+ *   `translateMissedHistoryV2` (`isCompleteRenderable` is false for it), so the marker appears only on a full replay,
+ *   not on a resync. That is a documented limit.
  * - `shell`, `model-switched`, `agent-switched`, `location-switched`, `system`, `skill`, `synthetic`: nothing.
  *   None of these has a v1 message-list equivalent, and v1's translator never renders them.
  *
@@ -215,7 +218,16 @@ export function translateHistoryV2(
         continue;
       }
 
-      // Every other item type (idle, running or failed compaction, shell, model-switched, and so on):
+      // ─── Idle item (capture §4.8): only an interrupted turn renders, as the "Interrupted" marker ───
+      if (message.type === "idle") {
+        // Collapsed by the summary boundary, as the assistant before it is. v1 skips a pre-summary message whole.
+        if (boundaryIdx !== -1 && idx < boundaryIdx) continue;
+        if (!include(message)) continue;
+        if (message.outcome === "interrupted") ops.push({ op: "system-message", text: "Interrupted" });
+        continue;
+      }
+
+      // Every other item type (running or failed compaction, shell, model-switched, and so on):
       // no operation. See the rules in the doc comment above.
     }
 

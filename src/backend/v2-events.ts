@@ -302,6 +302,16 @@ export class V2EventTranslator {
   private readonly ownCommandPrefixes = new Set<string>();
 
   /**
+   * Own command echoes still expected. `recordOwnCommandPrefix` adds one for each command sent. A command's POST
+   * returns no id, and exactly one user item, the expanded template, comes back for it. The next user item that is
+   * neither an own prompt nor already rendered consumes one slot, whatever its text. The live inbox path and the resync
+   * path (`getMissedHistory`) both claim user items by the same rule (`claimUserItem`), so an echo seen only through
+   * resync also consumes its slot. A slot is released when the command's request fails (`releaseCommandEcho`), since a
+   * failed request produces no echo. Cleared by `resetEventState`.
+   */
+  private pendingCommandEchoes = 0;
+
+  /**
    * Message ids the renderer already shows for this session (Stage 15.2, D-A fix). It holds:
    * - inbox ids emitted as `foreign-user-turn`. A user item arrives as `enqueued` and again as `delivered`
    *   (capture §4.5, §4.12), so this also keeps the second arrival from rendering a second time;
@@ -391,6 +401,7 @@ export class V2EventTranslator {
     this.shells.clear();
     this.ownPromptIDs.clear();
     this.ownCommandPrefixes.clear();
+    this.pendingCommandEchoes = 0;
     this.renderedMessageIDs.clear();
     this.lastSeqBySession.clear();
     this.children.clear();
@@ -428,9 +439,26 @@ export class V2EventTranslator {
     this.ownPromptIDs.add(id);
   }
 
-  /** Records an expanded-command prefix. User items whose text starts with it are suppressed (v1 backstop). */
+  /**
+   * Records a command this octmux sends. Its expanded echo is suppressed in two ways. The prefix suppresses any user
+   * item that starts with it (v1 backstop). A pending echo slot suppresses the next user item whatever its text, because
+   * a command's template need not start with the command name (for example a `rag.md` template). The slot is the only
+   * match available, since the command's POST returns no id.
+   *
+   * @param prefix The expanded-text prefix, `"# /" + name`.
+   */
   recordOwnCommandPrefix(prefix: string): void {
     this.ownCommandPrefixes.add(prefix);
+    this.pendingCommandEchoes += 1;
+  }
+
+  /**
+   * Gives back one pending command echo slot, with a floor of 0. Called when a command's request fails. A failed
+   * request produces no echo, so its slot would otherwise swallow the next genuine foreign user turn. The prefix is
+   * kept: it is only a backstop and does not count slots.
+   */
+  releaseCommandEcho(): void {
+    if (this.pendingCommandEchoes > 0) this.pendingCommandEchoes -= 1;
   }
 
   /**
@@ -456,6 +484,45 @@ export class V2EventTranslator {
     if (userText === undefined) return false;
     for (const prefix of this.ownCommandPrefixes) {
       if (userText.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Claims a user item for suppression, and reports whether it is suppressed. This is the one rule shared by the live
+   * inbox path (`userInboxItem`) and the resync path (`getMissedHistory`), so an item is suppressed the same way in both.
+   * The checks run in this order:
+   *
+   * 1. An own prompt (`recordOwnMessageID`) is suppressed. Nothing is recorded.
+   * 2. An item already rendered is suppressed. Nothing is recorded.
+   * 3. While a command echo slot is pending, the item takes it whatever its text. The slot is given back, and the item
+   *    is recorded as rendered, so its later arrival (the `delivered` frame, or the same item seen again by resync) is
+   *    suppressed and does not take a second slot.
+   * 4. An item whose text starts with a recorded command prefix (the v1 backstop) is suppressed and recorded the same way.
+   * 5. Anything else is not claimed. Nothing is recorded, and the caller decides what to do with it.
+   *
+   * Unlike `isRendered`, this method has side effects. Call it only when the item is about to be shown or suppressed for
+   * good.
+   *
+   * @param messageID The user item's id (its inbox id on the live path, its message id on the resync path).
+   * @param text      The user item's text.
+   * @returns True if the item is suppressed. False if it is not claimed, and the caller should render it.
+   */
+  claimUserItem(messageID: string, text: string): boolean {
+    if (this.ownPromptIDs.has(messageID)) return true;
+    if (this.renderedMessageIDs.has(messageID)) return true;
+
+    if (this.pendingCommandEchoes > 0) {
+      this.pendingCommandEchoes -= 1;
+      this.renderedMessageIDs.add(messageID);
+      return true;
+    }
+
+    for (const prefix of this.ownCommandPrefixes) {
+      if (text.startsWith(prefix)) {
+        this.renderedMessageIDs.add(messageID);
+        return true;
+      }
     }
     return false;
   }
@@ -908,8 +975,8 @@ export class V2EventTranslator {
    * Handles a user item from `session.inbox.enqueued` or `session.inbox.delivered` (§4.5, §4.12). Only `user`
    * items count. `synthetic` (user shell), `compaction` and `shell` items are not user turns, and they return
    * `null`. Own echoes are suppressed by prompt id, which the client minted and the server echoes as `inboxID`
-   * (capture §A, §5 "client-supplied id"). A command's expanded text is suppressed by prefix (v1 backstop).
-   * A foreign turn is emitted once, at its first arrival.
+   * (capture §A, §5 "client-supplied id"). A command's expanded text is suppressed by its pending echo slot, or by
+   * prefix (v1 backstop). A foreign turn is emitted once, at its first arrival.
    *
    * @param data The inbox frame's data.
    */
@@ -922,12 +989,12 @@ export class V2EventTranslator {
     const text = asString(payload.text);
     if (text === undefined || text === "") return null;
 
-    if (this.ownPromptIDs.has(inboxID)) return null;
-    for (const prefix of this.ownCommandPrefixes) {
-      if (text.startsWith(prefix)) return null;
-    }
-    if (this.renderedMessageIDs.has(inboxID)) return null;
+    // The shared claim rule (`claimUserItem`) suppresses an own prompt, an item already shown or consumed, an echo that
+    // takes a pending command slot, and a prefix match. A claimed item is recorded as rendered inside `claimUserItem`,
+    // so its enqueued and delivered arrivals share one suppression and only one slot is ever taken.
+    if (this.claimUserItem(inboxID, text)) return null;
 
+    // Not claimed: a genuine foreign turn. Its first arrival renders it, and its second arrival is then suppressed.
     this.renderedMessageIDs.add(inboxID);
     return { kind: "foreign-user-turn", messageID: inboxID, text };
   }

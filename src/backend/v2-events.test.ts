@@ -412,6 +412,144 @@ describe("v2 translator: own echoes and foreign user turns (§4.5, §4.12)", () 
 
     expect(run(t, f.frames)).toEqual([{ kind: "foreign-user-turn", messageID: "msg_plain_1", text: "hello" }]);
   });
+
+  test("a pending command slot swallows the next user item even when its text is not the prefix, then later items render", () => {
+    // A command's expanded template need not start with the command name (for example a `rag.md` template). The slot
+    // takes the next user item whatever its text, because the command's POST returns no id (capture §4.12).
+    const t = new V2EventTranslator();
+    t.recordOwnCommandPrefix("# /rag");
+    const f = new Feed()
+      .durable("session.inbox.enqueued", {
+        inboxID: "msg_tpl_1",
+        item: { type: "user", payload: { text: "Retrieve the context below." } },
+      })
+      .durable("session.inbox.enqueued", { inboxID: "msg_plain_1", item: { type: "user", payload: { text: "hello" } } });
+
+    expect(run(t, f.frames)).toEqual([{ kind: "foreign-user-turn", messageID: "msg_plain_1", text: "hello" }]);
+  });
+
+  test("the enqueued and delivered arrivals of one echo consume one slot only", () => {
+    // Two commands sent, so two slots. The echo's two arrivals must use just one of them. The second echo then takes
+    // the second slot, and the plain item after it renders.
+    const t = new V2EventTranslator();
+    t.recordOwnCommandPrefix("# /rag");
+    t.recordOwnCommandPrefix("# /review");
+    const item = (text: string) => ({ type: "user", payload: { text } });
+    const f = new Feed()
+      .durable("session.inbox.enqueued", { inboxID: "msg_echo_1", item: item("Retrieve the context below.") })
+      .durable("session.inbox.delivered", { inboxID: "msg_echo_1", item: item("Retrieve the context below.") })
+      .durable("session.inbox.enqueued", { inboxID: "msg_echo_2", item: item("Review the diff.") })
+      .durable("session.inbox.enqueued", { inboxID: "msg_plain_1", item: item("hello") });
+
+    expect(run(t, f.frames)).toEqual([{ kind: "foreign-user-turn", messageID: "msg_plain_1", text: "hello" }]);
+  });
+
+  test("releaseCommandEcho gives back an unused slot, so the next foreign turn renders (failed command request)", () => {
+    // A command whose request failed produces no echo (`releaseCommandEcho`, called by `V2Backend.sendCommand`). Its slot
+    // must not swallow the next genuine foreign user turn, even though that turn's text does not match the prefix.
+    const t = new V2EventTranslator();
+    t.recordOwnCommandPrefix("# /rag");
+    t.releaseCommandEcho();
+    const f = new Feed().durable("session.inbox.enqueued", {
+      inboxID: "msg_plain_1",
+      item: { type: "user", payload: { text: "hello" } },
+    });
+
+    expect(run(t, f.frames)).toEqual([{ kind: "foreign-user-turn", messageID: "msg_plain_1", text: "hello" }]);
+  });
+
+  test("releaseCommandEcho with no pending slot does not go negative, so one later slot still swallows exactly one item", () => {
+    // Without the floor the counter would be -1 after the release, and the next record would only bring it to 0. The
+    // first echo would then render. With the floor the record gives 1, so the first item is swallowed and the second renders.
+    const t = new V2EventTranslator();
+    t.releaseCommandEcho();
+    t.recordOwnCommandPrefix("# /rag");
+    const item = (text: string) => ({ type: "user", payload: { text } });
+    const f = new Feed()
+      .durable("session.inbox.enqueued", { inboxID: "msg_echo_1", item: item("Retrieve the context below.") })
+      .durable("session.inbox.enqueued", { inboxID: "msg_plain_1", item: item("hello") });
+
+    expect(run(t, f.frames)).toEqual([{ kind: "foreign-user-turn", messageID: "msg_plain_1", text: "hello" }]);
+  });
+
+  test("prefix backstop still suppresses a later echo once the slot is drained, while an unrelated item renders", () => {
+    // Prefix-only branch (review issue 2). The first echo is taken by the slot, so the counter returns to 0. A later item
+    // starting with the prefix is then suppressed by the prefix backstop alone. An unrelated item still renders.
+    const t = new V2EventTranslator();
+    t.recordOwnCommandPrefix("# /brain");
+    const item = (text: string) => ({ type: "user", payload: { text } });
+    const f = new Feed()
+      .durable("session.inbox.enqueued", { inboxID: "msg_echo_1", item: item("# /brain\n\nFirst run.") })
+      .durable("session.inbox.enqueued", { inboxID: "msg_cmd_2", item: item("# /brain\n\nSecond run.") })
+      .durable("session.inbox.enqueued", { inboxID: "msg_plain_1", item: item("hello") });
+
+    expect(run(t, f.frames)).toEqual([{ kind: "foreign-user-turn", messageID: "msg_plain_1", text: "hello" }]);
+  });
+});
+
+describe("v2 translator: claimUserItem, the rule shared by the live path and resync (FIX-2)", () => {
+  test("an own prompt id is claimed, and nothing is recorded", () => {
+    // Own prompts are suppressed by id before any slot or prefix rule. The claim leaves no trace.
+    const t = new V2EventTranslator();
+    t.recordOwnMessageID("msg_own_1");
+    t.recordOwnCommandPrefix("# /rag");
+    expect(t.claimUserItem("msg_own_1", "anything")).toBe(true);
+    // The slot was not spent by the own prompt, so the next item still takes it.
+    expect(t.claimUserItem("msg_tpl_1", "Retrieve the context below.")).toBe(true);
+    expect(t.claimUserItem("msg_tpl_1", "Retrieve the context below.")).toBe(true);
+  });
+
+  test("an item already rendered is claimed, and it does not spend a pending slot", () => {
+    const t = new V2EventTranslator();
+    t.markRendered(["msg_hist_1"]);
+    t.recordOwnCommandPrefix("# /rag");
+    expect(t.claimUserItem("msg_hist_1", "old turn")).toBe(true);
+    // The slot is still pending, so the next genuine item takes it.
+    expect(t.claimUserItem("msg_echo_1", "Retrieve the context below.")).toBe(true);
+    expect(t.claimUserItem("msg_plain_1", "hello")).toBe(false);
+  });
+
+  test("a pending slot claims the item whatever its text, and marks it rendered so a later claim is suppressed", () => {
+    // The slot is consumed once. The same id seen again (a later live frame, or resync after live) is suppressed by
+    // `renderedMessageIDs` and does not take a second slot.
+    const t = new V2EventTranslator();
+    t.recordOwnCommandPrefix("# /rag");
+    expect(t.claimUserItem("msg_tpl_1", "Retrieve the context below.")).toBe(true);
+    expect(t.isRendered("msg_tpl_1")).toBe(true);
+    expect(t.claimUserItem("msg_tpl_1", "Retrieve the context below.")).toBe(true);
+    // The slot is now spent, so a plain foreign item is not claimed.
+    expect(t.claimUserItem("msg_plain_1", "hello")).toBe(false);
+  });
+
+  test("a prefix match is claimed and marked rendered, once the slot is drained", () => {
+    const t = new V2EventTranslator();
+    t.recordOwnCommandPrefix("# /brain");
+    t.releaseCommandEcho();
+    expect(t.claimUserItem("msg_cmd_1", "# /brain\n\nFirst run.")).toBe(true);
+    expect(t.isRendered("msg_cmd_1")).toBe(true);
+    expect(t.claimUserItem("msg_plain_1", "hello")).toBe(false);
+  });
+
+  test("a plain foreign item is not claimed, and it is not marked rendered", () => {
+    // Nothing is recorded for an unclaimed item. The caller decides whether to render it.
+    const t = new V2EventTranslator();
+    expect(t.claimUserItem("msg_plain_1", "hello")).toBe(false);
+    expect(t.isRendered("msg_plain_1")).toBe(false);
+    expect(t.claimUserItem("msg_plain_1", "hello")).toBe(false);
+  });
+
+  test("the live path and resync claim by the same rule: a resync-claimed echo leaves no slot for a later foreign turn", () => {
+    // The command echo was seen only through resync: `claimUserItem` on the resync path takes the slot. The live foreign
+    // turn that follows must render, because the slot is gone.
+    const t = new V2EventTranslator();
+    t.recordOwnCommandPrefix("# /review");
+    expect(t.claimUserItem("msg_echo_1", "Review the diff.")).toBe(true);
+    const f = new Feed().durable("session.inbox.delivered", {
+      inboxID: "msg_for_1",
+      item: { type: "user", payload: { text: "from mobile" } },
+    });
+    expect(run(t, f.frames)).toEqual([{ kind: "foreign-user-turn", messageID: "msg_for_1", text: "from mobile" }]);
+  });
 });
 
 // ─── Attribution and durable seq (§2b, §2c) ───
@@ -497,14 +635,16 @@ describe("v2 translator: resetEventState clears everything (P6)", () => {
     const t = new V2EventTranslator();
     t.recordOwnMessageID("msg_own");
     t.recordOwnCommandPrefix("# /brain");
+    // The command above also holds one echo slot. It takes the next user item, so `msg_x` does not render here.
     const before = new Feed()
       .durable("session.text.started", { assistantMessageID: MSG, ordinal: 0 }, 0)
       .durable("session.inbox.enqueued", { inboxID: "msg_x", item: { type: "user", payload: { text: "foreign" } } }, 1);
     expect(run(t, before.frames)).toEqual([
       { kind: "block-start", partID: `${MSG}:0`, role: "text", messageID: MSG },
       { kind: "generating" },
-      { kind: "foreign-user-turn", messageID: "msg_x", text: "foreign" },
     ]);
+    // A second command is recorded and left unconsumed, so the slot is pending when reset is called.
+    t.recordOwnCommandPrefix("# /rag");
 
     t.resetEventState();
 

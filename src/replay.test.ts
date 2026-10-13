@@ -386,3 +386,49 @@ describe("replay: exitCode passthrough (C2.6b)", () => {
     expect(log.filter(([name]) => name === "endBlock")).toEqual([["endBlock", "call_1", "ok"]]);
   });
 });
+
+// Follow-up #1 (v1): an operator interrupt aborts the assistant message with `MessageAbortedError`. Replay shows the
+// "Interrupted" marker right after that turn's turn-end, as the live path does. Other error names give no marker.
+describe("replay: Interrupted marker (follow-up #1, v1)", () => {
+  test("a MessageAbortedError assistant gives its turn-end, then the Interrupted system message", () => {
+    const aborted: any[] = [
+      { info: { role: "user" }, parts: [{ id: "u1", type: "text", text: "run it" }] },
+      {
+        info: { role: "assistant", error: { name: "MessageAbortedError", data: { message: "aborted" } } },
+        parts: [{ id: "a1", type: "text", text: "partial" }],
+      },
+    ];
+    expect(translateHistory(aborted)).toStrictEqual([
+      { op: "user-input", text: "run it" },
+      { op: "block", partID: "a1", role: "text", text: "partial", status: "ok" },
+      { op: "turn-end" },
+      { op: "system-message", text: "Interrupted" },
+      { op: "seed-history", texts: ["run it"] },
+    ]);
+  });
+
+  test("an assistant error with another name gives no Interrupted marker", () => {
+    const failed: any[] = [
+      {
+        info: { role: "assistant", error: { name: "ProviderAuthError", data: { message: "bad key" } } },
+        parts: [{ id: "a1", type: "text", text: "oops" }],
+      },
+    ];
+    const ops = translateHistory(failed);
+    expect(ops.some((op) => op.op === "system-message")).toBe(false);
+    expect(ops).toStrictEqual([
+      { op: "block", partID: "a1", role: "text", text: "oops", status: "ok" },
+      { op: "turn-end" },
+    ]);
+  });
+
+  test("a normal assistant message with no error gives no Interrupted marker", () => {
+    const normal: any[] = [
+      { info: { role: "assistant" }, parts: [{ id: "a1", type: "text", text: "fine" }] },
+    ];
+    expect(translateHistory(normal)).toStrictEqual([
+      { op: "block", partID: "a1", role: "text", text: "fine", status: "ok" },
+      { op: "turn-end" },
+    ]);
+  });
+});

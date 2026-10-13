@@ -210,6 +210,13 @@ export function translateHistory(messages: SessionMessagesResponses[200]): Histo
 
         // End turn after all parts
         ops.push({ op: "turn-end" });
+
+        // An operator interrupt (Ctrl-C) aborts the message with this error name. The marker goes right after the
+        // turn-end, and the check matches the live path (`src/events.ts`, the `parent-turn-end` reason "aborted").
+        const infoErr = (info as unknown as { error?: { name?: string } }).error;
+        if (infoErr?.name === "MessageAbortedError") {
+          ops.push({ op: "system-message", text: "Interrupted" });
+        }
       }
     }
 

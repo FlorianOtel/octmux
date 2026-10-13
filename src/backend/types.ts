@@ -280,7 +280,10 @@ export interface BackendEvents {
   /** Records a message ID that octmux itself created, so its user turn is not re-rendered. */
   recordOwnMessageID(id: string): void;
 
-  /** Records a custom command prefix so the injected system-reminder turn is suppressed. */
+  /**
+   * Records a command about to be sent. Its expanded echo turn is suppressed, either by the prefix or by one
+   * pending echo slot. The slot takes the next user turn whatever its text, because the POST returns no id.
+   */
   recordOwnCommandPrefix(prefix: string): void;
 
   /** Classifies one user turn by message ID (debounced foreign-turn path). Idempotent. */

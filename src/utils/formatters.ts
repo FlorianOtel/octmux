@@ -1,4 +1,26 @@
+import * as path from "path";
 import type { Backend } from "../backend/types.ts";
+import type { OrchestraBadge } from "../orchestra-watch.ts";
+
+/**
+ * Derive the project name shown in the status line from the configured server directory.
+ * Returns the last path segment: "/home/u/proj" → "proj". Trailing slashes are ignored
+ * (path.basename strips them). For "/" the result is "" (no segment).
+ */
+export function deriveProjectName(serverDirectory: string): string {
+  return path.basename(serverDirectory);
+}
+
+/**
+ * Operator guidance appended to error messages while an orchestra run is active.
+ * Returns "" when no run is active (badge null), so plain errors stay unchanged.
+ * A brain badge names `/brain-abandon`; a duo badge names `/duo-abandon`.
+ */
+export function abandonHint(badge: OrchestraBadge): string {
+  if (badge === null) return "";
+  const command = badge.mode === "duo" ? "/duo-abandon" : "/brain-abandon";
+  return ` — run ${command} to clean up the session`;
+}
 
 /**
  * Format a token count as a human-readable string.
