@@ -2,6 +2,8 @@
 title: "OpenCode v1/v2 adaptation layer"
 created_at: 2026-10-13--23-24
 created_by: Claude Code (Claude Opus 5.5)
+updated_by: Claude Code (Claude Opus 5.5)
+updated_at: 2026-10-13--23-59
 context: >
   The operator asked for an extensive, authoritative description of the redesign that lets one
   octmux binary serve both the OpenCode v1 API (@opencode-ai/sdk, the local systemd server) and the
@@ -337,6 +339,7 @@ the `model` argument of `sendPrompt` and `sendCommand` (section 4.5).
 | `replyForm` | no-op | `session.form.reply({ sessionID, formID, answer })` |
 | `cancelForm` | no-op | `session.form.cancel({ sessionID, formID })` (no observed `form.cancelled` frame; capture doc §4.6) |
 | `isSessionActive` | `undefined`, no request | `session.active()`; `true` when the map has the session, `false` when not, `undefined` on error |
+| `getOrchestraState` | legacy: oconona's sidecar files on octmux's disk (`src/backend/v1-orchestra.ts`), harness matched by local cwd | `session.get()`; the session's `metadata.orchestra` parsed by `parseOrchestraMetadata` (`src/backend/v2-orchestra.ts`); `null` when absent, inactive, stale or on error |
 | `isSessionDescendant` | `utils/session-ancestry.ts` (cached `GET /session` list, 5 s TTL, one-shot revalidation, depth 5) | `isSessionDescendantV2` (`src/backend/v2-ancestry.ts`): per-session `session.get` parent lookups, 5 s TTL cache per backend, depth 5, failures not cached |
 | `subscribeEvents` | `client.global.event({})` | `{ stream: wrapFrames(client.event.subscribe()) }` |
 
@@ -708,7 +711,8 @@ live translator tracks direct children only.
 
 `applyReplEvents` forwards these to `OrchestraWatcher` (`notifySubagentStarted`,
 `notifySubagentEnded`, `notifySubagentActivity`), which draws the subagent rows below the status
-line. `parent-turn-end` sweeps orphaned rows. The orchestra badge itself is host-local (section 7).
+line. `parent-turn-end` sweeps orphaned rows. The badge itself comes from
+`Backend.getOrchestraState`: over the API on v2, from oconona's sidecar files on v1 (section 7).
 
 The stall watchdog reads `getLatestAssistantActivity`. v2 searches the newest assistant message for
 a running `subagent` call with `metadata.sessionID` from the end of the content list (v1 checks only
@@ -820,15 +824,15 @@ result keeps the known context window and shows `0` used. Otherwise the context 
 
 ## 7. Host-local assumptions
 
+octmux is an OpenCode client: the v2 path reads no OpenCode server files. Model display names
+come from `listProviders()` and slash-completion names from `listCommands()` on both protocols.
 The following are not served over the OpenCode API. They read or act on octmux's own host. With a
 remote server (v2 desktop app on the MBP, or a v1 server reached through `--endpoint`) each
 behaves as stated.
 
 | Assumption | Code | With a remote server |
 |---|---|---|
-| Orchestra badge reads `~/.config/opencode/orchestra/sessions/*/`: `.oc-session-id` must match the harness session; `.brain-inflight` / `.duo-inflight` content gives the badge; `telemetry.json` `parser_warnings` are shown; directories with mtime older than 24 h are skipped | `OrchestraWatcher` (`src/orchestra-watch.ts`) | The sidecars are written on the server's host, so octmux finds none and shows no badge. The harness session is matched by `realpath(process.cwd())` against `SessionRecord.directory`; with `server.directory` set to a different path no session matches. Fenced off for oconona (`docs/Stage15.md` Known limits, C3.1) |
-| Friendly model names from `~/.config/opencode/opencode.json` | `OrchestraWatcher.loadModelFriendlyNames` (parent row label only) | Falls back to the raw model id in the label |
-| Slash-completion and highlighting names from `~/.config/opencode/commands/*.md` (names only) | `loadExternalCommands` (`src/command-registry.ts`), called in `src/index.tsx` | Completion may miss or show extra names. Forwarding uses the server's list (`backend.listCommands()` → `opencodeCommands`), so only server-known commands are sent |
+| v1 only (legacy): the orchestra badge reads `~/.config/opencode/orchestra/sessions/*/`: `.oc-session-id` must match the harness session; `.brain-inflight` / `.duo-inflight` content gives the badge; `telemetry.json` `parser_warnings` are shown; directories with mtime older than 24 h are skipped | `V1OrchestraFileReader` (`src/backend/v1-orchestra.ts`), behind `V1Backend.getOrchestraState` | The sidecars are written on the server's host, so octmux finds none and shows no badge. The harness session is matched by `realpath(process.cwd())` against `SessionRecord.directory`. v1 has no API channel for this state. On v2 the badge comes over the API (`V2Backend.getOrchestraState` reads the session's `metadata.orchestra`; contract in `src/backend/v2-orchestra.ts`) and works with a remote server |
 | `--auto-spawn` locates the `opencode` binary (`which`, then fallbacks) and starts a local server | `spawnOpencodeServer` (`src/server-lifecycle.ts`) | Always local and always v1 (no detection). Refused with `server.directory` (exit 2) |
 | `--worktree` creates a git worktree locally and chdirs into it | `src/utils/worktree.ts`, `src/index.tsx` | The server cannot see the path. Refused with `server.directory` (exit 2) |
 | Git branch in the status line | `fetchGitBranch` (`src/utils/formatters.ts`) | Shows the local checkout's branch |
@@ -924,7 +928,8 @@ The full list is in `docs/Stage15.md` "Known limits". The key ones:
   unless it starts with the recorded prefix.
 - The "Interrupted" marker appears on full replay only, not after an incremental resync.
 - Two `/model` switches in quick succession can briefly show the stale model.
-- The orchestra badge and subagent rows need the server on the same host (section 7).
+- The orchestra badge on v2 stays empty until oconona publishes `metadata.orchestra`; on v1
+  (legacy) it needs the server on the same host (section 7).
 - `--auto-spawn` is v1-only; `--worktree` suits a same-host server.
 - `GET /api/session` ignores the location filter on the server side (`docs/Stage15.md` Stage 15.3
   follow-ups).

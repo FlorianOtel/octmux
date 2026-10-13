@@ -3,7 +3,7 @@ title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-13--23-33
+updated_at: 2026-10-13--23-59
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -32,6 +32,7 @@ OpenCode wire protocol is in use. The seam is the `Backend` interface in
 | 15.2a | Backend contract reshape on the v1 side: flat session arguments, `SessionRecord`, v2-only `ReplEvent` kinds, history split, `v1-queries` | shipped |
 | 15.2 | `V2Backend` and the v2 core: sessions, prompts, commands, compaction, model select, permissions, forms, streaming events, replay, resync, startup | shipped |
 | 15.3 | v2 parity with v1 features | shipped |
+| 15.4 | Client-only boundary: orchestra state, model names and command names over the API | shipped |
 
 A v2 server is served natively by `V2Backend` (see "Native v2 backend" below).
 v2 is at feature parity with v1, apart from the limits listed under "Known limits" below.
@@ -59,7 +60,7 @@ v2 is at feature parity with v1, apart from the limits listed under "Known limit
 - Flat operations: `listCommands`, `getDefaultModelConfig`, `listProviders`,
   `listQuestions`, `listPermissions`, `rejectQuestion`, `replyQuestion`,
   `replyPermission`, `isSessionDescendant`, `subscribeEvents`, `listForms`,
-  `replyForm`, `cancelForm`, `isSessionActive`.
+  `replyForm`, `cancelForm`, `isSessionActive`, `getOrchestraState`.
 
 `ReplEvent` is re-exported from `src/events.ts`. It carries the v2-only kinds
 described in "`ReplEvent` v2-only kinds" below.
@@ -360,11 +361,13 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
 - The child's model is `""` when `session.created` omits it.
 - `permission.replied` does not clear a modal that was answered elsewhere. This
   matches v1.
-- The orchestra badge and the subagent rows need the OpenCode server on the same host as octmux.
-  The sidecar files under `~/.config/opencode/orchestra/sessions/` are read from octmux's local
-  disk, and the harness session is matched by the local cwd. This is pre-existing: v1 with a
-  remote `--endpoint` has the same limit. It is fenced off for oconona (C3.1, docs only); see
-  `~/Gin-AI/tmp/oconona-OCv2-support.md`.
+- Orchestra badge on v2: read over the API from the harness session's `metadata.orchestra`
+  (`Backend.getOrchestraState`, contract in `src/backend/v2-orchestra.ts`). It works with a remote
+  server, and stays empty until oconona publishes that metadata
+  (`~/Gin-AI/tmp/oconona-OCv2-support.md`).
+- Orchestra badge on v1 (legacy): v1 has no API channel for the run state, so `V1Backend` reads
+  oconona's sidecar files under `~/.config/opencode/orchestra/sessions/` on octmux's own disk and
+  matches the harness session by the local cwd. It works only with a server on the same host.
 - A foreign turn that arrives before a command's echo takes the echo slot and is swallowed. The
   echo then renders as a user line, unless its text starts with the recorded prefix.
 - A failed compaction whose frames fall in the seq hole unlocks input without an error line.
@@ -391,6 +394,49 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
 - v2 is at feature parity with v1. The limits are listed under "Known limits".
 
 ---
+
+### 2026-10-13--23-59 — Stage 15.4 — client-only boundary: orchestra state and names over the API
+
+**Implemented by:** Claude Code (Claude Opus 5.5) — 2026-10-13--23-59
+**Commit(s):** `4962c17`
+
+- **Principle (operator):**
+  - octmux is an OpenCode client and does not read OpenCode server files.
+  - oconona is server-side by definition and owns `~/.config/opencode/` and the server DB.
+  - v2 is the main code path; v1 is kept for legacy use.
+- **Orchestra badge:**
+  - New `Backend.getOrchestraState(sessionID)` (`src/backend/types.ts`, `OrchestraState`).
+  - `V2Backend` reads the session's `metadata.orchestra` with `GET /api/session/{id}`, parsed by
+    `parseOrchestraMetadata` (`src/backend/v2-orchestra.ts`). The file documents the contract that
+    oconona publishes:
+    - `version`, `mode`, `title`, `active` and `updatedAt`, plus optional `parserWarnings`;
+    - an entry older than 24 h, or with `active` not `true`, is ignored.
+  - `V1Backend` keeps the sidecar-file read, moved unchanged into `src/backend/v1-orchestra.ts`
+    (`V1OrchestraFileReader`). This is legacy, because v1 has no API channel for this state.
+  - `OrchestraWatcher` (`src/orchestra-watch.ts`) is protocol-neutral:
+    - it polls `getOrchestraState` every 5 s;
+    - it keeps the subagent rows from the event stream;
+    - it drops a result for a session the REPL has left.
+- **Model display names:** taken from `listProviders()`, which both protocols serve. The
+  `~/.config/opencode/opencode.json` read is removed.
+- **Slash completion and highlighting:** take the server's command names (`setServerCommands` in
+  `src/command-registry.ts`), fed by the same `listCommands` result that decides forwarding
+  (`src/app.tsx`). The `~/.config/opencode/commands/*.md` scan is removed. Server commands appear
+  in completion once the list arrives, shortly after startup.
+- **Verification:**
+  - `bun test src/`: 772 pass, 0 fail, 24 new tests (`v2-orchestra`, `v1-orchestra`, watcher refresh,
+    `command-registry`, `V2Backend.getOrchestraState`). The tsgo error set is unchanged.
+  - Live, OpenCode 2.0.28 on the MBP, octmux on another host:
+    - a scratch session with published `metadata.orchestra` showed `♪ orchestra full - …` and the
+      `brain` row;
+    - `active: false` cleared the badge within 5 s;
+    - `/ra` completed to `/rag` from the server list;
+    - `PATCH /api/session/{id}` replaces `metadata` as a whole, with no key merge.
+  - v1 smoke test (local): `/bra` completes to `/brain` and `/brain-abandon` from the server list.
+  - Test sessions were deleted by recorded id.
+- **v1 changes:**
+  - The badge refresh runs on the 5 s poll only; the `fs.watch` trigger is gone.
+  - Model labels come from the server catalog.
 
 ### 2026-10-13--23-33 — Stage 15.3.1 — refresh stale Backend and resync comments
 

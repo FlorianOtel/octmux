@@ -2,6 +2,8 @@
 title: "OpenCode v2 support — decision record"
 created_at: 2026-10-13--23-26
 created_by: Claude Code (Claude Opus 5.5)
+updated_by: Claude Code (Claude Opus 5.5)
+updated_at: 2026-10-14--00-05
 context: >
   The operator asked that every decision taken during octmux's OpenCode v2 work be recorded in the
   repository. The work covers the Stage 14 /brain run and the Stage C /brain runs, sessions C1 to C3,
@@ -46,6 +48,7 @@ wire protocol is in `docs/OpenCode-v2-protocol-capture.md`.
 | 15.2-1–15.2-14 | Stage 15.2 accepted design decisions and deliberate deviations (session C2) | session C2 conversation; `docs/Stage15.md` |
 | 15.2-D1… | Stage 15.2 defects found live or in review, and their fixes | `DECISIONS-draft.md` (C9 block), `review-comments.md`, `docs/Stage15.md` 15.2 entry |
 | C3-1–C3-27 | Session C3 (Stage 15.3 and the follow-up fixes) | session `20261013T190810Z-2568784`; `docs/Stage15.md` 15.3 entry |
+| C4-1–C4-6 | Stage 15.4: client-only boundary (orchestra state, model and command names over the API) | session C3 conversation; `docs/Stage15.md` 15.4 entry |
 | R1–R14 | Standing rules (security, live-test hygiene, doc/commit discipline) | collected from all three sessions; see §2 of this record |
 
 Two naming clashes to watch:
@@ -84,6 +87,10 @@ Two naming clashes to watch:
 | session C3 | 15.3 | `25d0843` | docs: hash backfill | 22:53 |
 | session C3 | 5.6.1 + 3E.2.1 | `3c5e213` | code: v1 follow-up fixes | 23:04 |
 | session C3 | 5.6.1 + 3E.2.1 | `56ddacf` | docs: hash backfill | 23:05 |
+| session C3 | — | `975752b` | docs: adaptation-layer doc + this decision record | 23:29 |
+| session C3 | 15.3.1 | `0d346d1` | code: comment-only refresh | 23:33 |
+| session C3 | 15.3.1 | `a7f15ba` | docs: hash backfill | 23:34 |
+| session C3 | 15.4 | `4962c17` | code: client-only boundary | 23:59 |
 
 ## 2. Standing rules
 
@@ -582,8 +589,8 @@ server on the same host as octmux, because oconona writes its sidecar files unde
 `~/.config/opencode/orchestra/sessions/` on the server host while octmux reads its own disk, and octmux
 matches the harness session by its local cwd. This is pre-existing and applies to v1 with a remote
 `--endpoint` too; not a v2 issue. Rejected: fixing the protocol gaps; showing subagent rows without a
-badge (a new feature beyond parity). **Status:** In force; docs only (`docs/Stage15.md` "Known
-limits", `README.md`).
+badge (a new feature beyond parity). **Status:** Superseded for v2 by C4-2 (badge over the API);
+in force for v1 (legacy) by C4-3.
 
 **C3-3 — v2 child-model backfill fenced off.** v2's `session.created` carries no model, so the child's
 model is `""`; it could be filled from the child's `session.step.started`. Operator: not now. **Status:**
@@ -697,13 +704,68 @@ after the live checklist passes. **Status:** Done (v2 11/11 after FIX-3; v1 smok
 **C3-26 — Host-local assumptions analysis.** (Requested by the operator.) octmux never writes under
 `~/.config/opencode`. It reads, on its own host: `orchestra/sessions/` (the badge),
 `opencode.json` (friendly model names for the badge label) and `commands/*.md` names (completion). All
-three are host-local assumptions that break or degrade with a remote server. **Status:** Recorded; no
-change (see §7 of this record).
+three are host-local assumptions that break or degrade with a remote server. **Status:** Resolved in
+Stage 15.4 (`4962c17`) by C4-1 to C4-5.
 
 **C3-27 — Remaining pre-existing items left out of 15.3.** The `isRendered` `userText` parameter is dead
 in production (Review 4 minor, kept); session-picker "fork of" label; 8-char id prefixes on `/fork` and
 `/new`; server ignores `location[directory]` on `GET /api/session`; and the carried 15.2 list.
 **Status:** Open (§7 of this record).
+
+## 5a. Stage 15.4: client-only boundary (after session C3)
+
+**C4-1: octmux is a client; oconona is server-side.** (Operator, 2026-10-13.)
+- octmux is an OpenCode client. It cannot and should not assume access to OpenCode server files and
+  directories (`~/.config/opencode/`, `~/.local/share/opencode/`); it reaches the server only through
+  its API.
+- oconona installs agents, commands and scripts on the server and runs as the server's shell tool, so it
+  inevitably owns server-side configuration and state.
+- v2 is the main code path, since the local server will also move to v2; v1 is kept for legacy use.
+
+The operator asked to replace the three host-local reads of C3-26 with API equivalents. Where v1 has
+no equivalent, or one would be cumbersome, the gap is documented instead.
+
+**Status:** In force (memory `feedback-octmux-client-only-boundary`).
+
+**C4-2: v2 orchestra badge over the API, from session metadata.** (Operator chose this option
+over "keep the file read and document it" and "remove the file read entirely".)
+- New `Backend.getOrchestraState(sessionID)`. `V2Backend` reads the harness session's
+  `metadata.orchestra` (`GET /api/session/{id}`).
+- The contract that oconona publishes is defined in `src/backend/v2-orchestra.ts`:
+
+  ```
+  PATCH /api/session/{id}
+  { "metadata": { "orchestra": { "version": 1, "mode": "brain" | "duo", "title": "…",
+                                 "active": true, "updatedAt": <ms>, "parserWarnings"?: [...] } } }
+  ```
+- What octmux ignores:
+  - an entry with `active` not `true`;
+  - an entry older than 24 h;
+  - an entry with a malformed `mode` or `title`.
+- What octmux tolerates: unknown fields and newer versions.
+- Verified live on OpenCode 2.0.28 from another host: the badge appeared, and `active: false` cleared it
+  within 5 s.
+
+**Status:** Implemented in `4962c17`. The badge stays empty until oconona publishes the metadata.
+
+**C4-3: v1 badge stays on oconona's files (legacy).** v1 has no API channel for the run state, so
+`V1Backend.getOrchestraState` keeps the sidecar-file read, moved unchanged into
+`src/backend/v1-orchestra.ts`. It still needs a same-host server. The `fs.watch` trigger is dropped;
+the 5 s poll remains. **Status:** In force (legacy), `4962c17`.
+
+**C4-4: Model display names from `listProviders()`.** Both protocols serve the model catalog with
+display names, so the `~/.config/opencode/opencode.json` read is removed. **Status:** Implemented in
+`4962c17`.
+
+**C4-5: Slash completion from the server's command list.** `setServerCommands` is fed by the same
+`listCommands` result that decides forwarding, on both protocols. The `~/.config/opencode/commands/*.md`
+scan is removed. Server commands appear in completion once the list arrives, shortly after startup.
+**Status:** Implemented in `4962c17`.
+
+**C4-6: Fact: `PATCH /api/session/{id}` replaces `metadata` as a whole.** Verified live: two PATCHes
+with different keys leave only the second key. oconona must read the current metadata, then write it
+back with `orchestra` set. **Status:** Recorded in the contract (`src/backend/v2-orchestra.ts`) and the
+oconona handover.
 
 ## 6. Rejected alternatives
 
@@ -735,6 +797,8 @@ in production (Review 4 minor, kept); session-picker "fork of" label; 8-char id 
 | One-shot `lastRequestedModelRef` | Brain/Planner, session C3 | Stays armed on a cache hit and swallows a foreign switch | C3-11 |
 | Subagent rows without a badge | Operator, session C3 | New feature beyond parity | C3-2 |
 | Fixing orchestra protocol gaps in octmux now | Operator, session C3 | Fenced off for oconona | C3-2 |
+| Keep the orchestra file read on v2 and document it | Operator, Stage 15.4 | octmux is a client; v2 is the main path | C4-2 |
+| Remove the orchestra file read on both protocols | Operator, Stage 15.4 | v1 has no API alternative; keep it as legacy | C4-3 |
 | Replay marker text "Interrupted: What next?" | Operator, session C3 | Replay must be distinguishable from live | C3-14 |
 | Sharing the orchestra directory via NFS/sshfs | Handover analysis, session C3 | Outside both projects; subtle path and latency errors (oconona to decide) | C3-4 |
 
@@ -742,14 +806,12 @@ in production (Review 4 minor, kept); session-picker "fork of" label; 8-char id 
 
 ### 7.1 Fenced orchestra work (oconona)
 
-- Orchestra badge and subagent rows with a remote server (C3-2). Options listed in
-  `~/Gin-AI/tmp/oconona-OCv2-support.md` §1.3: document same-host-only (done), publish badge state through
-  OpenCode itself, or share the directory. Whatever is chosen, match by session id, not directory.
+- oconona to publish `metadata.orchestra` on the harness session (contract C4-2,
+  `src/backend/v2-orchestra.ts`; handover `~/Gin-AI/tmp/oconona-OCv2-support.md`). Until then the v2
+  badge stays empty.
 - v2 child-model backfill from the child's `session.step.started` (C3-3).
 - oconona on v2: session-id resolution (port, auth, `/api/session` path and wrapped shape), telemetry from
   `session_v2`, `subagent` instead of `task` in prompts and hooks (handover §2.1, §2.3).
-- Host-local reads in octmux: `opencode.json` friendly model names and `commands/*.md` completion names
-  (C3-26). On v2, `GET /api/command` already supplies command names from the server.
 
 ### 7.2 Pre-existing follow-ups from `docs/Stage15.md` (15.3 entry)
 

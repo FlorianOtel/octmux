@@ -52,7 +52,7 @@ Set `server.directory` when the OpenCode server runs on another host, or in a co
 - Cannot be combined with `--auto-spawn`. The spawned server is local, so octmux exits 2 and names the config file.
 - `--resume`, `--resume-last`, and `--fork` still use the resolved session's own directory, as they do without this key.
 - When set, octmux prints `octmux: using server directory <dir> (from <config path>)` at startup.
-- Local-only things still use the local working directory: the git branch in the status line and the orchestra session files. The project name in the status line is the basename of `server.directory`. External commands are still read from `~/.config/opencode/commands/`.
+- Local-only things still use the local working directory: the git branch in the status line, and on v1 the orchestra session files. The project name in the status line is the basename of `server.directory`. Slash-completion names come from the server's command list.
 
 ### Substitution
 
@@ -119,7 +119,7 @@ A 200 response with `text/html` is never taken as identification, because both s
 | v2, authorized | Prints a version-gate message if one applies. A different MAJOR version refuses (see Version gate). Prints `octmux: using server directory <dir> (from <path>)` when `server.directory` is set. Then runs the native v2 client. | continues; 1 on a MAJOR mismatch |
 | Unreachable | Prints the "no opencode server" hint. For `--endpoint` it prints the shorter `health: failed` form. | 1 |
 
-A v2 server is supported natively, with the same features as v1. The optional `server.directory` config key names the server-side directory that new sessions use. It must be absolute, and `--worktree` and `--auto-spawn` are refused with it (exit 2). The orchestra badge needs the OpenCode server on the same host as octmux. `--auto-spawn` starts a local server and skips detection, so it always runs the v1 client. `--worktree` creates its worktree on the octmux host, so it suits a server on the same host.
+A v2 server is supported natively, with the same features as v1. The optional `server.directory` config key names the server-side directory that new sessions use. It must be absolute, and `--worktree` and `--auto-spawn` are refused with it (exit 2). octmux reads no OpenCode server files on v2: the orchestra badge comes from the harness session's `metadata.orchestra`, which oconona publishes, and works with a remote server. On v1 (legacy) the badge reads oconona's files and needs the server on the same host. `--auto-spawn` starts a local server and skips detection, so it always runs the v1 client. `--worktree` creates its worktree on the octmux host, so it suits a server on the same host.
 
 ### Version gate
 
