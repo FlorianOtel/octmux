@@ -67,8 +67,9 @@ export type ReplEvent =
   | { kind: "foreign-user-turn"; messageID: string; text: string }
   | { kind: "foreign-user-part"; messageID: string }
   | { kind: "model-switched"; sessionID: string; providerID: string; modelID: string }
-  // ─── v2-only kinds (Stage 15.2). filterEvent (v1) never emits these; app.tsx handles them as
-  // no-ops until Stage 15.2 step 6 wires them. Plan reference: PLAN-C2C3.md §B.1.
+  // ─── v2-only kinds (Stage 15.2). filterEvent (v1) never emits these. The v2 translator
+  // (src/backend/v2-events.ts) emits them, and app.tsx handles them. app.tsx also builds `form-asked`
+  // itself in its missed-form discovery pass. Plan reference: PLAN-C2C3.md §B.1.
   // Form (v2 `form.created` / `form.replied`, capture doc §4.6).
   | { kind: "form-asked"; formID: string; sessionID: string; title: string; fields: FormField[] }
   | { kind: "form-replied"; formID: string; sessionID: string; answer: Record<string, unknown> }

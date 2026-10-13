@@ -6,7 +6,7 @@ import Table from "cli-table3";
 import stringWidth from "string-width";
 import { computeColWidths, wrapCell, naturalWidths } from "./table-layout.ts";
 import type { Block, Role } from "../blocks.ts";
-import { formatBlock, formatLine } from "../blocks.ts";
+import { formatBlock, formatExitMarker, formatLine } from "../blocks.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer, CommittedLine } from "./types.ts";
 import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
@@ -133,6 +133,14 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   private _activeBlockAnsi = "";
   private _activeBlockRole: Role | null = null;
   private _nonTextTail: { role: Role; text: string } | null = null;
+  // Stage 15.2 F-b — per-block partial-line tail for NON-TEXT roles (summary,
+  // thinking, tool-result, ...). Keyed by partID so interleaved non-text blocks
+  // (parallel tool results, reasoning overlapping other output) each keep their
+  // own partial line. Holds only the text after the last "\n" seen for that
+  // block: complete lines are committed as they arrive, and the held partial is
+  // committed as one final line when the block closes (endBlock, retagBlock,
+  // dispose). Text-role blocks never use this map.
+  private _nonTextTails = new Map<string, { role: Role; text: string }>();
   private _width = 80;
   private _outputEnabled = new Map<string, boolean>();
   private _marked: Marked;
@@ -243,6 +251,13 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
       this._commitActiveText();
     }
 
+    // Stage 15.2 D-B: a text block starting while a reasoning block still holds an unfinished line (v2 overlap,
+    // src/backend/v2-events.ts startStreamPart: reasoning.ended can follow text.started). Commit that held line now,
+    // so it lands before this message's timestamp separator and before its answer, not after them. Only the thinking
+    // role is flushed here. v1 closes its thinking block before text starts (src/events.ts), so v1 never holds one at
+    // this point and this call changes nothing for v1.
+    if (role === "text") this._flushHeldNonTextTails(heldRole => heldRole === "thinking");
+
     // Stage 10.8 — inter-message blank line for text role.
     // OCTMUX_DEBUG_RENDER=1 instrumentation: prints to stderr at every text-role
     // beginBlock — distinguishes Hypothesis A (messageID undefined at runtime →
@@ -351,8 +366,12 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         this.emit("changed");
       }, 100);
     } else {
-      // Non-text roles: replicate StdoutRenderer's line-streaming
-      let buf = text;
+      // Non-text roles: line-streaming with a per-block partial-line tail.
+      // Stage 15.2 F-b: prepend the partial line this block already holds, so a
+      // line split across deltas (e.g. "## Go" + "al\n") is committed once, whole,
+      // with a single role prefix. Only complete lines (ending in "\n") are
+      // committed here; the trailing partial is held until the block closes.
+      let buf = (this._nonTextTails.get(partID)?.text ?? "") + text;
       let nl = buf.indexOf("\n");
       const newLines: CommittedLine[] = [];
       while (nl !== -1) {
@@ -360,20 +379,22 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
         buf = buf.slice(nl + 1);
         nl = buf.indexOf("\n");
       }
-      // Process the remaining partial line
-      if (buf.length > 0) {
-        newLines.push({ id: this._nextId++, role, ansi: formatLine(role, buf, false) });
-      }
-      this._nonTextTail = buf ? { role, text: buf } : null;
+      // `buf` is now the partial line (no "\n"). Hold it for this block only.
+      const tail = buf ? { role, text: buf } : null;
+      if (tail) this._nonTextTails.set(partID, tail);
+      else this._nonTextTails.delete(partID);
+      this._nonTextTail = tail;
       if (newLines.length > 0) this._committed = [...this._committed, ...newLines];
       this.emit("changed");
     }
   }
 
-  endBlock(partID: string, _status?: "ok" | "error"): void {
+  endBlock(partID: string, _status?: "ok" | "error", exitCode?: number): void {
     const role = this._openBlocks.get(partID);
     const _outKey = role ? OUTPUT_KEY[role] : undefined;
     if (_outKey && !this.isOutputEnabled(_outKey)) {
+      // Gate off: discard any held partial line so a hidden role never commits.
+      this._nonTextTails.delete(partID);
       this._openBlocks.delete(partID);
       return;
     }
@@ -385,6 +406,15 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
       this._flushDebounce();
       this._commitActiveText();
     }
+    // Stage 15.2 F-b: commit this block's held partial line (non-text roles). Runs after
+    // the active-text commit and before the exit marker, so the marker follows the tail.
+    // Visibility-gated: a hidden role never holds a tail, so nothing is committed for it.
+    this._closeNonTextTail(partID, role !== undefined && this.visibility.isVisible(role));
+    // Stage 15.2 (C2.6b): a non-zero shell exit shows a marker line after the tool block. It is added after
+    // any active-text commit above, so it follows the block's own content.
+    if (role && exitCode !== undefined && this.visibility.isVisible(role)) {
+      this._committed = [...this._committed, { id: this._nextId++, role, ansi: formatExitMarker(exitCode) }];
+    }
     this._openBlocks.delete(partID);
     this.emit("changed");
   }
@@ -392,6 +422,10 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
   commitTurnEnd(): void {
     // Stage 10.4: pre-flush debounce + flush active text block.
     this._flushDebounce();
+    // Stage 15.2 D-B: commit every held non-text partial line before the separator. A v2 turn can end (session-idle)
+    // before the block-end of a reasoning block that still holds a line. turnEnd (src/backend/v2-events.ts) emits
+    // session-idle before those block-ends, so without this flush the line would land after the separator.
+    this._flushHeldNonTextTails(() => true);
     if (this._activeTextPartID !== null) {
       this._commitActiveText();
     }
@@ -428,6 +462,9 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     // Stage 10.8.4 — Reassign a block's role. Used during compaction to change
     // a part's role (e.g., text → summary).
     if (!this._openBlocks.has(partID)) return; // no-op if not in map
+    // Stage 15.2 F-b: a held partial line belongs to the OLD role's rendering, so commit it
+    // under the old role before the role changes. Later deltas start a fresh tail under newRole.
+    this._closeNonTextTail(partID, true);
     this._openBlocks.set(partID, newRole);
     // If the retagged block is the active text part, update its role and
     // invalidate the memoised wrapper so the next getActiveBlock() call
@@ -524,6 +561,43 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     }
   }
 
+  /**
+   * Stage 15.2 F-b — close out one block's held non-text partial line.
+   * `commit` = true commits the partial as one final line under the role it was
+   * streamed with; false discards it (gate off). No-op when the block holds no tail.
+   */
+  private _closeNonTextTail(partID: string, commit: boolean): void {
+    const tail = this._nonTextTails.get(partID);
+    if (!tail) return;
+    this._nonTextTails.delete(partID);
+    if (this._nonTextTail === tail) this._nonTextTail = null;
+    if (!commit) return;
+    this._committed = [...this._committed,
+      { id: this._nextId++, role: tail.role, ansi: formatLine(tail.role, tail.text, false) },
+    ];
+  }
+
+  /**
+   * Stage 15.2 D-B — commit the held partial lines whose role satisfies `match`, without closing their blocks.
+   * A block still open keeps streaming: its next partial line becomes a new tail, committed at its own endBlock.
+   * The visibility and gate rules are those of endBlock: a tail whose role is hidden or gated off is discarded,
+   * never committed (see `_closeNonTextTail`).
+   *
+   * @param match Selects the held tails to commit, by the role they were streamed with.
+   */
+  private _flushHeldNonTextTails(match: (role: Role) => boolean): void {
+    let flushed = false;
+    // Snapshot the entries first: `_closeNonTextTail` deletes from the map while we walk it.
+    for (const [partID, tail] of [...this._nonTextTails.entries()]) {
+      if (!match(tail.role)) continue;
+      const outKey = OUTPUT_KEY[tail.role];
+      const commit = this.visibility.isVisible(tail.role) && (outKey === undefined || this.isOutputEnabled(outKey));
+      this._closeNonTextTail(partID, commit);
+      flushed = true;
+    }
+    if (flushed) this.emit("changed");
+  }
+
   private _commitActiveText(): void {
     if (this._activeTextPartID === null || this._activeBlockRole === null) return;
     // Array-replace (not in-place push) so getCommitted() returns a new reference,
@@ -556,6 +630,9 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
     this._activeTextBuf = "";
     this._activeBlockAnsi = "";
     this._nonTextTail = null;
+    // Stage 15.2 F-b: drop held partial lines. Committed lines were just wiped above, so
+    // there is nothing left for a flushed tail to appear next to.
+    this._nonTextTails.clear();
     this._openBlocks.clear();
     this._lastTextMessageID = null;
     this.emit("changed");
@@ -567,6 +644,10 @@ export class BlockBufferRenderer extends EventEmitter implements Renderer {
      this._flushDebounce();
      if (this._activeTextPartID !== null) {
        this._commitActiveText();
+     }
+     // Stage 15.2 F-b: commit every held non-text partial line (dispose abandons open blocks).
+     for (const partID of [...this._nonTextTails.keys()]) {
+       this._closeNonTextTail(partID, true);
      }
      this._lastTextMessageID = null;
      return Promise.resolve();

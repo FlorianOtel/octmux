@@ -12,7 +12,7 @@
  * `src/replay.ts`, `src/utils/session-ancestry.ts`) and are only referenced.
  */
 
-import type { Backend, BackendEvents, BackendSession, PermissionDecision, V1Client } from "./types.ts";
+import type { Backend, BackendEvents, BackendForm, FormAnswer, PermissionDecision, V1BackendSession, V1Client } from "./types.ts";
 import { getAuthHeaders } from "../auth-headers.ts";
 import {
   filterEvent,
@@ -37,7 +37,7 @@ import {
  */
 export class V1Backend implements Backend {
   /** Session-scoped REST operations, each forwarding to `this.client.session.*`. */
-  readonly session: BackendSession;
+  readonly session: V1BackendSession;
 
   /** Event-pipeline helpers, forwarding to the same-named exports of `src/events.ts`. */
   readonly events: BackendEvents;
@@ -142,6 +142,9 @@ export class V1Backend implements Backend {
 
       // History: fetch the message list and translate it into replay operations (src/replay.ts).
       getHistory: (sessionID) => fetchHistory(this.client, sessionID),
+
+      // v1 never emits `resync-needed` (no durable seq), so the missed-history path is never reached on v1.
+      getMissedHistory: async () => [],
     };
   }
 
@@ -220,5 +223,36 @@ export class V1Backend implements Backend {
   /** v1 `client.global.event({})`; the caller reads `.stream` from the result. */
   subscribeEvents(): ReturnType<V1Client["global"]["event"]> {
     return this.client.global.event({});
+  }
+
+  /**
+   * C2.3a: v1 has no forms (its question prompts go through `listQuestions`). Resolves an empty list,
+   * so the caller finds nothing to show. Added to the seam for V2Backend. No v1 request is sent.
+   */
+  listForms(_sessionID: string): Promise<BackendForm[] | undefined> {
+    return Promise.resolve([]);
+  }
+
+  /**
+   * C2.3a: v1 has no forms, so there is nothing to reply to. No request is sent.
+   * Added to the seam for V2Backend.
+   */
+  replyForm(_sessionID: string, _formID: string, _answer: FormAnswer): Promise<void> {
+    return Promise.resolve();
+  }
+
+  /**
+   * C2.6b: v1 has no forms, so there is nothing to cancel. No request is sent.
+   */
+  cancelForm(_sessionID: string, _formID: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  /**
+   * C2.6b: v1 never emits `resync-needed`, so the handler that calls this never runs on v1. Resolves
+   * `undefined` ("unknown") and sends no request. See `Backend.isSessionActive` in types.ts.
+   */
+  isSessionActive(_sessionID: string): Promise<boolean | undefined> {
+    return Promise.resolve(undefined);
   }
 }

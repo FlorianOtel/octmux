@@ -35,6 +35,8 @@ export type HistoryOp =
       meta?: { toolName: string };
       text?: string;
       status: "ok" | "error";
+      /** Stage 15.2 (C2.6b): a non-zero shell exit, passed to `endBlock`. Set only by the v2 translator. */
+      exitCode?: number;
     }
   /** `renderer.commitCompactionDivider(auto)`. */
   | { op: "compaction-divider"; auto: boolean }
@@ -272,7 +274,12 @@ export function applyHistory(
         if (op.text !== undefined) {
           renderer.appendToBlock(op.partID, op.text);
         }
-        renderer.endBlock(op.partID, op.status);
+        // Two-argument endBlock unless an exit code is present, so v1 history keeps the old call shape.
+        if (op.exitCode !== undefined) {
+          renderer.endBlock(op.partID, op.status, op.exitCode);
+        } else {
+          renderer.endBlock(op.partID, op.status);
+        }
         break;
       case "compaction-divider":
         renderer.commitCompactionDivider(op.auto);

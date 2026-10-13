@@ -366,3 +366,23 @@ describe("replay: old replaySession vs translateHistory + applyHistory", () => {
     expect(translateHistory([])).toStrictEqual([]);
   });
 });
+
+// Stage 15.2 (C2.6b): `HistoryOp` block ops may carry `exitCode` (v2 non-zero shell exit). applyHistory passes it
+// to endBlock as a third argument. A block without it keeps the two-argument call the v1 history has always made.
+describe("replay: exitCode passthrough (C2.6b)", () => {
+  test("a block op with exitCode calls endBlock with the status and the exit code", () => {
+    const { log, renderer, editor } = makeRecorder();
+    applyHistory(renderer, editor, [
+      { op: "block", partID: "call_1", role: "tool-call", meta: { toolName: "shell" }, status: "ok", exitCode: 1 },
+    ]);
+    expect(log.filter(([name]) => name === "endBlock")).toEqual([["endBlock", "call_1", "ok", 1]]);
+  });
+
+  test("a block op without exitCode keeps the two-argument endBlock call", () => {
+    const { log, renderer, editor } = makeRecorder();
+    applyHistory(renderer, editor, [
+      { op: "block", partID: "call_1", role: "tool-call", meta: { toolName: "shell" }, status: "ok" },
+    ]);
+    expect(log.filter(([name]) => name === "endBlock")).toEqual([["endBlock", "call_1", "ok"]]);
+  });
+});

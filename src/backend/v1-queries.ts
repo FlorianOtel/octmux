@@ -11,10 +11,10 @@
  * functions take a narrow `QuerySession` so they can be exercised with a fake.
  */
 
-import type { BackendSession, LatestAssistantActivity, TokenUsageSummary } from "./types.ts";
+import type { LatestAssistantActivity, TokenUsageSummary, V1BackendSession } from "./types.ts";
 
 /** The two session reads the queries need. `V1Backend.session` satisfies this. */
-export type QuerySession = Pick<BackendSession, "getMessages" | "getChildren">;
+export type QuerySession = Pick<V1BackendSession, "getMessages" | "getChildren">;
 
 type MessageForUsageScan = {
   info: {
@@ -282,7 +282,7 @@ type StallScanMessage = {
 };
 
 /** Threshold for judging a paired subagent's own turn stale (the watchdog's 3-minute window). */
-const CHILD_STALL_THRESHOLD_MS = 180_000;
+export const CHILD_STALL_THRESHOLD_MS = 180_000;
 
 /**
  * Describes the newest assistant message for the stall watchdog.

@@ -20,6 +20,11 @@ import { StatusLine } from "./components/StatusLine.tsx";
 import { PermissionModal } from "./components/PermissionModal.tsx";
 import { PermissionStatusLine } from "./components/PermissionStatusLine.tsx";
 import { QuestionModal } from "./components/QuestionModal.tsx";
+import { FormModal } from "./components/FormModal.tsx";
+import { advanceForm, INITIAL_FORM_PROGRESS, type FormProgress } from "./components/form-state.ts";
+import { formatCompactionFailedLine, formatRetryLine, generatingStartAfterMessageCompleted, isNewRetryAttempt } from "./turn-status.ts";
+import { ResyncGate, decideResync } from "./resync-gate.ts";
+import type { BackendForm } from "./backend/types.ts";
 import { SubprocessStatus } from "./components/SubprocessStatus.tsx";
 import { ModelPickerModal, type ModelPickerItem } from "./components/ModelPickerModal.tsx";
 import { CompactingModal } from "./components/CompactingModal.tsx";
@@ -80,6 +85,9 @@ function commitOptionsBlock(renderer: Renderer, reqID: string, qs: QuestionType[
 
 type AppProps = {
   backend: Backend;
+  // The directory sent to the server for new sessions (/new). It is config server.directory when set,
+  // otherwise the launch cwd. It is a server-side path; local-only uses of the cwd (git, orchestra, commands) do not use it.
+  serverDirectory: string;
   sessionID: string;
   sessionLabel: string;
   eventStream: AsyncIterable<{ payload: unknown }>;
@@ -120,7 +128,7 @@ export function App(props: AppProps) {
   const [editor] = useState(() => new LineEditor());
   const [isGenerating, setIsGenerating] = useState(false);
   const [ctrlcPending, setCtrlcPending] = useState(false);
-  const [permission, setPermission] = useState<{ permID: string; title: string; sessionID: string } | null>(null);
+  const [permission, setPermission] = useState<{ permID: string; title: string; sessionID: string; resources: string[] } | null>(null);
   const [question, setQuestion] = useState<{ reqID: string; questions: QuestionType[] } | null>(null);
   // Ref mirror of `question` state for use inside applyReplEvents (avoids deps churn).
   // Always holds the current value; the useEffect below keeps it in sync.
@@ -128,6 +136,33 @@ export function App(props: AppProps) {
   useEffect(() => {
     questionRef.current = question;
   }, [question]);
+
+  // Stage 15.2 (C2.6a): open v2 form. `form` is the form being answered; `formProgress` is the
+  // field index, typed draft and accepted values for it. The refs are the source of truth for
+  // key handlers and applyReplEvents: they update synchronously, so two keys arriving before a
+  // re-render cannot read a stale draft. The state copies exist only to drive rendering.
+  const [form, setFormState] = useState<BackendForm | null>(null);
+  const formRef = useRef<BackendForm | null>(null);
+  const [formProgress, setFormProgressState] = useState<FormProgress>(INITIAL_FORM_PROGRESS);
+  const formProgressRef = useRef<FormProgress>(INITIAL_FORM_PROGRESS);
+  // Form IDs this process has answered, dismissed (Esc/Ctrl-C) or seen closed on the server.
+  // Discovery and form-asked skip these, so a dismissed form is not re-offered every 5 s. The
+  // set is in-memory only: a fresh attach re-offers any form still pending on the server.
+  const formDoneIDsRef = useRef<Set<string>>(new Set());
+  const commitForm = useCallback((next: BackendForm | null) => {
+    formRef.current = next;
+    setFormState(next);
+  }, []);
+  const commitFormProgress = useCallback((next: FormProgress) => {
+    formProgressRef.current = next;
+    setFormProgressState(next);
+  }, []);
+  // Closes the open form and resets its progress. Does not touch formDoneIDsRef; callers mark
+  // the ID done when the close is final (answered, dismissed, or closed on the server).
+  const endForm = useCallback(() => {
+    commitForm(null);
+    commitFormProgress(INITIAL_FORM_PROGRESS);
+  }, [commitForm, commitFormProgress]);
   const [lastSubmitted, setLastSubmitted] = useState<string>("");
   const [procTimes, setProcTimes] = useState<{ thinking: number | null; tools: number | null; generating: number | null }>({ thinking: null, tools: null, generating: null });
   const [sessionID, setSessionID] = useState(props.sessionID);
@@ -143,6 +178,11 @@ export function App(props: AppProps) {
   const [opencodeCommands, setOpencodeCommands] = useState<Map<string, OcCommand>>(new Map());
   const [isCompacting, setIsCompacting] = useState(false);
   const [sessionPicker, setSessionPicker] = useState<{ items: SessionPickerItem[]; idx: number } | null>(null);
+  // The form is "active" (visible, takes keys, disables the prompt) only while no other modal owns the keys:
+  // no permission, question, model picker, session picker or compaction modal. A form asked while one of those
+  // is open stays in `form` state. It shows when that modal closes, because the form is not dropped here.
+  // This keeps each modal's own key path (PromptInput and the picker's useInput) working.
+  const formActive = !!form && !permission && !question && !modelPicker && !sessionPicker && !isCompacting;
   // Stage 9.1 (Piece 2B, revised): current sub-question index, owned by app.tsx
   // so handleSubmit can track the current sub-question index during multi-Q collection.
   const [currentSubIdx, setCurrentSubIdx] = useState<number>(0);
@@ -382,6 +422,28 @@ export function App(props: AppProps) {
               properties: { id: oldest.id, sessionID: oldest.sessionID, permission: oldest.permission, patterns: oldest.patterns ?? [] },
             } as unknown as Event, oldest.sessionID);
             if (evRaw) applyReplEvents(Array.isArray(evRaw) ? evRaw : [evRaw]);
+          }
+        }
+      } catch {}
+
+      // 3. Missed form discovery (Stage 15.2, C2.6a, P1). Forms are v2-only: V1Backend.listForms
+      // returns [], so v1 takes no action here. Oldest-first, one at a time, like the arms above.
+      // Skipped while a form is already open; once it closes, a later tick offers the next one.
+      try {
+        const forms = await props.backend.listForms(sessionIDRef.current);
+        if (forms && !formRef.current) {
+          const pending = forms
+            .filter(f => !formDoneIDsRef.current.has(f.id))
+            .sort((a, b) => a.id.localeCompare(b.id));
+          const oldest = pending[0];
+          if (oldest) {
+            applyReplEvents([{
+              kind: "form-asked",
+              formID: oldest.id,
+              sessionID: oldest.sessionID,
+              title: oldest.title,
+              fields: oldest.fields,
+            }]);
           }
         }
       } catch {}
@@ -634,6 +696,38 @@ export function App(props: AppProps) {
   const userTurnDebouncerRef = useRef<UserTurnDebouncer | null>(null);
   if (!userTurnDebouncerRef.current) userTurnDebouncerRef.current = new UserTurnDebouncer();
 
+  // Stage 15.2 (C2.6b): v2 status-line state. `lastRetryAttemptRef` is the highest `turn-retry` attempt already
+  // shown in the current turn; it resets on `generating` and on session switch (see turn-status.ts).
+  const lastRetryAttemptRef = useRef<number>(0);
+  // Stage 15.2 (C2.6b): whether the compaction in progress was automatic. Set on `compaction-started`, read on
+  // `compaction-ended` so the divider reads "(auto)" the same way the replayed history does.
+  const compactionAutoRef = useRef<boolean>(false);
+  // Stage 15.2 (C2.6b): counter for the part IDs of rendered compaction summaries. Each summary block needs its own ID.
+  const compactionSummaryCountRef = useRef<number>(0);
+  // Stage 15.2 (C2.6b): the model octmux last sent with a prompt or command. The v2 `model-selected` event that
+  // octmux's own switch produces matches it, so that event is not shown as a foreign switch (see that handler).
+  const lastRequestedModelRef = useRef<{ providerID: string; modelID: string } | null>(null);
+  // Stage 15.2 (C2.6b): the v2 resync runner (see the effect after applyReplEvents). Created once, like userTurnDebouncerRef.
+  const resyncGateRef = useRef<ResyncGate | null>(null);
+  if (!resyncGateRef.current) resyncGateRef.current = new ResyncGate();
+  const runResyncRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Stage 15.2 (C2.6b): adopts a model that the server reports for this session, when octmux has it. Shared by
+  // `model-switched` (v1 foreign client) and `model-selected` (v2). The wording is the v1 wording. Declared before
+  // applyReplEvents, which lists it in its deps.
+  const adoptSessionModel = useCallback((providerID: string, modelID: string) => {
+    (async () => {
+      const valid = await validateModel(props.backend, providerID, modelID);
+      if (valid) {
+        setActiveModel({ providerID: valid.providerID, modelID: valid.modelID });
+      } else {
+        renderer.commitSystemMessage(
+          `session model switched to ${providerID}/${modelID} (not available here — keeping ${activeModelRef.current?.modelID ?? "current"})`
+        );
+      }
+    })();
+  }, [props.backend, renderer]);
+
   // Stage 4.5.3: Shared helper for processing ReplEvents from both live SSE and reconciler.
   // Routes all event mutations through a single code path to guarantee multi-window FIFO safety.
   // Permission responses are fired in background without awaiting (mirrors original code).
@@ -659,7 +753,9 @@ export function App(props: AppProps) {
           }
         }
         else if (ev.kind === "block-end") {
-          renderer.endBlock(ev.partID, ev.status);
+          // `exitCode` (Stage 15.2, C2.6b) is shown as a marker only. It does not change `status`, so the
+          // tool is not treated as an error here.
+          renderer.endBlock(ev.partID, ev.status, ev.exitCode);
           if (ev.role === "thinking") setProcTimes(p => ({ ...p, thinking: null }));
           else if (ev.role === "tool-result" || (ev.role === "tool-call" && ev.status === "error"))
             setProcTimes(p => ({ ...p, tools: null }));
@@ -683,7 +779,11 @@ export function App(props: AppProps) {
           watcherRef.current?.notifyAllSubagentsEnded();
           setIsGenerating(false);
         }
-        else if (ev.kind === "generating")   setIsGenerating(true);
+        else if (ev.kind === "generating") {
+          // A new turn starts, so retry attempts are numbered again from 2 (Stage 15.2, C2.6b).
+          lastRetryAttemptRef.current = 0;
+          setIsGenerating(true);
+        }
         else if (ev.kind === "session-idle") {
           renderer.commitTurnEnd();
           setIsGenerating(false);
@@ -712,11 +812,13 @@ export function App(props: AppProps) {
           // isGenerating is intentionally left true — the OC pipeline is still
           // running; only the display timer resets.
           refreshTokenUsage(sessionIDRef.current);
-          setProcTimes(p => ({ ...p, generating: Date.now() }));
+          // Stage 15.2 (G1): restart the timer only while the turn still runs. A late message-completed after
+          // session-idle must not re-arm the line, because nothing would clear it again (see turn-status.ts).
+          setProcTimes(p => ({ ...p, generating: generatingStartAfterMessageCompleted(isGeneratingRef.current, Date.now()) }));
         }
         else if (ev.kind === "permission-asked") {
           if (permModeRef.current === "ask") {
-            setPermission({ permID: ev.permID, title: ev.title, sessionID: ev.sessionID });
+            setPermission({ permID: ev.permID, title: ev.title, sessionID: ev.sessionID, resources: ev.resources });
           } else if (permModeRef.current === "allow") {
             // Fire in background without awaiting
             props.backend.replyPermission({
@@ -807,18 +909,7 @@ export function App(props: AppProps) {
         else if (ev.kind === "model-switched") {
           // A foreign client (e.g. P4OC mobile app) switched the model on a shared session.
           // Adopt the new model only if it's available locally (validated via validateModel).
-          if (ev.sessionID === sessionIDRef.current) {
-            (async () => {
-              const valid = await validateModel(props.backend, ev.providerID, ev.modelID);
-              if (valid) {
-                setActiveModel({ providerID: valid.providerID, modelID: valid.modelID });
-              } else {
-                renderer.commitSystemMessage(
-                  `session model switched to ${ev.providerID}/${ev.modelID} (not available here — keeping ${activeModelRef.current?.modelID ?? "current"})`
-                );
-              }
-            })();
-          }
+          if (ev.sessionID === sessionIDRef.current) adoptSessionModel(ev.providerID, ev.modelID);
         }
         else if (ev.kind === "foreign-user-turn") {
           // Mobile-Companion Part B: a foreign client (mobile companion) submitted a user
@@ -830,27 +921,144 @@ export function App(props: AppProps) {
         else if (ev.kind === "foreign-user-part") {
           userTurnDebouncerRef.current?.arm(ev.messageID);
         }
-        // v2-only ReplEvent kinds (Stage 15.2). v1's filterEvent never emits these, so
-        // these branches are unreachable on v1. They are explicit no-ops until
-        // Stage 15.2 step 6 wires them (PLAN-C2C3.md §C step 6).
-        else if (
-          ev.kind === "form-asked" ||
-          ev.kind === "form-replied" ||
-          ev.kind === "turn-retry" ||
-          ev.kind === "compaction-started" ||
-          ev.kind === "compaction-progress" ||
-          ev.kind === "compaction-ended" ||
-          ev.kind === "compaction-failed" ||
-          ev.kind === "model-selected" ||
-          ev.kind === "resync-needed"
-        ) {
-          // v2-only; handled in Stage 15.2 step 6. No behaviour here.
+        else if (ev.kind === "form-asked") {
+          // Open the form unless this process already finished with it or a form is already open.
+          // A second form that arrives while one is open is dropped here; discovery offers it again
+          // once the open form closes, since its ID is not marked done.
+          if (!formDoneIDsRef.current.has(ev.formID) && !formRef.current) {
+            commitForm({ id: ev.formID, sessionID: ev.sessionID, title: ev.title, fields: ev.fields });
+            commitFormProgress(INITIAL_FORM_PROGRESS);
+          }
+        }
+        else if (ev.kind === "form-replied") {
+          // Closed on the server, possibly by another client. Mark done so discovery does not
+          // re-offer it, and close the modal only if it is the form on screen.
+          formDoneIDsRef.current.add(ev.formID);
+          const open = formRef.current;
+          if (open && open.id === ev.formID) {
+            endForm();
+            renderer.commitSystemMessage(`▶ Form answered elsewhere: ${open.title}`);
+          }
+        }
+        // Stage 15.2 (C2.6b): a transient line per retry attempt. It does not touch the generating flag.
+        else if (ev.kind === "turn-retry") {
+          if (ev.sessionID === sessionIDRef.current && isNewRetryAttempt(lastRetryAttemptRef.current, ev.attempt)) {
+            lastRetryAttemptRef.current = ev.attempt;
+            renderer.commitSystemMessage(formatRetryLine(ev.attempt, ev.message));
+          }
+        }
+        // Stage 15.2 (C2.6b): the same "compacting…" modal as /compact. The command path already sets
+        // isCompacting before its REST call. Setting it again here is harmless, so the two paths do not conflict.
+        else if (ev.kind === "compaction-started") {
+          if (ev.sessionID === sessionIDRef.current) {
+            compactionAutoRef.current = ev.reason === "auto";
+            setIsCompacting(true);
+          }
+        }
+        // Deliberately not rendered. The "compacting…" modal covers the wait, and the summary arrives whole in
+        // `compaction-ended`. Streaming the chunks would only add 100+ lines of scrollback (PLAN-C2C3.md §C step 6).
+        else if (ev.kind === "compaction-progress") {
+          // No behaviour here.
+        }
+        // Stage 15.2 (C2.6b): the same render as v1 /compact: divider first, then the summary as a summary block.
+        // The generating flag is not touched. A compaction does not end the turn, which closes on its own event.
+        else if (ev.kind === "compaction-ended") {
+          if (ev.sessionID === sessionIDRef.current) {
+            setIsCompacting(false);
+            renderer.commitCompactionDivider(compactionAutoRef.current);
+            if (ev.summary !== "") {
+              compactionSummaryCountRef.current += 1;
+              const summaryPartID = `compaction-summary-${compactionSummaryCountRef.current}`;
+              renderer.beginBlock(summaryPartID, "summary");
+              // A trailing newline makes the last line complete, so no partial line stays in the active tail.
+              renderer.appendToBlock(summaryPartID, ev.summary.endsWith("\n") ? ev.summary : ev.summary + "\n");
+              renderer.endBlock(summaryPartID, "ok");
+            }
+            refreshTokenUsage(sessionIDRef.current);
+          }
+        }
+        else if (ev.kind === "compaction-failed") {
+          if (ev.sessionID === sessionIDRef.current) {
+            setIsCompacting(false);
+            renderer.commitError(formatCompactionFailedLine(ev.message));
+          }
+        }
+        // Stage 15.2 (C2.6b): the server reports the model bound to the session. octmux's own switch also
+        // produces this event, so the model octmux last sent is skipped (once). Any other model is adopted
+        // in the same way as `model-switched`.
+        else if (ev.kind === "model-selected") {
+          if (ev.sessionID === sessionIDRef.current) {
+            const requested = lastRequestedModelRef.current;
+            if (requested && requested.providerID === ev.providerID && requested.modelID === ev.modelID) {
+              lastRequestedModelRef.current = null;
+            } else {
+              adoptSessionModel(ev.providerID, ev.modelID);
+            }
+          }
+        }
+        // Stage 15.2 (C2.6b, PLAN-C2C3.md §C step 10): a durable seq gap means frames were missed. Clear the
+        // scrollback, replay history, and reconcile the generating flag. Runs through the coalescing gate,
+        // so at most one resync is in flight. Only the v2 translator emits this kind.
+        else if (ev.kind === "resync-needed") {
+          if (ev.sessionID === sessionIDRef.current) void runResyncRef.current?.();
         }
       } catch (err) {
         renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-  }, [props.backend, renderer, refreshTokenUsage]);
+  }, [props.backend, renderer, refreshTokenUsage, commitForm, commitFormProgress, endForm, adoptSessionModel]);
+
+  // Stage 15.2 (C2.6b): the v2 resync runner. Assigned on every render, like runDiscoveryPassRef, so it always
+  // calls the current applyReplEvents and the backend. One run is in flight at a time (ResyncGate). A request made
+  // during a run gets one more run after it, because the run in flight may have fetched its history before the gap.
+  useEffect(() => {
+    const resyncOnce = async (): Promise<void> => {
+      const sid = sessionIDRef.current;
+      // 1. Render only what the stream missed (D-A fix). Nothing is cleared: lines already printed in --single mode
+      //    cannot be erased, so a full replay would print the earlier turns a second time. A gap with nothing missing
+      //    (for example an auto-title `session.renamed` after a skipped seq) renders nothing. Best-effort, as runReplay is.
+      try {
+        const missed = await props.backend.events.getMissedHistory(sid);
+        // The operator may have switched sessions during the fetch. Those ops belong to the old session, so they are dropped.
+        if (sid === sessionIDRef.current) applyHistory(renderer, editor, missed);
+      } catch {
+        // Replay is best-effort, not critical to the session.
+      }
+      // 2. Reconcile the generating flag with REST. A failed lookup gives undefined, and then nothing changes.
+      let active: boolean | undefined;
+      try {
+        active = await props.backend.isSessionActive(sid);
+      } catch {
+        active = undefined;
+      }
+      // The operator may have switched sessions while the calls above were awaited. The reconcile then belongs
+      // to a session that is no longer on screen, so it is skipped.
+      if (sid !== sessionIDRef.current) return;
+      const action = decideResync(isGeneratingRef.current, active);
+      if (action === "end-turn") {
+        // The idle path the reconciler also uses. Subagent rows are swept first, as for parent-turn-end.
+        applyReplEvents([{ kind: "parent-turn-end", reason: "idle" }, ...props.backend.events.synthesizeSessionIdleEvents()]);
+      } else if (action === "start-turn") {
+        setIsGenerating(true);
+      }
+      refreshTokenUsage(sid);
+      // 3. Discovery pass (Review B #1). A question, permission or form asked while the stream had a gap is offered
+      //    now, not at the next 5 s tick. No await sits between the session check above and this call, so the
+      //    session is still `sid` when the pass starts. The pass reads sessionIDRef itself, as the 5 s loop does.
+      await runDiscoveryPassRef.current?.();
+    };
+    runResyncRef.current = async () => {
+      const gate = resyncGateRef.current;
+      if (!gate || !gate.request()) return;
+      do {
+        try {
+          await resyncOnce();
+        } catch {
+          // Best-effort, as runReplay is. A failure must not leave the gate in flight for ever.
+        }
+      } while (gate.finish());
+    };
+  });
 
   // Reassign every render — same pattern as runReconcilerPassRef (~:411-455) —
   // so onFire always calls the CURRENT applyReplEvents/isGeneratingRef closures.
@@ -981,12 +1189,14 @@ export function App(props: AppProps) {
   // Sync queue mode; auto-submit pending queue when model goes idle
   useEffect(() => {
     editor.setQueueMode(isGenerating);
-    if (!isGenerating && !question && !permission && pendingQueueRef.current.length > 0) {
+    // A pending form also holds the queue: the queued text must not be sent as a prompt while the
+    // operator is answering it (C2.6a).
+    if (!isGenerating && !question && !permission && !form && pendingQueueRef.current.length > 0) {
       const merged = pendingQueueRef.current.join("\n\n");
       setPendingQueue([]);
       handleSubmitRef.current?.(merged);
     }
-  }, [isGenerating, question, permission, editor]);
+  }, [isGenerating, question, permission, form, editor]);
 
   // Keep editor virtual pending-entry in sync with the queue
   useEffect(() => {
@@ -996,6 +1206,16 @@ export function App(props: AppProps) {
   // Ctrl-C: three cases.
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
+      // Stage 15.2 (C2.6a): Ctrl-C always dismisses an open form, in either branch below. The form
+      // is marked done so discovery does not re-open it on the next 5 s tick. Without this reset,
+      // PromptInput would stay disabled behind a form the operator can no longer see.
+      if (formRef.current) {
+        const open = formRef.current;
+        formDoneIDsRef.current.add(open.id);
+        endForm();
+        // Stage 15.2 (C2.6b): cancelled on the server too, as with Esc above.
+        props.backend.cancelForm(open.sessionID, open.id).catch(() => {});
+      }
       if (isGenerating) {
         const q = question;
         props.backend.session.abort(sessionID).catch(() => {});
@@ -1041,12 +1261,62 @@ export function App(props: AppProps) {
     }
   });
 
+  // Stage 15.2 (C2.6a): keys while a v2 form is active. PromptInput is disabled in the same case
+  // (see the `disabled` prop below), so keys reach only this handler. Ctrl-C is handled above
+  // and is not a printable key here.
+  useInput((input, key) => {
+    const open = formRef.current;
+    if (!open) return;
+    if (key.escape) {
+      // Close without answering. Stage 15.2 (C2.6b): the form is also cancelled on the server. Its ID is marked
+      // done, so discovery does not re-offer it in this process. A failed cancel is swallowed, as the others are.
+      formDoneIDsRef.current.add(open.id);
+      endForm();
+      props.backend.cancelForm(open.sessionID, open.id).catch(() => {});
+      renderer.commitSystemMessage(`▶ Form cancelled: ${open.title}`);
+      return;
+    }
+    if (key.return) {
+      const progress = formProgressRef.current;
+      const step = advanceForm(open.fields, progress);
+      if (step.kind === "error") {
+        // Keep the field and its draft so the operator can correct the input.
+        renderer.commitSystemMessage(`▶ ${step.message}`);
+        return;
+      }
+      if (step.kind === "next") {
+        commitFormProgress(step.progress);
+        return;
+      }
+      // Last field accepted: the form is answered. Close first, so a failed reply does not
+      // keep the modal open. The ID stays marked done, so discovery does not re-offer it.
+      formDoneIDsRef.current.add(open.id);
+      endForm();
+      props.backend.replyForm(open.sessionID, open.id, step.answer).catch((err: unknown) => {
+        renderer.commitError(`[form reply failed] ${err instanceof Error ? err.message : String(err)}`);
+      });
+      return;
+    }
+    if (key.backspace || key.delete) {
+      const progress = formProgressRef.current;
+      commitFormProgress({ ...progress, draft: progress.draft.slice(0, -1) });
+      return;
+    }
+    // Printable text only: Ctrl and Meta combinations are not typed into the draft (see the
+    // Ink 5 keybinding notes in src/keybindings.ts).
+    if (!key.ctrl && !key.meta && input) {
+      const progress = formProgressRef.current;
+      commitFormProgress({ ...progress, draft: progress.draft + input });
+    }
+  }, { isActive: formActive });
+
   const switchSession = useCallback(async (newID: string, banner: string) => {
     if (isGenerating) {
       props.backend.session.abort(sessionID).catch(() => {});
       setIsGenerating(false);
     }
     props.backend.events.resetEventState();
+    lastRetryAttemptRef.current = 0; // Stage 15.2 (C2.6b): retry numbering is per turn, per session.
     userTurnDebouncerRef.current?.reset();
     renderer.clearAll();
     setProcTimes({ thinking: null, tools: null, generating: null });
@@ -1140,7 +1410,7 @@ export function App(props: AppProps) {
       // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       try {
-        const created = await props.backend.session.create({ directory: process.cwd() });
+        const created = await props.backend.session.create({ directory: props.serverDirectory });
         const newID = created!.id;
         await switchSession(newID, `new session started (${newID.slice(0, 8)})`);
       } catch (err) {
@@ -1382,6 +1652,8 @@ export function App(props: AppProps) {
         props.backend.events.recordOwnCommandPrefix("# /" + cmdName);
 
         setIsGenerating(true);
+        // Stage 15.2 (C2.6b): remember the model this command sends, for the model-selected skip.
+        lastRequestedModelRef.current = activeModel;
         try {
           await props.backend.session.sendCommand({
             sessionID,
@@ -1434,6 +1706,8 @@ export function App(props: AppProps) {
       }
     }
 
+    // Stage 15.2 (C2.6b): remember the model this prompt sends, for the model-selected skip.
+    lastRequestedModelRef.current = activeModel;
     try {
       await props.backend.session.sendPrompt({
         sessionID,
@@ -1445,7 +1719,7 @@ export function App(props: AppProps) {
       setIsGenerating(false);
       renderer.commitError(`[send error] ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [props.backend, sessionID, renderer, activeModel, opencodeCommands, switchSession, editor, question, currentSubIdx, handleQuestion]);
+  }, [props.backend, props.serverDirectory, sessionID, renderer, activeModel, opencodeCommands, switchSession, editor, question, currentSubIdx, handleQuestion]);
 
   handleSubmitRef.current = handleSubmit;
 
@@ -1537,8 +1811,9 @@ export function App(props: AppProps) {
       {/* Modal-bearing events (permission, question) bypass the renderer's output
           gates by design — interactive prompts must always surface to the operator
           regardless of /tools-output or /thinking-output toggle state. */}
-      {permission && <PermissionModal title={permission.title} onAnswer={handlePermission} />}
+      {permission && <PermissionModal title={permission.title} resources={permission.resources} onAnswer={handlePermission} />}
       {question && <QuestionModal questions={question.questions} currentSubIdx={currentSubIdx} />}
+      {formActive && form && <FormModal title={form.title} fields={form.fields} currentFieldIdx={formProgress.fieldIdx} draft={formProgress.draft} />}
       {isCompacting && <CompactingModal />}
       {modelPicker && (
         <ModelPickerModal
@@ -1556,7 +1831,7 @@ export function App(props: AppProps) {
           onCancel={handleSessionCancel}
         />
       )}
-      {slashCompletion && !permission && !question && !modelPicker && !isCompacting && !sessionPicker && (
+      {slashCompletion && !permission && !question && !formActive && !modelPicker && !isCompacting && !sessionPicker && (
         <SlashCompletionOverlay
           candidates={slashCompletion.candidates}
           selectedIdx={slashCompletion.selectedIdx}
@@ -1574,7 +1849,7 @@ export function App(props: AppProps) {
           </Text>
         )}
         <Rule title={sessionLabel} width={w} align="right" />
-        <PromptInput editor={editor} disabled={!!permission || !!modelPicker || isCompacting || !!sessionPicker} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} onHelp={triggerHelp} onToggleTools={() => toggleGate("tools-output")} onToggleThinking={() => toggleGate("thinking-output")} onResync={handleResync} onRedraw={props.onRedraw} setPasteCallback={props.setPasteCallback} />
+        <PromptInput editor={editor} disabled={!!permission || !!modelPicker || isCompacting || !!sessionPicker || formActive} overlayOpen={!!slashCompletion} onSubmit={handleSubmit} onCyclePermMode={cyclePermMode} onHelp={triggerHelp} onToggleTools={() => toggleGate("tools-output")} onToggleThinking={() => toggleGate("thinking-output")} onResync={handleResync} onRedraw={props.onRedraw} setPasteCallback={props.setPasteCallback} />
         <Rule width={w} />
         <StatusLine
           modelLabel={

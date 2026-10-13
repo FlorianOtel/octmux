@@ -10,15 +10,30 @@ import { StringDecoder } from "node:string_decoder";
  *   - IN_PASTE: accumulate bytes; scan for end marker; on match, normalize and invoke callback
  * Normalization: \r\n → \n, bare \r → \n, drop [\\x00-\\x08\\x0b-\\x1f\\x7f] (keep \\t=0x09, \\n=0x0a)
  * Truncation recovery: orphan \\x1b mid-paste → flush accumulated data and re-process
+ * Lone-ESC release: in NORMAL state a held prefix (a lone \\x1b, or a partial marker such
+ *   as \\x1b[2) is flushed downstream after `escTimeoutMs` with no further bytes. Real
+ *   paste markers and escape sequences arrive in one read, so the timeout only fires for
+ *   a bare Esc keypress. Without it the Esc key never reaches Ink's useInput.
  */
-export function createPasteFilter(realStdin: NodeJS.ReadStream): {
+
+/** Default wait for the rest of an escape sequence before a held ESC is released. */
+const DEFAULT_ESC_TIMEOUT_MS = 40;
+
+export function createPasteFilter(
+  realStdin: NodeJS.ReadStream,
+  options: { escTimeoutMs?: number } = {},
+): {
   stream: Transform;
   setPasteCallback: (cb: (text: string) => void) => void;
 } {
+  const escTimeoutMs = options.escTimeoutMs ?? DEFAULT_ESC_TIMEOUT_MS;
   let pasteCallback: (text: string) => void = () => {};
   let state: "NORMAL" | "IN_PASTE" = "NORMAL";
   let pasteBuf = "";
   let lookAheadBuf = "";
+
+  // Lone-ESC release timer: armed while NORMAL state holds bytes in lookAheadBuf.
+  let heldTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Fix #8: byte-rate paste-detection fallback state
   let candidateBuf = "";
@@ -29,8 +44,46 @@ export function createPasteFilter(realStdin: NodeJS.ReadStream): {
   const MARKER_END = "\x1b[201~";   // 6 characters
   const decoder = new StringDecoder("utf8");
 
+  /** Cancels the lone-ESC release timer if one is pending. */
+  function clearHeldTimer(): void {
+    if (heldTimer) {
+      clearTimeout(heldTimer);
+      heldTimer = null;
+    }
+  }
+
+  /**
+   * Pushes the NORMAL-state held bytes downstream as plain input. Any pending paste-fallback
+   * candidate is drained first so the held bytes keep their arrival order. No-op in IN_PASTE
+   * state: there the held byte may be part of a paste that is still arriving.
+   */
+  function flushHeldBytes(): void {
+    if (state !== "NORMAL" || lookAheadBuf.length === 0) return;
+    if (candidateTimer) {
+      clearTimeout(candidateTimer);
+      candidateTimer = null;
+    }
+    if (candidateBuf.length > 0) {
+      stream.push(candidateBuf);
+      candidateBuf = "";
+    }
+    stream.push(lookAheadBuf);
+    lookAheadBuf = "";
+  }
+
+  /** (Re)arms the release timer; when it fires with no new bytes, the held bytes are flushed. */
+  function armHeldTimer(): void {
+    clearHeldTimer();
+    heldTimer = setTimeout(() => {
+      heldTimer = null;
+      flushHeldBytes();
+    }, escTimeoutMs);
+  }
+
   const stream = new Transform({
     transform(chunk: Buffer, _enc: string, cb: (err?: Error | null) => void) {
+      // A new chunk arrived in time: the held bytes will be re-processed with it below.
+      clearHeldTimer();
       const chunkStr = decoder.write(chunk);
       let input = lookAheadBuf + chunkStr;
       lookAheadBuf = "";
@@ -151,9 +204,13 @@ export function createPasteFilter(realStdin: NodeJS.ReadStream): {
           stream.push(outputBuf);
         }
       }
+      // Bytes still held in NORMAL state wait for a continuation; release them if none comes.
+      if (state === "NORMAL" && lookAheadBuf.length > 0) armHeldTimer();
       cb();
     },
     flush(cb: (err?: Error | null) => void) {
+      // The stream is ending: no release timer may fire after this point.
+      clearHeldTimer();
       // Drain pending paste-detection candidate first (best-effort)
       if (candidateTimer) {
         clearTimeout(candidateTimer);
@@ -163,6 +220,8 @@ export function createPasteFilter(realStdin: NodeJS.ReadStream): {
           candidateBuf = "";
         }
       }
+      // A held NORMAL-state byte (e.g. a lone ESC) is real input: emit it before ending.
+      flushHeldBytes();
       const tail = decoder.end();
       if (tail) this.push(tail);
       cb();

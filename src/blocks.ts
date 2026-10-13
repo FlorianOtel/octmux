@@ -91,6 +91,13 @@ export function formatLine(role: Role, line: string, isFirstLine: boolean): stri
   }
 }
 
+// Stage 15.2 (C2.6b): the marker line shown under a tool-call block whose shell exited with a code. It is
+// red, like an error line, but it is styling only. The tool is still a completed tool, not an error, so no
+// turn logic reads it. The caller passes only the exit code it received; a zero exit is never sent here.
+export function formatExitMarker(exitCode: number): string {
+  return ANSI.red + "  ✗ exit " + String(exitCode) + ANSI.reset;
+}
+
 // Convenience for finalised blocks committed all at once (not streamed line by line).
 export function formatBlock(block: Block): string {
   const lines = block.text.split("\n");

@@ -38,10 +38,25 @@ Any key not listed here is an error, so a typo such as `passwrod` fails at start
 | `$schema` | string | Editor hint. Accepted and not used. |
 | `server.url` | string | Server endpoint. Used when `--endpoint` is not given. |
 | `server.password` | string | Basic-auth password. The username is always `opencode`. |
+| `server.directory` | string | Directory path as the server sees it, used as the session location instead of octmux's working directory. Must be absolute. See "Server directory" below. |
+
+### Server directory
+
+Set `server.directory` when the OpenCode server runs on another host, or in a container with different paths. octmux then sends that path to the server as the session location, in place of its own working directory.
+
+- Unset: octmux uses its local working directory, as before.
+- Set: the value is the path on the server's side. octmux does not check that it exists on the server, and it is never compared with the local filesystem.
+- Must be an absolute path: it starts with `/`, or with a Windows drive letter followed by `\` or `/`. A relative path exits 1 and names the config file and the key.
+- Supports the same `{env:NAME}` and `{file:PATH}` tokens as the other `server.*` keys. The value is not a secret, so a `{file:}` file does not need to be chmod 600.
+- Cannot be combined with `--worktree`. A worktree is created on the local machine, which the server cannot see, so octmux exits 2 and names the config file.
+- Cannot be combined with `--auto-spawn`. The spawned server is local, so octmux exits 2 and names the config file.
+- `--resume`, `--resume-last`, and `--fork` still use the resolved session's own directory, as they do without this key.
+- When set, octmux prints `octmux: using server directory <dir> (from <config path>)` at startup.
+- Local-only things still use the local working directory: the git branch and project name in the status line, and the orchestra session files. External commands are still read from `~/.config/opencode/commands/`.
 
 ### Substitution
 
-`server.url` and `server.password` accept these tokens. Tokens are expanded only in parsed values, so text inside comments is ignored.
+`server.url`, `server.password`, and `server.directory` accept these tokens. Tokens are expanded only in parsed values, so text inside comments is ignored.
 
 - `{env:NAME}` is replaced by the value of environment variable `NAME`. If the variable is unset or empty, octmux exits 1.
 - `{file:PATH}` is replaced by the file's contents, with surrounding whitespace trimmed.
@@ -58,6 +73,7 @@ Each of these exits 1 and names the config file:
 - a value that is not a string
 - an unset or empty `{env:NAME}` variable
 - a missing or unreadable `{file:PATH}` file
+- a `server.directory` that is not an absolute path after substitution
 - a password that resolves to an empty string
 
 ### File permissions
@@ -78,6 +94,7 @@ chmod 600 ~/.config/octmux/octmux.json
 
 - Endpoint: `--endpoint <url>` beats `server.url`, which beats the default `http://127.0.0.1:4096`.
 - Password: only `server.password` supplies it. There is no flag for it.
+- Session directory: `server.directory` (when set) replaces the local working directory as the location sent to the server.
 - `--auto-spawn` ignores `server.url` and skips protocol detection.
 
 ### Authentication

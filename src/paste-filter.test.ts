@@ -153,3 +153,122 @@ describe("createPasteFilter", () => {
     expect(result.downstreamText).toBe("");
   });
 });
+
+// Lone-ESC release (Stage 15.2 F-a). A held NORMAL-state ESC must reach downstream when no
+// continuation arrives, while real markers and escape sequences keep their existing handling.
+describe("createPasteFilter: lone ESC release", () => {
+  // Short timeout keeps these tests fast; the wait below is comfortably longer than it.
+  const ESC_TIMEOUT_MS = 30;
+  const WAIT_PAST_TIMEOUT_MS = 90;
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /** Builds a filter over a PassThrough and collects downstream bytes and paste callbacks. */
+  function setup() {
+    const mockStdin = new PassThrough();
+    const filter = createPasteFilter(mockStdin as unknown as NodeJS.ReadStream, { escTimeoutMs: ESC_TIMEOUT_MS });
+    const pastes: string[] = [];
+    let downstream = "";
+    filter.setPasteCallback((text) => pastes.push(text));
+    filter.stream.on("data", (chunk: Buffer) => {
+      downstream += chunk.toString();
+    });
+    return {
+      mockStdin,
+      filter,
+      pastes,
+      downstream: () => downstream,
+    };
+  }
+
+  test("a lone ESC is flushed downstream after the timeout", async () => {
+    const { mockStdin, downstream } = setup();
+    mockStdin.write(Buffer.from("\x1b"));
+    // Nothing is forwarded while the ESC is still held inside the timeout window.
+    await sleep(5);
+    expect(downstream()).toBe("");
+    await sleep(WAIT_PAST_TIMEOUT_MS);
+    expect(downstream()).toBe("\x1b");
+    mockStdin.end();
+  });
+
+  test("ESC followed quickly by a bracketed paste is handled as a paste", async () => {
+    const { mockStdin, pastes, downstream } = setup();
+    mockStdin.write(Buffer.from("\x1b"));
+    mockStdin.write(Buffer.from("[200~hello\x1b[201~"));
+    await sleep(WAIT_PAST_TIMEOUT_MS);
+    expect(pastes).toEqual(["hello"]);
+    expect(downstream()).toBe("");
+    mockStdin.end();
+  });
+
+  test("ESC followed quickly by an arrow key is forwarded unchanged", async () => {
+    const { mockStdin, pastes, downstream } = setup();
+    mockStdin.write(Buffer.from("\x1b"));
+    mockStdin.write(Buffer.from("[A"));
+    await sleep(WAIT_PAST_TIMEOUT_MS);
+    expect(pastes).toEqual([]);
+    expect(downstream()).toBe("\x1b[A");
+    mockStdin.end();
+  });
+
+  test("ESC then Ctrl-C after the timeout: both forwarded, in order", async () => {
+    const { mockStdin, downstream } = setup();
+    mockStdin.write(Buffer.from("\x1b"));
+    await sleep(WAIT_PAST_TIMEOUT_MS);
+    mockStdin.write(Buffer.from("\x03"));
+    await sleep(WAIT_PAST_TIMEOUT_MS);
+    expect(downstream()).toBe("\x1b\x03");
+    mockStdin.end();
+  });
+
+  test("ESC then a non-matching byte within the timeout: both forwarded, nothing dropped", async () => {
+    const { mockStdin, downstream } = setup();
+    mockStdin.write(Buffer.from("\x1b"));
+    mockStdin.write(Buffer.from("x"));
+    await sleep(WAIT_PAST_TIMEOUT_MS);
+    expect(downstream()).toBe("\x1bx");
+    mockStdin.end();
+  });
+
+  test("a held partial marker (ESC [ 2) is released after the timeout too", async () => {
+    const { mockStdin, downstream } = setup();
+    mockStdin.write(Buffer.from("\x1b[2"));
+    await sleep(WAIT_PAST_TIMEOUT_MS);
+    expect(downstream()).toBe("\x1b[2");
+    mockStdin.end();
+  });
+
+  test("ESC held at stream end is emitted before the stream ends, and no timer fires after", async () => {
+    const mockStdin = new PassThrough();
+    const filter = createPasteFilter(mockStdin as unknown as NodeJS.ReadStream, { escTimeoutMs: ESC_TIMEOUT_MS });
+    let downstream = "";
+    // Captured as an array so TypeScript does not narrow a single variable to null.
+    const downstreamAtEnd: string[] = [];
+    filter.stream.on("data", (chunk: Buffer) => {
+      downstream += chunk.toString();
+    });
+    filter.stream.on("end", () => {
+      downstreamAtEnd.push(downstream);
+    });
+    mockStdin.write(Buffer.from("\x1b"));
+    mockStdin.end();
+    await sleep(WAIT_PAST_TIMEOUT_MS);
+    // The ESC is emitted exactly once, by flush(), before end; the timer never double-pushes.
+    expect(downstreamAtEnd).toEqual(["\x1b"]);
+    expect(downstream).toBe("\x1b");
+  });
+
+  test("ESC held while a paste is in progress is not released by the timeout", async () => {
+    const { mockStdin, pastes, downstream } = setup();
+    // The paste opens, then its tail holds an orphan ESC (state IN_PASTE). The timeout must not
+    // release it, because the next chunk may complete the end marker.
+    mockStdin.write(Buffer.from("\x1b[200~abc\x1b"));
+    await sleep(WAIT_PAST_TIMEOUT_MS);
+    mockStdin.write(Buffer.from("[201~"));
+    await sleep(WAIT_PAST_TIMEOUT_MS);
+    expect(pastes).toEqual(["abc"]);
+    expect(downstream()).toBe("");
+    mockStdin.end();
+  });
+});

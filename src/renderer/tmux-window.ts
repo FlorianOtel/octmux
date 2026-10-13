@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
-import { execFileSync, execFile } from "node:child_process";
+import { execFileSync, execFile, type ExecFileSyncOptions } from "node:child_process";
 import type { Block, Role } from "../blocks.ts";
-import { formatLine } from "../blocks.ts";
+import { formatExitMarker, formatLine } from "../blocks.ts";
 import { makeFifo, type FifoHandle } from "./fifo.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer, CommittedLine } from "./types.ts";
@@ -9,6 +9,14 @@ import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
 import { BlockBufferRenderer } from "./block-buffer.ts";
 
 const SIDE_ROLES: Role[] = Object.keys(OUTPUT_KEY) as Role[];
+
+// Options for tmux calls made while Ink is mounted (window creation, rename,
+// kill). execFileSync inherits the child's stderr by default, so a failing tmux
+// command would print its error straight to the terminal behind Ink's back.
+// stdin is ignored, stdout is captured for the return value, stderr is discarded.
+const QUIET_SYNC_OPTS: ExecFileSyncOptions = {
+  stdio: ["ignore", "pipe", "ignore"],
+};
 
 export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   readonly kind = "tmux-window" as const;
@@ -96,6 +104,9 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   private _refreshLiveIdsAsync(): void {
     if (this._liveIdsRefreshInFlight) return;
     this._liveIdsRefreshInFlight = true;
+    // Quiet without extra options: execFile captures stdout and stderr into buffers and does not inherit them, so
+    // a tmux error reaches the callback's `err`, not the terminal behind Ink (verified with Bun). Stdin is an open
+    // pipe, which `list-windows` never reads. QUIET_SYNC_OPTS is therefore not needed here.
     execFile("tmux", ["list-windows", "-F", "#{window_id}"], (err, stdout) => {
       this._liveIdsRefreshInFlight = false;
       if (err) return;
@@ -137,13 +148,13 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
       "-P", "-F", "#{window_id}",
       "-n", `${this._sessionLabel}--${windowKey}`,
       `tail -f ${fifo.path}`,
-    ]).toString().trim();
+    ], QUIET_SYNC_OPTS).toString().trim();
     this._windowIds.set(windowKey, id);
     // Add new ID to live cache immediately so the next _ensureWindow
     // sees it without waiting for the background refresh.
     this._liveIds.add(id);
-    execFileSync("tmux", ["set-window-option", "-t", id, "automatic-rename", "off"]);
-    execFileSync("tmux", ["set-window-option", "-t", id, "allow-rename", "off"]);
+    execFileSync("tmux", ["set-window-option", "-t", id, "automatic-rename", "off"], QUIET_SYNC_OPTS);
+    execFileSync("tmux", ["set-window-option", "-t", id, "allow-rename", "off"], QUIET_SYNC_OPTS);
 
     this._refreshLiveIdsAsync();
   }
@@ -185,7 +196,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
     }
   }
 
-  endBlock(partID: string, status?: "ok" | "error"): void {
+  endBlock(partID: string, status?: "ok" | "error", exitCode?: number): void {
     const role = this._openBlocks.get(partID);
     const windowKey = role ? OUTPUT_KEY[role] : undefined;
     if (role && windowKey) {
@@ -195,9 +206,13 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
           const buf = this._lineBufs.get(role) ?? "";
           if (buf) fifo.write(formatLine(role, buf, false) + "\n");
           this._lineBufs.set(role, "");
+          // Stage 15.2 (C2.6b): non-zero shell exit marker, written to the tools window after the block.
+          if (exitCode !== undefined) fifo.write(formatExitMarker(exitCode) + "\n");
           fifo.write("\n");
         }
       }
+    } else if (exitCode !== undefined) {
+      this._main.endBlock(partID, status, exitCode);
     } else {
       this._main.endBlock(partID, status);
     }
@@ -231,9 +246,9 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   }
 
   rename(newLabel: string): void {
-    execFileSync("tmux", ["rename-window", "-t", this._originWindowId, newLabel]);
+    execFileSync("tmux", ["rename-window", "-t", this._originWindowId, newLabel], QUIET_SYNC_OPTS);
     for (const [windowKey, windowId] of this._windowIds) {
-      execFileSync("tmux", ["rename-window", "-t", windowId, `${newLabel}--${windowKey}`]);
+      execFileSync("tmux", ["rename-window", "-t", windowId, `${newLabel}--${windowKey}`], QUIET_SYNC_OPTS);
     }
     this._sessionLabel = newLabel;
   }
@@ -241,7 +256,7 @@ export class TmuxWindowRenderer extends EventEmitter implements Renderer {
   async dispose(): Promise<void> {
     for (const [windowKey, fifo] of this._fifos) {
       const windowId = this._windowIds.get(windowKey);
-      if (windowId) try { execFileSync("tmux", ["kill-window", "-t", windowId]); } catch {}
+      if (windowId) try { execFileSync("tmux", ["kill-window", "-t", windowId], QUIET_SYNC_OPTS); } catch {}
       fifo.close();
     }
     await this._main.dispose();

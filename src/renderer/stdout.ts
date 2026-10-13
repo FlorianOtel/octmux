@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { Block, Role } from "../blocks.ts";
-import { formatBlock, formatLine } from "../blocks.ts";
+import { formatBlock, formatExitMarker, formatLine } from "../blocks.ts";
 import { Visibility } from "./visibility.ts";
 import type { Renderer, CommittedLine } from "./types.ts";
 import { OUTPUT_KEY, OUTPUT_KEYS } from "./output-keys.ts";
@@ -85,7 +85,7 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
     this.emit("changed");
   }
 
-  endBlock(partID: string, _status?: "ok" | "error"): void {
+  endBlock(partID: string, _status?: "ok" | "error", exitCode?: number): void {
     const role = this._openBlocks.get(partID);
     const _outKey = role ? OUTPUT_KEY[role] : undefined;
     if (_outKey && !this.isOutputEnabled(_outKey)) {
@@ -94,6 +94,10 @@ export class StdoutRenderer extends EventEmitter implements Renderer {
     }
     if (role && this.visibility.isVisible(role) && this._activePart?.partID === partID) {
       this._flushTail();
+    }
+    // Stage 15.2 (C2.6b): non-zero shell exit marker, as in BlockBufferRenderer.endBlock.
+    if (role && exitCode !== undefined && this.visibility.isVisible(role)) {
+      this._committed = [...this._committed, { id: this._nextId++, role, ansi: formatExitMarker(exitCode) }];
     }
     this._openBlocks.delete(partID);
     this.emit("changed");

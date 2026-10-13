@@ -55,7 +55,19 @@ describe("parseAndValidate (A3)", () => {
 
   test("throws on an unknown nested server key, naming it as server.<key>", () => {
     expect(() => parseAndValidate(`{"server": {"passwrod": "x"}}`)).toThrow(
-      'unknown config key "server.passwrod" — allowed keys are $schema, server.url, server.password',
+      'unknown config key "server.passwrod" — allowed keys are $schema, server.url, server.password, server.directory',
+    );
+  });
+
+  test("accepts server.directory as an allowed key (unknown-key list includes it)", () => {
+    expect(parseAndValidate(`{"server": {"directory": "/srv/project"}}`)).toEqual({
+      server: { directory: "/srv/project" },
+    });
+  });
+
+  test("throws when server.directory is not a string", () => {
+    expect(() => parseAndValidate(`{"server": {"directory": 42}}`)).toThrow(
+      'config key "server.directory" must be a string',
     );
   });
 
@@ -293,5 +305,104 @@ describe("loadOctmuxConfig (A4)", () => {
     expect(() => loadOctmuxConfig(configPath)).toThrow(
       `${configPath}: server.password resolved to an empty string`,
     );
+  });
+});
+
+describe("loadOctmuxConfig server.directory (C8)", () => {
+  test("a valid absolute POSIX path loads unchanged", () => {
+    const configPath = writeFixture(
+      "cfg-dir-abs.json",
+      `{"server": {"directory": "/srv/octmux-project"}}`,
+      0o600,
+    );
+    const loaded = loadOctmuxConfig(configPath);
+    expect(loaded!.config.server?.directory).toBe("/srv/octmux-project");
+  });
+
+  test("Windows drive-letter paths with a backslash or a slash are accepted", () => {
+    const backslash = writeFixture(
+      "cfg-dir-win-bs.json",
+      `{"server": {"directory": "C:\\\\work\\\\repo"}}`,
+      0o600,
+    );
+    const slash = writeFixture(
+      "cfg-dir-win-fs.json",
+      `{"server": {"directory": "D:/work/repo"}}`,
+      0o600,
+    );
+    expect(loadOctmuxConfig(backslash)!.config.server?.directory).toBe("C:\\work\\repo");
+    expect(loadOctmuxConfig(slash)!.config.server?.directory).toBe("D:/work/repo");
+  });
+
+  test("a relative path throws, naming the config file, the key, and the offending value", () => {
+    const configPath = writeFixture(
+      "cfg-dir-relative.json",
+      `{"server": {"directory": "relative/dir"}}`,
+      0o600,
+    );
+    expect(() => loadOctmuxConfig(configPath)).toThrow(
+      `${configPath}: server.directory must be an absolute path (starting with "/" or a drive letter), got "relative/dir"`,
+    );
+  });
+
+  test("an empty string throws the absolute-path error", () => {
+    const configPath = writeFixture(
+      "cfg-dir-empty.json",
+      `{"server": {"directory": ""}}`,
+      0o600,
+    );
+    expect(() => loadOctmuxConfig(configPath)).toThrow(
+      `${configPath}: server.directory must be an absolute path`,
+    );
+  });
+
+  test("{env:NAME} substitutes into server.directory", () => {
+    process.env.OCTMUX_TEST_DIR_ENV = "/remote/from-env";
+    try {
+      const configPath = writeFixture(
+        "cfg-dir-env.json",
+        `{"server": {"directory": "{env:OCTMUX_TEST_DIR_ENV}"}}`,
+        0o600,
+      );
+      expect(loadOctmuxConfig(configPath)!.config.server?.directory).toBe("/remote/from-env");
+    } finally {
+      delete process.env.OCTMUX_TEST_DIR_ENV;
+    }
+  });
+
+  test("an {env:NAME} that resolves to a relative path throws, because the check runs after substitution", () => {
+    process.env.OCTMUX_TEST_DIR_REL = "not/absolute";
+    try {
+      const configPath = writeFixture(
+        "cfg-dir-env-rel.json",
+        `{"server": {"directory": "{env:OCTMUX_TEST_DIR_REL}"}}`,
+        0o600,
+      );
+      expect(() => loadOctmuxConfig(configPath)).toThrow(
+        `${configPath}: server.directory must be an absolute path`,
+      );
+    } finally {
+      delete process.env.OCTMUX_TEST_DIR_REL;
+    }
+  });
+
+  test("{file:PATH} substitutes and is trimmed, with no permission check on the file", () => {
+    // The file is 0644 on purpose: a directory is not a secret, so group/other bits are allowed.
+    writeFixture("dir-file.txt", "/remote/from-file\n", 0o644);
+    const configPath = writeFixture(
+      "cfg-dir-file.json",
+      `{"server": {"directory": "{file:dir-file.txt}"}}`,
+      0o600,
+    );
+    expect(loadOctmuxConfig(configPath)!.config.server?.directory).toBe("/remote/from-file");
+  });
+
+  test("a 0644 config holding only server.directory loads (no literal secret, so no mode check)", () => {
+    const configPath = writeFixture(
+      "cfg-dir-644.json",
+      `{"server": {"directory": "/srv/shared"}}`,
+      0o644,
+    );
+    expect(loadOctmuxConfig(configPath)!.config.server?.directory).toBe("/srv/shared");
   });
 });

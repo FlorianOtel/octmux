@@ -12,6 +12,8 @@ import { detectProtocol, compareVersions, BUNDLED_OC_CLIENT_VERSION } from "./pr
 import { redactUrl } from "./utils/redact-url.ts";
 import { App } from "./app.tsx";
 import { V1Backend } from "./backend/v1.ts";
+import { V2Backend, DEFAULT_CONFIG_HINT } from "./backend/v2.ts";
+import type { Backend } from "./backend/types.ts";
 import { Visibility } from "./renderer/visibility.ts";
 import { BlockBufferRenderer } from "./renderer/block-buffer.ts";
 import { TmuxWindowRenderer } from "./renderer/tmux-window.ts";
@@ -120,6 +122,29 @@ try {
   process.exit(1);
 }
 setAuthPassword(loadedConfig?.config.server?.password);
+
+// --worktree creates a directory on THIS machine and chdirs into it. server.directory names a
+// path the server sees, which may be another host, so octmux cannot route the session to a local
+// worktree. Refuse the combination instead of silently ignoring one of the two.
+if (worktreeFlag && loadedConfig?.config.server?.directory !== undefined) {
+  console.error(
+    `octmux: --worktree cannot be combined with server.directory (set in ${loadedConfig.path}): ` +
+    "the server cannot see a local worktree path. Remove server.directory, or drop --worktree.",
+  );
+  process.exit(2);
+}
+
+// --auto-spawn starts a new opencode server on THIS machine. server.directory names a path the server sees,
+// which may be another host or container, and the spawned server is local, so the two cannot agree on one
+// path. Refuse the combination instead of silently ignoring one of the two.
+if (autoSpawn && loadedConfig?.config.server?.directory !== undefined) {
+  console.error(
+    `octmux: --auto-spawn cannot be combined with server.directory (set in ${loadedConfig.path}): ` +
+    "the spawned server runs locally, so it cannot be the server that server.directory names. " +
+    "Remove server.directory, or drop --auto-spawn.",
+  );
+  process.exit(2);
+}
 
 // ─── Endpoint resolution ─────────────────────────────────────────────────────
 // Precedence: --endpoint flag > config server.url > DEFAULT_ENDPOINT.
@@ -246,6 +271,10 @@ if (worktreeFlag) {
 let baseUrl: string;
 let serverHandle: ServerHandle | null = null;
 
+// Which Backend this run uses. Set by the detection branch below when the endpoint speaks v2.
+// Stays "v1" for --auto-spawn (which never runs detection) and for a v1 server.
+let backendProtocol: "v1" | "v2" = "v1";
+
 if (autoSpawn) {
   // Explicit opt-in: spawn a new opencode instance on any free port.
   // If a config server.url is also present, --auto-spawn wins (it is checked first here),
@@ -290,9 +319,8 @@ if (autoSpawn) {
     }
     process.exit(1);
   } else if (protocol.kind === "v2-authorized") {
-    // A v2 server is reachable and auth works, but this build has no native v2 session
-    // support, so octmux always exits here. Version gating runs first, so the operator
-    // sees a mismatch warning before the final message.
+    // A v2 server is reachable and auth works. Version gating runs first: a major mismatch
+    // still refuses, and minor differences only print a warning before startup continues on v2.
     const { version } = protocol;
     const gate = compareVersions(version, BUNDLED_OC_CLIENT_VERSION);
     if (gate === "major-mismatch") {
@@ -305,9 +333,8 @@ if (autoSpawn) {
     } else if (gate === "unparseable") {
       console.warn(`⚠ octmux: could not compare OpenCode server version ${version} with bundled client ${BUNDLED_OC_CLIENT_VERSION}`);
     }
-    // gate === "exact" prints nothing extra.
-    console.error(`octmux: OpenCode v2 server ${version} detected at ${displayUrl}; auth OK. Native v2 session support is not yet implemented in this octmux build.`);
-    process.exit(1);
+    // gate === "exact" prints nothing extra. No success line: startup prints nothing new on v2.
+    backendProtocol = "v2";
   } else {
     // "unreachable": no protocol identified at this endpoint. Keep the rich hints for the
     // default and config-sourced endpoints. An explicit --endpoint gets the short form.
@@ -341,18 +368,33 @@ process.on("SIGTERM", async () => { await serverHandle?.dispose(); await rendere
 
 // ─── SDK: client / session / event stream ────────────────────────────────────
 
-// Capture the operator's working directory once — threaded to the SDK client and
-// all raw fetch() calls so OC's directory-scoped endpoints return the right data.
+// Capture the operator's working directory once. It stays LOCAL: the git branch probe, the
+// worktree logic, the command registry, and the orchestra session files all use it.
 const cwd = process.cwd();
 
-// Bootstrap client for session lookup. The actual subscription directory is determined by
-// the resolved session's own .directory (server-side: workspace-routing.ts:181-182),
-// not by the launch cwd.
-const bootstrapClient = createOpencodeClient({ baseUrl, directory: cwd, headers: getAuthHeaders() });
+// The directory octmux sends to the server as a session location (the v1 x-opencode-directory
+// header, the v1 client `directory`, and the v2 `location`). Unset server.directory keeps today's
+// behaviour: the local cwd. Set, it is a path AS THE SERVER SEES IT, e.g. when the server runs on
+// another host. config.server.directory is already checked to be absolute by the config loader.
+const configServerDirectory = loadedConfig?.config.server?.directory;
+const serverDirectory = configServerDirectory ?? cwd;
+if (configServerDirectory !== undefined) {
+  console.log(`octmux: using server directory ${serverDirectory} (from ${loadedConfig!.path})`);
+}
 
-// Startup session operations (get/list/fork/create below) go through the Backend seam,
-// wrapping the bootstrap client with the launch cwd. The session-scoped calls are unchanged.
-const bootstrapBackend = new V1Backend(bootstrapClient, baseUrl, cwd);
+// Bootstrap client for session lookup (v1 only). The actual subscription directory is determined by
+// the resolved session's own .directory (server-side: workspace-routing.ts:181-182),
+// not by the launch directory. On v2 no v1 SDK client is built, so this stays undefined.
+const bootstrapClient = backendProtocol === "v1"
+  ? createOpencodeClient({ baseUrl, directory: serverDirectory, headers: getAuthHeaders() })
+  : undefined;
+
+// Startup session operations (get/list/fork/create below) go through the Backend seam, wrapping
+// the bootstrap client (v1) or the v2 SDK with the server directory. The session-scoped calls are unchanged.
+// configHint names the config file in v2 LocationNotFoundError messages (the file that sets server.directory).
+const bootstrapBackend: Backend = bootstrapClient !== undefined
+  ? new V1Backend(bootstrapClient, baseUrl, serverDirectory)
+  : new V2Backend(baseUrl, serverDirectory, undefined, loadedConfig?.path ?? DEFAULT_CONFIG_HINT);
 
 // Determine which session to use: resume by ID, resume last, fork, or create new.
 // Capture both banner and sessionLabel: banner for startup confirmation, sessionLabel for chrome.
@@ -404,7 +446,8 @@ if (resumeArg) {
       console.error(`octmux: parent session not found: ${forkArg}`);
       process.exit(1);
     }
-    const child = await bootstrapBackend.session.fork(forkArg, { directory: cwd });
+    // On v2 the fork ignores `directory` (v2 session.fork has no directory input); the child keeps the parent's location.
+    const child = await bootstrapBackend.session.fork(forkArg, { directory: serverDirectory });
     if (!child?.id) {
       console.error(`octmux: fork returned no child session for parent ${forkArg}`);
       process.exit(1);
@@ -418,24 +461,43 @@ if (resumeArg) {
     process.exit(1);
   }
 } else {
-  // Default: create a new session anchored to octmux's launch directory.
-  // Without this, OC inherits the daemon's cwd ($HOME) instead of where octmux was invoked.
-  const session = await bootstrapBackend.session.create({ directory: cwd });
+  // Default: create a new session anchored to the server directory (the launch directory unless
+  // server.directory is set). Without this, OC inherits the daemon's cwd ($HOME) instead.
+  // v2 write operations reject with a readable message (e.g. LocationNotFoundError); report it
+  // like the resume/fork paths above do, without a stack. v1 resolves undefined on error statuses,
+  // so the existing session!.id line below is unchanged for v1.
+  let session;
+  try {
+    session = await bootstrapBackend.session.create({ directory: serverDirectory });
+  } catch (err) {
+    console.error(`octmux: could not create a session: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
   sessionID = session!.id;
   sessionLabel = sessionID.slice(0, 8);
 }
 
-// Rebind the client to the resolved session's own directory if it differs from launch cwd.
+// Rebind to the resolved session's own directory if it differs from the server directory.
 // This ensures the SSE subscription subscribes to events in the correct project directory.
-const effectiveCwd = resolvedDirectory && resolvedDirectory !== cwd ? resolvedDirectory : cwd;
-const client = effectiveCwd === cwd
-  ? bootstrapClient
-  : createOpencodeClient({ baseUrl, directory: effectiveCwd, headers: getAuthHeaders() });
+// resolvedDirectory is a server-side path, so it is compared with serverDirectory, not the local cwd.
+const effectiveServerDirectory = resolvedDirectory && resolvedDirectory !== serverDirectory
+  ? resolvedDirectory
+  : serverDirectory;
 
-// Protocol seam: the Backend wraps the client above and the raw endpoints (baseUrl) and
-// directory header (effectiveCwd) it needs. The initial SSE subscription goes through
-// backend.subscribeEvents() so the event stream has a single owner behind the seam.
-const backend = new V1Backend(client, baseUrl, effectiveCwd);
+// Protocol seam: the Backend is chosen by the detection result. v1 wraps a client rebound to
+// effectiveServerDirectory (the bootstrap client is reused when the directory did not change). v2 needs no client
+// here, only baseUrl and effectiveServerDirectory. The initial SSE subscription goes through backend.subscribeEvents()
+// so the event stream has a single owner behind the seam.
+// configHint: see bootstrapBackend above.
+const backend: Backend = bootstrapClient !== undefined
+  ? new V1Backend(
+      effectiveServerDirectory === serverDirectory
+        ? bootstrapClient
+        : createOpencodeClient({ baseUrl, directory: effectiveServerDirectory, headers: getAuthHeaders() }),
+      baseUrl,
+      effectiveServerDirectory,
+    )
+  : new V2Backend(baseUrl, effectiveServerDirectory, undefined, loadedConfig?.path ?? DEFAULT_CONFIG_HINT);
 
 const eventStream = await backend.subscribeEvents();
 
@@ -510,6 +572,7 @@ let onRedraw: () => void = () => {};
 const appElement = (
   <App
     backend={backend}
+    serverDirectory={serverDirectory}
     sessionID={sessionID}
     sessionLabel={sessionLabel}
     eventStream={eventStream.stream}

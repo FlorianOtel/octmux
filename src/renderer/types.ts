@@ -6,7 +6,9 @@ export type CommittedLine = { id: number; role: Role; ansi: string };
 export interface Renderer {
   beginBlock(partID: string, role: Role, meta?: Block["meta"]): void;
   appendToBlock(partID: string, text: string): void;
-  endBlock(partID: string, status?: "ok" | "error"): void;
+  // `exitCode` (Stage 15.2, C2.6b) is set only for a v2 shell tool that exited non-zero. The renderer shows
+  // it as a marker line under the block. v1 never passes it, so v1 output is unchanged.
+  endBlock(partID: string, status?: "ok" | "error", exitCode?: number): void;
   commitUserInput(text: string): void;
   commitSystemMessage(text: string): void;
   commitError(message: string): void;

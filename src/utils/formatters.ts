@@ -21,11 +21,20 @@ export function formatTokens(n: number): string {
 /**
  * Fetch the current git branch name via Bun.spawn.
  * Returns empty string if not in a git repo or on error.
+ *
+ * Called while Ink is mounted (startup and every turn end), so the child's
+ * stderr must NOT be inherited: outside a git repo git writes "fatal: not a
+ * git repository …" straight to the terminal, behind Ink's back, which
+ * strands the live status row in scrollback. stdin is ignored, stdout is
+ * captured for the branch name, and stderr is discarded.
  */
 export async function fetchGitBranch(): Promise<string> {
   try {
     const proc = Bun.spawn(["git", "rev-parse", "--abbrev-ref", "HEAD"], {
       cwd: process.cwd(),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "ignore",
     });
     const exitCode = await proc.exited;
     if (exitCode !== 0) return "";

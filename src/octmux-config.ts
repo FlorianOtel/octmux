@@ -16,14 +16,17 @@ export interface OctmuxConfig {
   server?: {
     url?: string;
     password?: string;
+    // Directory path AS SEEN BY THE SERVER. Used as the session location instead of
+    // octmux's local working directory. Must be absolute (checked after substitution).
+    directory?: string;
   };
 }
 
 // Keys the config file may contain. Anything else is a hard error, so a typo
 // such as "passwrod" fails loudly instead of being silently ignored.
 const ALLOWED_TOP_LEVEL_KEYS: readonly string[] = ["$schema", "server"];
-const ALLOWED_SERVER_KEYS: readonly string[] = ["url", "password"];
-const ALLOWED_KEYS_TEXT = "$schema, server.url, server.password";
+const ALLOWED_SERVER_KEYS: readonly string[] = ["url", "password", "directory"];
+const ALLOWED_KEYS_TEXT = "$schema, server.url, server.password, server.directory";
 
 // Matches a single OpenCode-style token: {env:NAME} or {file:PATH}.
 // Group 1 is the token kind, group 2 is its argument.
@@ -119,6 +122,9 @@ export function parseAndValidate(raw: string): OctmuxConfig {
     }
     if (parsed.server.password !== undefined) {
       requireString(parsed.server.password, "server.password");
+    }
+    if (parsed.server.directory !== undefined) {
+      requireString(parsed.server.directory, "server.directory");
     }
   }
 
@@ -247,7 +253,8 @@ function checkPasswordPermissions(password: string, configPath: string, configDi
   }
 }
 
-// Returns a copy of `config` with tokens expanded in server.url and server.password.
+// Returns a copy of `config` with tokens expanded in server.url, server.password,
+// and server.directory.
 function substituteConfig(config: OctmuxConfig, configDir: string): OctmuxConfig {
   const substituted: OctmuxConfig = { ...config };
   if (config.server !== undefined) {
@@ -258,8 +265,17 @@ function substituteConfig(config: OctmuxConfig, configDir: string): OctmuxConfig
     if (config.server.password !== undefined) {
       substituted.server.password = substituteTokens(config.server.password, configDir);
     }
+    if (config.server.directory !== undefined) {
+      substituted.server.directory = substituteTokens(config.server.directory, configDir);
+    }
   }
   return substituted;
+}
+
+// True when `path` is absolute on POSIX ("/...") or on Windows ("C:\..." or "C:/...").
+// The server may run on another host, so the check is by spelling, not by stat-ing the path.
+function isAbsoluteServerPath(path: string): boolean {
+  return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
 }
 
 /**
@@ -323,6 +339,15 @@ export function loadOctmuxConfig(
   // never echoes the value.
   if (config.server?.password === "") {
     throw new Error(`${configPath}: server.password resolved to an empty string`);
+  }
+
+  // server.directory is checked after substitution, so an {env:} or {file:} value is judged
+  // by what octmux actually sends. The value is not a secret, so it is named in the message.
+  const directory = config.server?.directory;
+  if (directory !== undefined && !isAbsoluteServerPath(directory)) {
+    throw new Error(
+      `${configPath}: server.directory must be an absolute path (starting with "/" or a drive letter), got "${directory}"`,
+    );
   }
 
   return { config, path: configPath };

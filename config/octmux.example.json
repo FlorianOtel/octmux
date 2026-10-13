@@ -19,5 +19,11 @@
     // against the directory holding this config file.
     // Use a {file:} or {env:} reference rather than a literal value, so no secret sits in this file.
     "password": "{file:~/.config/octmux/oc-mbp.password}"
+
+    // Optional. Directory path AS THE SERVER SEES IT, used as the session location instead of
+    // octmux's local working directory. Use it when the server runs on another host or in a
+    // container with different paths. Must be absolute ("/..." or a drive letter such as "C:\...").
+    // Cannot be combined with --worktree. Unset: the local working directory is used.
+    // "directory": "/home/florian/projects/octmux"
   }
 }

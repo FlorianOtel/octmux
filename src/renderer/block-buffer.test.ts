@@ -9,7 +9,7 @@ process.env.FORCE_COLOR = "1";
 import { test, expect, describe } from "bun:test";
 import { EventEmitter } from "node:events";
 import stringWidth from "string-width";
-import { formatLine } from "../blocks.ts";
+import { formatLine, formatExitMarker } from "../blocks.ts";
 import { Visibility } from "./visibility.ts";
 import type { CommittedLine } from "./types.ts";
 import { StdoutRenderer } from "./stdout.ts";
@@ -142,11 +142,16 @@ describe("BlockBufferRenderer", () => {
       
       renderer.beginBlock(partID, "thinking");
       renderer.appendToBlock(partID, "foo\nbar");
-      
-      // Non-text role: committed lines, no active text block
-      expect(renderer.getCommitted()).toHaveLength(2);
+
+      // Non-text role: only the COMPLETE line "foo" is committed. "bar" has no
+      // trailing "\n", so it is held as this block's partial tail (Stage 15.2 F-b)
+      // and committed when the block closes. Previously both lines committed here.
+      expect(renderer.getCommitted()).toHaveLength(1);
       expect(renderer.getActiveBlock()).toBeNull();
       expect(renderer.getActiveBlockAnsi()).toBe("");
+
+      renderer.endBlock(partID);
+      expect(renderer.getCommitted()).toHaveLength(2);
     });
 
     test("commitTurnEnd flushes active text block", () => {
@@ -737,4 +742,289 @@ describe("BlockBufferRenderer", () => {
     });
   });
 
+  // Stage 15.2 (C2.6b): a v2 shell tool that exits non-zero shows a marker line after its block. The tool is
+  // still a completed block (status ok), so no error styling and no turn logic is involved.
+  describe("Stage 15.2 C2.6b — non-zero shell exit marker", () => {
+    test("endBlock with exitCode commits a red 'exit N' marker line after the tool-call block", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("call_1", "tool-call", { toolName: "shell" });
+      renderer.endBlock("call_1", "ok", 1);
+      const lines = renderer.getCommitted().map(l => l.ansi.replace(/\x1b\[[0-9;]*m/g, ""));
+      expect(lines.at(-1)).toBe("  ✗ exit 1");
+    });
+
+    test("endBlock without exitCode commits no marker (v1 output unchanged)", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("call_1", "tool-call", { toolName: "shell" });
+      const before = renderer.getCommitted().length;
+      renderer.endBlock("call_1", "ok");
+      expect(renderer.getCommitted().length).toBe(before);
+    });
+
+    test("the marker is suppressed when the tools gate is off", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.setOutputEnabled("tools", false);
+      renderer.beginBlock("call_1", "tool-call", { toolName: "shell" });
+      const before = renderer.getCommitted().length;
+      renderer.endBlock("call_1", "ok", 2);
+      expect(renderer.getCommitted().length).toBe(before);
+    });
+
+    test("the marker is styling only: no [error] line is committed for a completed tool", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("call_1", "tool-call", { toolName: "shell" });
+      renderer.endBlock("call_1", "ok", 1);
+      const text = renderer.getCommitted().map(l => l.ansi).join("\n");
+      expect(text).not.toContain("[error]");
+    });
+  });
+
+  describe("Stage 15.2 F-b — non-text partial-line tail", () => {
+    // Strip SGR escapes so prefix counts are checked against visible text.
+    const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+    test("summary deltas split mid-line commit whole lines, one prefix each", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("sum-1", "summary");
+      renderer.appendToBlock("sum-1", "## Go");
+      renderer.appendToBlock("sum-1", "al\n- Re");
+      renderer.appendToBlock("sum-1", "spond\n");
+
+      const committed = renderer.getCommitted().map(l => l.ansi);
+      expect(committed).toEqual([
+        formatLine("summary", "## Goal", false),
+        formatLine("summary", "- Respond", false),
+      ]);
+      // Exactly one "[compacted summary]" prefix per committed line (the old code
+      // emitted a fresh prefix per delta fragment).
+      for (const line of committed) {
+        expect(strip(line).split("[compacted summary]").length - 1).toBe(1);
+      }
+      // Nothing held once the last delta ended on "\n": endBlock adds no line.
+      renderer.endBlock("sum-1", "ok");
+      expect(renderer.getCommitted()).toHaveLength(2);
+    });
+
+    test("a partial tail is held until endBlock, then committed as one final line", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("sum-2", "summary");
+      renderer.appendToBlock("sum-2", "## Go");
+      renderer.appendToBlock("sum-2", "al");
+      expect(renderer.getCommitted()).toHaveLength(0);
+
+      renderer.endBlock("sum-2", "ok");
+      const committed = renderer.getCommitted().map(l => l.ansi);
+      expect(committed).toEqual([formatLine("summary", "## Goal", false)]);
+    });
+
+    test("hidden role commits nothing, including when hidden mid-block", () => {
+      // Hidden before the block starts: beginBlock/appendToBlock never register it.
+      const hiddenFromStart = new Visibility();
+      hiddenFromStart.set("thinking", false);
+      const r1 = new BlockBufferRenderer(hiddenFromStart);
+      r1.beginBlock("th-1", "thinking");
+      r1.appendToBlock("th-1", "a\nb");
+      r1.endBlock("th-1", "ok");
+      expect(r1.getCommitted()).toHaveLength(0);
+
+      // Hidden after a partial tail was held: endBlock must discard it, not commit it.
+      const visibility = new Visibility();
+      const r2 = new BlockBufferRenderer(visibility);
+      r2.beginBlock("th-2", "thinking");
+      r2.appendToBlock("th-2", "abc");
+      visibility.set("thinking", false);
+      r2.endBlock("th-2", "ok");
+      expect(r2.getCommitted()).toHaveLength(0);
+    });
+
+    test("gate turned off mid-block discards the held tail at endBlock", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("tr-g", "tool-result");
+      renderer.appendToBlock("tr-g", "half");
+      renderer.setOutputEnabled("tools", false);
+      renderer.endBlock("tr-g", "ok");
+      expect(renderer.getCommitted()).toHaveLength(0);
+    });
+
+    test("two interleaved non-text blocks keep separate tails", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("s", "summary");
+      renderer.beginBlock("t", "tool-result");
+      renderer.appendToBlock("s", "foo");
+      renderer.appendToBlock("t", "bar");
+      renderer.appendToBlock("s", "baz\n");
+      // "foo"+"baz" completes for summary; tool-result "bar" must NOT leak into it.
+      expect(renderer.getCommitted().map(l => l.ansi)).toEqual([
+        formatLine("summary", "foobaz", false),
+      ]);
+
+      renderer.appendToBlock("t", "qux\n");
+      renderer.appendToBlock("t", "end");
+      expect(renderer.getCommitted().map(l => l.ansi)).toEqual([
+        formatLine("summary", "foobaz", false),
+        formatLine("tool-result", "barqux", false),
+      ]);
+
+      // Closing tool-result flushes its own "end" tail with its own role; summary has none left.
+      renderer.endBlock("t", "ok");
+      renderer.endBlock("s", "ok");
+      expect(renderer.getCommitted().map(l => l.ansi)).toEqual([
+        formatLine("summary", "foobaz", false),
+        formatLine("tool-result", "barqux", false),
+        formatLine("tool-result", "end", false),
+      ]);
+    });
+
+    test("the exit marker follows the flushed tail", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("c-1", "tool-result");
+      renderer.appendToBlock("c-1", "out");
+      renderer.endBlock("c-1", "ok", 2);
+      const committed = renderer.getCommitted().map(l => l.ansi);
+      expect(committed).toEqual([
+        formatLine("tool-result", "out", false),
+        formatExitMarker(2),
+      ]);
+    });
+
+    test("retagBlock commits the held tail under the OLD role before the new role applies", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("rt-1", "tool-result");
+      renderer.appendToBlock("rt-1", "half");
+      renderer.retagBlock("rt-1", "summary");
+      expect(renderer.getCommitted().map(l => l.ansi)).toEqual([
+        formatLine("tool-result", "half", false),
+      ]);
+
+      // Deltas after the retag start a fresh tail under the new role.
+      renderer.appendToBlock("rt-1", "rest\n");
+      expect(renderer.getCommitted().map(l => l.ansi)).toEqual([
+        formatLine("tool-result", "half", false),
+        formatLine("summary", "rest", false),
+      ]);
+    });
+
+    test("clearAll drops held tails so a later endBlock commits nothing", () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("cl-1", "summary");
+      renderer.appendToBlock("cl-1", "stale");
+      renderer.clearAll();
+      renderer.endBlock("cl-1", "ok");
+      expect(renderer.getCommitted()).toHaveLength(0);
+    });
+
+    test("dispose commits held tails of still-open non-text blocks", async () => {
+      const renderer = new BlockBufferRenderer(new Visibility());
+      renderer.beginBlock("d-1", "summary");
+      renderer.appendToBlock("d-1", "last words");
+      await renderer.dispose();
+      expect(renderer.getCommitted().map(l => l.ansi)).toEqual([
+        formatLine("summary", "last words", false),
+      ]);
+    });
+  });
+
+});
+
+// ─── Stage 15.2 D-B: v2 reasoning tail with no trailing newline ───
+//
+// The v2 translator (src/backend/v2-events.ts `startStreamPart` / `endStreamPart`) does NOT close a reasoning block
+// when a text block starts. Its `session.reasoning.ended` can arrive after `session.text.started` (capture 2, capture
+// 3b overlap, §4.1 and §4.2). So a reasoning block's held partial line stays open across the text block's start.
+// The tests below use the exact ReplEvent order the translator emits for that SSE order, applied through the same
+// renderer calls `app.tsx` `applyReplEvents` makes (block-start → beginBlock, block-delta → appendToBlock,
+// block-end → endBlock, session-idle → commitTurnEnd).
+
+/** Strips SGR colour codes so assertions compare the visible text of each committed line. */
+function visibleLines(r: BlockBufferRenderer): string[] {
+  return r.getCommitted().map(l => l.ansi.replace(/\x1b\[[0-9;]*m/g, ""));
+}
+
+describe("Stage 15.2 D-B: reasoning tail with no trailing newline (v2 overlap order)", () => {
+  test("a reasoning tail is committed when its block ends, even after a text block started", () => {
+    // SSE: reasoning.started, reasoning.delta("Let me think"), text.started, text.delta("Answer\n"),
+    // reasoning.ended, text.ended. The tail must reach the scrollback once reasoning.ended arrives.
+    const r = new BlockBufferRenderer(new Visibility());
+    r.setOutputEnabled("thinking", true);
+    r.beginBlock("P-think", "thinking");
+    r.appendToBlock("P-think", "Let me think");
+    r.beginBlock("P-text", "text", { messageID: "msg-1" });
+    r.appendToBlock("P-text", "Answer\n");
+    r.endBlock("P-think", "ok");
+    r.endBlock("P-text", "ok");
+    r.commitTurnEnd();
+
+    const lines = visibleLines(r);
+    expect(lines.some(l => l.includes("│ Let me think"))).toBe(true);
+    // The answer is committed as well, so the reasoning line is not the only output.
+    expect(lines.some(l => l.includes("Answer"))).toBe(true);
+  });
+
+  test("a reasoning tail held across a new message's text start commits before that message's timestamp separator", () => {
+    // Message 1 answers first. Message 2 then has reasoning with a newline and a final tail with no newline.
+    // Before the fix, the tail "Let me think" was committed at reasoning.ended, after the separator that the
+    // text.started of message 2 injected. It must come before the separator, after "Step one".
+    const r = new BlockBufferRenderer(new Visibility());
+    r.setOutputEnabled("thinking", true);
+    r.beginBlock("P-text-1", "text", { messageID: "msg-1" });
+    r.appendToBlock("P-text-1", "First answer\n");
+    r.endBlock("P-text-1", "ok");
+    r.beginBlock("P-think-2", "thinking");
+    r.appendToBlock("P-think-2", "Step one\nLet me think");
+    r.beginBlock("P-text-2", "text", { messageID: "msg-2" });
+    r.appendToBlock("P-text-2", "Second answer\n");
+    r.endBlock("P-think-2", "ok");
+    r.endBlock("P-text-2", "ok");
+    r.commitTurnEnd();
+
+    const lines = visibleLines(r);
+    const stepOne = lines.findIndex(l => l.includes("│ Step one"));
+    const tail = lines.findIndex(l => l.includes("│ Let me think"));
+    const separator = lines.findIndex(l => /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]$/.test(l));
+    const answer2 = lines.findIndex(l => l.includes("Second answer"));
+    expect(stepOne).toBeGreaterThanOrEqual(0);
+    expect(tail).toBeGreaterThanOrEqual(0);
+    expect(separator).toBeGreaterThanOrEqual(0);
+    // Order: reasoning lines, then the separator, then the answer. The tail sits with the reasoning, not after the separator.
+    expect(stepOne).toBeLessThan(tail);
+    expect(tail).toBeLessThan(separator);
+    expect(separator).toBeLessThan(answer2);
+  });
+
+  test("a reasoning tail still held at session-idle is committed before the turn-end separator", () => {
+    // SSE order where the turn ends before reasoning.ended is seen: the translator emits session-idle (which the
+    // renderer answers with commitTurnEnd) and only then the block-end for the still-open reasoning block.
+    const r = new BlockBufferRenderer(new Visibility());
+    r.setOutputEnabled("thinking", true);
+    r.beginBlock("P-think", "thinking");
+    r.appendToBlock("P-think", "Let me think");
+    r.beginBlock("P-text", "text", { messageID: "msg-1" });
+    r.appendToBlock("P-text", "Answer\n");
+    r.commitTurnEnd();
+    r.endBlock("P-think", "ok");
+    r.endBlock("P-text", "ok");
+
+    const lines = visibleLines(r);
+    const tail = lines.findIndex(l => l.includes("│ Let me think"));
+    const answer = lines.findIndex(l => l.includes("Answer"));
+    expect(tail).toBeGreaterThanOrEqual(0);
+    // The reasoning tail sits before the answer and before the separator, not after the separator.
+    expect(tail).toBeLessThan(answer);
+  });
+
+  test("v1 order (reasoning closed before text starts) renders the same lines as before the fix", () => {
+    // v1 closes thinking blocks before text starts (src/events.ts, the text-part branch, block-end before block-start).
+    // The tail is committed at that block-end, so the flush added for v2 has nothing to do. This pins the output.
+    const r = new BlockBufferRenderer(new Visibility());
+    r.setOutputEnabled("thinking", true);
+    r.beginBlock("P-think", "thinking");
+    r.appendToBlock("P-think", "Step one\nLet me think");
+    r.endBlock("P-think", "ok");
+    r.beginBlock("P-text", "text", { messageID: "msg-1" });
+    r.appendToBlock("P-text", "Answer\n");
+    r.endBlock("P-text", "ok");
+    r.commitTurnEnd();
+
+    expect(visibleLines(r).slice(0, 3)).toEqual(["│ Step one", "│ Let me think", "Answer"]);
+  });
 });
