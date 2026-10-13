@@ -967,6 +967,38 @@ describe("V2Backend.isSessionActive (C2.6b; capture §5 GET /api/session/active)
   });
 });
 
+describe("V2Backend.getOrchestraState (orchestra badge over the API, session metadata)", () => {
+  const active = { version: 1, mode: "brain", title: "orchestra full - task", active: true, updatedAt: Date.now() };
+
+  test("reads metadata.orchestra and the session model through session.get", async () => {
+    const { client, calls } = makeFake({
+      "session.get": v2Session({
+        id: "ses_a",
+        metadata: { orchestra: active },
+        model: { id: "glm-5.3-flash", providerID: "sohoai", variant: "default" },
+      }),
+    });
+    const backend = new V2Backend(BASE, CWD, client);
+    expect(await backend.getOrchestraState("ses_a")).toEqual({
+      mode: "brain",
+      title: "orchestra full - task",
+      parserWarnings: [],
+      model: { providerID: "sohoai", id: "glm-5.3-flash" },
+    });
+    expect(calls).toEqual([{ method: "session.get", input: { sessionID: "ses_a" } }]);
+  });
+
+  test("resolves null when the session has no orchestra metadata", async () => {
+    const { client } = makeFake({ "session.get": v2Session({ id: "ses_a" }) });
+    expect(await new V2Backend(BASE, CWD, client).getOrchestraState("ses_a")).toBeNull();
+  });
+
+  test("resolves null on an error status", async () => {
+    const { client } = makeFake({ "session.get": statusError(404) });
+    expect(await new V2Backend(BASE, CWD, client).getOrchestraState("ses_a")).toBeNull();
+  });
+});
+
 // ─── Provider, model and command discovery ───
 
 describe("V2Backend.listProviders (model.list shim; never /api/provider)", () => {

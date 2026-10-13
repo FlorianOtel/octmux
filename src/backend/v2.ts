@@ -36,12 +36,14 @@ import type {
   BackendSession,
   FormAnswer,
   ModelRef,
+  OrchestraState,
   PermissionDecision,
   ProviderCatalog,
   ProviderModelEntry,
   SessionRecord,
 } from "./types.ts";
 import { isSessionDescendantV2, type AncestryCache, type SessionParentLookup } from "./v2-ancestry.ts";
+import { parseOrchestraMetadata } from "./v2-orchestra.ts";
 import {
   fetchHistoryV2,
   fetchMissedHistoryV2,
@@ -680,6 +682,18 @@ export class V2Backend implements Backend {
   async isSessionActive(sessionID: string): Promise<boolean | undefined> {
     const outcome = await attempt(() => this.client.session.active());
     return outcome.ok ? Object.hasOwn(outcome.value, sessionID) : undefined;
+  }
+
+  /**
+   * The orchestra run state, read over the API from the session's `metadata.orchestra`
+   * (contract in src/backend/v2-orchestra.ts). `null` when absent, inactive, stale or unreadable.
+   */
+  async getOrchestraState(sessionID: string): Promise<OrchestraState | null> {
+    const outcome = await attempt(() => this.client.session.get({ sessionID }));
+    if (!outcome.ok) return null;
+    const info = outcome.value;
+    const model = info.model ? { providerID: info.model.providerID, id: info.model.id } : undefined;
+    return parseOrchestraMetadata(info.metadata, model);
   }
 
   /**

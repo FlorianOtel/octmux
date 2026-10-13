@@ -391,3 +391,82 @@ describe("OrchestraWatcher.sweepStaleSubagents (Stage 8.1.6)", () => {
     expect(changed).toBe(1);
   });
 });
+
+// The watcher is protocol-neutral: the run state comes from Backend.getOrchestraState
+// (API metadata on v2, legacy sidecar files on v1), the display names from listProviders.
+describe("OrchestraWatcher.refresh (backend-driven state)", () => {
+  type State = Awaited<ReturnType<import("./backend/types.ts").Backend["getOrchestraState"]>>;
+
+  function backendWith(states: Record<string, State>): any {
+    return {
+      getOrchestraState: async (sessionID: string) => states[sessionID] ?? null,
+      listProviders: async () => ({
+        data: { all: [{ id: "sohoai", models: { "glm-5.3-flash": { id: "glm-5.3-flash", name: "GLM 5.3 Flash" } } }], connected: ["sohoai"] },
+      }),
+    };
+  }
+  const STATE: State = {
+    mode: "brain",
+    title: "orchestra full - task",
+    parserWarnings: [],
+    model: { providerID: "sohoai", id: "glm-5.3-flash" },
+  };
+
+  test("builds the badge from the backend state, with the display name from listProviders", async () => {
+    const w = new OrchestraWatcher(backendWith({ ses_a: STATE }));
+    await (w as any).loadModelFriendlyNames();
+    w.setOcSessionID("ses_a");
+    await w.refresh();
+    const b = getBadge(w)!;
+    expect(b.mode).toBe("brain");
+    expect(b.title).toBe("orchestra full - task");
+    expect(b.parentModelRaw).toBe("sohoai/glm-5.3-flash");
+    expect(b.parentModelLabel).toBe("[sohoai/GLM 5.3 Flash]");
+  });
+
+  test("without a display name the label falls back to the raw model id", async () => {
+    const backend = backendWith({ ses_a: STATE });
+    backend.listProviders = async () => { throw new Error("down"); };
+    const w = new OrchestraWatcher(backend);
+    await (w as any).loadModelFriendlyNames();
+    w.setOcSessionID("ses_a");
+    await w.refresh();
+    expect(getBadge(w)!.parentModelLabel).toBe("[sohoai/glm-5.3-flash]");
+  });
+
+  test("a refresh keeps the subagent rows, and a null state clears the badge", async () => {
+    const states: Record<string, State> = { ses_a: STATE };
+    const w = new OrchestraWatcher(backendWith(states));
+    w.setOcSessionID("ses_a");
+    await w.refresh();
+    w.notifySubagentStarted("ses_child", "general", "", "Run pwd");
+    await w.refresh();
+    expect(getBadge(w)!.subagents.map(s => s.sessionID)).toEqual(["ses_child"]);
+    states.ses_a = null;
+    await w.refresh();
+    expect(getBadge(w)).toBeNull();
+  });
+
+  test("subagents queued before the badge exists are drained into it", async () => {
+    const w = new OrchestraWatcher(backendWith({ ses_a: STATE }));
+    w.notifySubagentStarted("ses_child", "general", "", undefined);
+    w.setOcSessionID("ses_a");
+    await w.refresh();
+    expect(getBadge(w)!.subagents.map(s => s.sessionID)).toEqual(["ses_child"]);
+  });
+
+  test("a result for a session the REPL has left is dropped", async () => {
+    let release!: (s: State) => void;
+    const backend = backendWith({});
+    backend.getOrchestraState = (sessionID: string) =>
+      sessionID === "ses_old" ? new Promise<State>((r) => { release = r; }) : Promise.resolve(null);
+    const w = new OrchestraWatcher(backend);
+    w.setOcSessionID("ses_old");
+    const pending = w.refresh();
+    (w as any).refreshInFlight = false; // let the switch's own refresh run
+    w.setOcSessionID("ses_new");
+    release(STATE);
+    await pending;
+    expect(getBadge(w)).toBeNull();
+  });
+});

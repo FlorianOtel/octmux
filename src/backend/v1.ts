@@ -12,7 +12,8 @@
  * `src/replay.ts`, `src/utils/session-ancestry.ts`) and are only referenced.
  */
 
-import type { Backend, BackendEvents, BackendForm, FormAnswer, PermissionDecision, V1BackendSession, V1Client } from "./types.ts";
+import type { Backend, BackendEvents, BackendForm, FormAnswer, OrchestraState, PermissionDecision, V1BackendSession, V1Client } from "./types.ts";
+import { V1OrchestraFileReader } from "./v1-orchestra.ts";
 import { getAuthHeaders } from "../auth-headers.ts";
 import {
   filterEvent,
@@ -254,5 +255,13 @@ export class V1Backend implements Backend {
    */
   isSessionActive(_sessionID: string): Promise<boolean | undefined> {
     return Promise.resolve(undefined);
+  }
+
+  // Legacy: v1 has no API channel for the orchestra state, so it is read from oconona's sidecar
+  // files on octmux's own disk (src/backend/v1-orchestra.ts). Works only with a same-host server.
+  private readonly orchestraReader = new V1OrchestraFileReader(() => this.session.list());
+
+  getOrchestraState(sessionID: string): Promise<OrchestraState | null> {
+    return this.orchestraReader.read(sessionID);
   }
 }

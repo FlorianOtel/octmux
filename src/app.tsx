@@ -30,7 +30,7 @@ import { CompactingModal } from "./components/CompactingModal.tsx";
 import { SessionPickerModal, type SessionPickerItem } from "./components/SessionPickerModal.tsx";
 import { SlashCompletionOverlay } from "./components/SlashCompletionOverlay.tsx";
 import { ToggleStatusLine } from "./components/ToggleStatusLine.tsx";
-import { expandCommands } from "./command-registry.ts";
+import { expandCommands, setServerCommands } from "./command-registry.ts";
 import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, prettyModelName, contextLabel, validateModel, deriveProjectName, abandonHint } from "./utils/formatters.ts";
 
 const TOGGLES_CONFIG = loadTogglesConfig();
@@ -575,6 +575,8 @@ export function App(props: AppProps) {
         const cmds = resp.data ?? [];
         const map = new Map<string, OcCommand>();
         for (const cmd of cmds) map.set(cmd.name, cmd);
+        // The same names feed PromptInput highlighting and the completion overlay.
+        setServerCommands(cmds.map(cmd => cmd.name));
         setOpencodeCommands(map);
       } catch (err) {
         renderer.commitSystemMessage(

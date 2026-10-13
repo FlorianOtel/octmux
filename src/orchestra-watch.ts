@@ -1,7 +1,5 @@
-import * as fs from "fs";
-import * as path from "path";
 import { EventEmitter } from "events";
-import type { Backend } from "./backend/types.ts";
+import type { Backend, OrchestraState } from "./backend/types.ts";
 
 export type OrchestraBadge = {
   mode: "brain" | "duo";
@@ -25,20 +23,25 @@ export type OrchestraBadge = {
 // "frozen visually" and "still present". If you change one, change the other.
 const SUBAGENT_EVICTION_MS = 120_000;
 
+// How often the orchestra state is re-read from the backend.
+const ORCHESTRA_POLL_MS = 5000;
+
 /**
- * Watches ~/.config/opencode/orchestra/sessions/ for active /brain or /duo sessions
- * matching the given OC session ID. Emits badge state changes.
+ * Tracks the active /brain or /duo run of the REPL's session and emits badge state changes.
+ *
+ * The run state comes from the backend (`Backend.getOrchestraState`): over the API on v2 (the
+ * session's `metadata.orchestra`), from oconona's sidecar files on v1 (legacy, same-host only).
+ * Subagent rows come from the event stream through the `notifySubagent*` methods.
  */
 export class OrchestraWatcher extends EventEmitter {
   private backend: Backend;
   private badge: OrchestraBadge = null;
-  private watcher: fs.FSWatcher | null = null;
   private pollInterval: NodeJS.Timer | null = null;
-  private harnessOcSessionID: string | null = null;
   private lastSessionIDInput: string | null = null;
-  private modelFriendlyMap: Map<string, string> = new Map();    // "provider/modelId" → friendly name (parent row only)
-  private harnessOcSessionModel: { providerID: string; id: string } | null = null;
+  private modelFriendlyMap: Map<string, string> = new Map();    // "provider/modelId" → display name (parent row only)
   private _pendingSubagentQueue: Array<{ sessionID: string; agent: string; model: string; description?: string }> = [];
+  // Guards against overlapping refreshes (a slow read and the next poll tick).
+  private refreshInFlight = false;
 
   constructor(backend: Backend) {
     super();
@@ -46,120 +49,38 @@ export class OrchestraWatcher extends EventEmitter {
   }
 
   /**
-   * Start watching the orchestra sessions directory.
-   * Sets up fs.watch + 5-second fallback poll.
+   * Start tracking: load the model display names once, read the state now, then every 5 s.
    */
   start(): void {
-    // Load friendly model names for the parent (harness) row display.
-    this.loadModelFriendlyNames();
-
-    // Initial scan
-    this.scan();
-
-    const sessionsDir = path.join(
-      process.env.HOME || "/root",
-      ".config/opencode/orchestra/sessions"
-    );
-
-    // Try to set up fs.watch if directory exists
-    if (fs.existsSync(sessionsDir)) {
-      try {
-        this.watcher = fs.watch(sessionsDir, { recursive: false }, () => {
-          this.scan();
-        });
-      } catch {
-        // Silently skip if watch fails
-      }
-    }
-
-    // Fallback: 5-second poll for missed events and NFS lag
+    void this.loadModelFriendlyNames();
+    void this.refresh();
     this.pollInterval = setInterval(() => {
-      this.scan();
-    }, 5000);
+      void this.refresh();
+    }, ORCHESTRA_POLL_MS);
   }
 
   /**
-   * Helper: safely realpath both sides of a directory comparison.
+   * Load model display names from the server's model catalog (`Backend.listProviders`), keyed
+   * "providerID/modelID". Used only for the badge's parent row label. Errors leave the map empty,
+   * and the label then shows the raw model id.
    */
-  private safeRealpath(dir: string): string {
+  private async loadModelFriendlyNames(): Promise<void> {
     try {
-      return fs.realpathSync(dir);
-    } catch {
-      return dir;
-    }
-  }
-
-  /**
-   * Resolve the OC session ID to the harness session dir basename.
-   * Returns null on failure or if not found. Caches result.
-   */
-  private async resolveHarnessSessionID(sessionID: string): Promise<string | null> {
-    try {
-      const sessions = (await this.backend.session.list()) ?? [];
-
-      // Filter: parentID === null && directory matches current working directory
-      const currentCwd = this.safeRealpath(process.cwd());
-      const candidates = sessions.filter(s => {
-        if (s.parentID != null) return false;
-        const sessionCwd = this.safeRealpath(s.directory);
-        return sessionCwd === currentCwd;
-      });
-
-      // Sort by time.updated descending; take last
-      candidates.sort((a, b) => {
-        const aTime = (a as any).time?.updated ?? 0;
-        const bTime = (b as any).time?.updated ?? 0;
-        return bTime - aTime;
-      });
-
-      const last = candidates[0];
-      if (last) {
-        const modelField = (last as any).model as { providerID: string; id: string } | undefined;
-        this.harnessOcSessionModel = modelField ?? null;
-      }
-      return last ? last.id : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Load friendly model names from ~/.config/opencode/opencode.json.
-   */
-  private loadModelFriendlyNames(): void {
-    try {
-      const configPath = path.join(
-        process.env.HOME || "/root",
-        ".config/opencode/opencode.json"
-      );
-      if (!fs.existsSync(configPath)) return;
-
-      const content = fs.readFileSync(configPath, "utf-8");
-      const data = JSON.parse(content) as {
-        provider?: Record<string, { models?: Record<string, { name?: string }> }>;
-      };
-
-      if (data.provider) {
-        for (const [providerKey, providerData] of Object.entries(data.provider)) {
-          if (providerData.models) {
-            for (const [modelKey, modelData] of Object.entries(providerData.models)) {
-              const friendlyName = (modelData as any).name;
-              if (friendlyName) {
-                const key = `${providerKey}/${modelKey}`;
-                this.modelFriendlyMap.set(key, friendlyName);
-              }
-            }
-          }
+      const catalog = (await this.backend.listProviders()).data;
+      for (const provider of catalog?.all ?? []) {
+        for (const [modelKey, model] of Object.entries(provider.models)) {
+          if (model.name) this.modelFriendlyMap.set(`${provider.id}/${modelKey}`, model.name);
         }
       }
+      // A badge already shown gets its label re-derived on the next refresh.
+      void this.refresh();
     } catch {
-      // Silent on parse/read errors
+      // No names: the label falls back to the raw model id.
     }
   }
 
   /**
-   * Format a raw model string into a labeled display string.
-   * Format: [provider/friendly] where friendly is looked up from opencode.json.
+   * Format a raw "provider/model" string into the parent row label "[provider/display name]".
    */
   private formatModelLabel(raw?: string): string {
     if (!raw) return "";
@@ -170,181 +91,50 @@ export class OrchestraWatcher extends EventEmitter {
   }
 
   /**
-   * Set the OC session ID and trigger resolution + re-scan.
-   * Non-blocking: triggers async resolve in background.
+   * Set the REPL's session and re-read the state for it. Non-blocking.
    */
   setOcSessionID(sessionID: string): void {
     if (sessionID === this.lastSessionIDInput) return;
     this.lastSessionIDInput = sessionID;
-
-    // Fire-and-forget async resolve
-    this.resolveHarnessSessionID(sessionID).then(resolved => {
-      if (resolved !== this.harnessOcSessionID) {
-        this.harnessOcSessionID = resolved;
-        this.scan();
-      }
-    }).catch(() => {
-      // Silently fail; leave cached value
-    });
+    void this.refresh();
   }
 
   /**
-   * Scan all session subdirs and return highest-priority matching badge.
-   * If harnessOcSessionID is null, emit null badge sync and schedule async resolve.
+   * Re-read the orchestra state from the backend and update the badge. Subagent rows already shown
+   * are kept across refreshes; they are owned by the event stream.
    */
-  scan(): void {
-    const sessionsDir = path.join(
-      process.env.HOME || "/root",
-      ".config/opencode/orchestra/sessions"
-    );
-
-    // Two-phase: if harnessOcSessionID not yet resolved, emit null and schedule async.
-    if (this.harnessOcSessionID === null && this.lastSessionIDInput !== null) {
-      this._updateBadge(null);
-      // Async resolve already in progress from setOcSessionID; no need to re-trigger
-      return;
-    }
-
-    if (!fs.existsSync(sessionsDir)) {
-      this._updateBadge(null);
-      return;
-    }
-
-    let bestBadge: OrchestraBadge = null;
-    let bestPrio = -1;
-    let bestMtime = 0;
-    let matchedSessionCount = 0;
-
+  async refresh(): Promise<void> {
+    const sessionID = this.lastSessionIDInput;
+    if (sessionID === null || this.refreshInFlight) return;
+    this.refreshInFlight = true;
+    let state: OrchestraState | null = null;
     try {
-      const entries = fs.readdirSync(sessionsDir);
-      for (const entry of entries) {
-        const sessionDir = path.join(sessionsDir, entry);
-        const stat = fs.statSync(sessionDir);
-        if (!stat.isDirectory()) continue;
-
-        // Check .oc-session-id sidecar: must exist and match harnessOcSessionID
-        const ocSessionIdPath = path.join(sessionDir, ".oc-session-id");
-        let ocSessionIdMatches = false;
-        try {
-          if (fs.existsSync(ocSessionIdPath) && this.harnessOcSessionID) {
-            const storedId = fs.readFileSync(ocSessionIdPath, "utf-8").trim();
-            ocSessionIdMatches = storedId === this.harnessOcSessionID;
-          }
-        } catch {
-          // Ignore read errors
-        }
-
-        if (!ocSessionIdMatches) continue;
-
-        // Check mtime — skip if older than 24h (stale-after-crash guard)
-        const nowSecs = Date.now() / 1000;
-        const mtimeSecs = stat.mtimeMs / 1000;
-        const ageSecs = nowSecs - mtimeSecs;
-        if (ageSecs > 24 * 3600) continue;
-
-        // Read telemetry.json for parser_warnings from this session dir
-        const telemetryPath = path.join(sessionDir, "telemetry.json");
-        let dirParserWarnings: Array<{ code: string; message: string }> = [];
-        try {
-          if (fs.existsSync(telemetryPath)) {
-            const content = fs.readFileSync(telemetryPath, "utf-8");
-            const data = JSON.parse(content);
-            if (Array.isArray(data.parser_warnings)) {
-              dirParserWarnings = data.parser_warnings;
-            }
-          }
-        } catch {
-          // ignore
-        }
-
-        // Track whether THIS dir contributes a live inflight marker. Only
-        // count such dirs toward matchedSessionCount — completed dirs (same
-        // .oc-session-id but no marker) must not inflate the concurrency
-        // count, otherwise the #N rewrite below mislabels a single live
-        // session as multi-concurrent on every subsequent /brain run.
-        let dirHasInflight = false;
-
-        // Check for .duo-inflight (priority 2, higher than brain)
-        const duoMarkerPath = path.join(sessionDir, ".duo-inflight");
-        if (fs.existsSync(duoMarkerPath)) {
-          dirHasInflight = true;
-          const duoStat = fs.statSync(duoMarkerPath);
-          const duoMtime = duoStat.mtimeMs;
-          if (duoMtime > bestMtime || (duoMtime === bestMtime && 2 > bestPrio)) {
-            try {
-              // Stored value embeds mode prefix ("orchestra light - <title>"); pass through verbatim.
-              const title = fs.readFileSync(duoMarkerPath, "utf-8").trim();
-              const truncated = title.slice(0, 48);
-              bestBadge = {
-                mode: "duo",
-                title: truncated,
-                lastActivityAt: Date.now(),
-                // Preserve subagents across re-scans: scan() runs every 5s (poll)
-                // and on fs.watch fires; without preservation, freshly-added rows
-                // would be wiped before becoming visible.
-                subagents: this.badge?.subagents ?? [],
-                parentModelRaw: this.harnessOcSessionModel
-                  ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
-                  : undefined,
-                parentModelLabel: this.formatModelLabel(
-                  this.harnessOcSessionModel
-                    ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
-                    : undefined
-                ),
-                parserWarnings: dirParserWarnings,
-              };
-              bestPrio = 2;
-              bestMtime = duoMtime;
-            } catch {
-              // Ignore read errors
-            }
-          }
-        }
-
-        // Check for .brain-inflight (priority 1, lower than duo)
-        const brainMarkerPath = path.join(sessionDir, ".brain-inflight");
-        if (fs.existsSync(brainMarkerPath)) {
-          dirHasInflight = true;
-          const brainStat = fs.statSync(brainMarkerPath);
-          const brainMtime = brainStat.mtimeMs;
-          if (bestPrio < 1 && (brainMtime > bestMtime || bestPrio < 0)) {
-            // Stored value embeds mode prefix ("orchestra full - <title>"); pass through verbatim.
-            // Read directly from .brain-inflight content (symmetric with duo reader).
-            const rawBrain = fs.readFileSync(brainMarkerPath, "utf-8").trim();
-            const truncated = (rawBrain || "orchestra full - brain").slice(0, 48);
-            bestBadge = {
-              mode: "brain",
-              title: truncated,
-              lastActivityAt: Date.now(),
-              // Preserve subagents across re-scans (see duo branch comment).
-              subagents: this.badge?.subagents ?? [],
-              parentModelRaw: this.harnessOcSessionModel
-                ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
-                : undefined,
-              parentModelLabel: this.formatModelLabel(
-                this.harnessOcSessionModel
-                  ? `${this.harnessOcSessionModel.providerID}/${this.harnessOcSessionModel.id}`
-                  : undefined
-              ),
-              parserWarnings: dirParserWarnings,
-            };
-            bestPrio = 1;
-            bestMtime = brainMtime;
-          }
-        }
-
-        if (dirHasInflight) matchedSessionCount++;
-      }
-
-      // Multi-concurrent: if 2+ matched session dirs have inflight markers, render count
-      if (matchedSessionCount > 1 && bestBadge) {
-        bestBadge = { ...bestBadge, title: `orchestra light - #${matchedSessionCount}` };
-      }
+      state = await this.backend.getOrchestraState(sessionID);
     } catch {
-      // Silently ignore scan errors
+      state = null;
+    } finally {
+      this.refreshInFlight = false;
     }
+    // The operator may have switched sessions during the read; that result is dropped.
+    if (sessionID !== this.lastSessionIDInput) return;
+    this._updateBadge(this.toBadge(state));
+  }
 
-    this._updateBadge(bestBadge);
+  /** Builds the badge from the backend state, keeping the current subagent rows. */
+  private toBadge(state: OrchestraState | null): OrchestraBadge {
+    if (state === null) return null;
+    const parentModelRaw = state.model ? `${state.model.providerID}/${state.model.id}` : undefined;
+    return {
+      mode: state.mode,
+      title: state.title,
+      lastActivityAt: Date.now(),
+      // Preserve subagents across refreshes: the poll runs every 5 s, and without preservation
+      // freshly-added rows would be wiped before becoming visible.
+      subagents: this.badge?.subagents ?? [],
+      parentModelRaw,
+      parentModelLabel: this.formatModelLabel(parentModelRaw),
+      parserWarnings: state.parserWarnings,
+    };
   }
 
   /**
@@ -547,10 +337,6 @@ export class OrchestraWatcher extends EventEmitter {
    * Clean up: stop watching and polling.
    */
   dispose(): void {
-    if (this.watcher) {
-      this.watcher.close();
-      this.watcher = null;
-    }
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;

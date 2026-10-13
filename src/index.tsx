@@ -18,7 +18,6 @@ import { Visibility } from "./renderer/visibility.ts";
 import { BlockBufferRenderer } from "./renderer/block-buffer.ts";
 import { TmuxWindowRenderer } from "./renderer/tmux-window.ts";
 import type { Renderer } from "./renderer/types.ts";
-import { loadExternalCommands } from "./command-registry.ts";
 import { createPasteFilter } from "./paste-filter.ts";
 import { deriveWorktreeSlug, deriveWorktreePaths, createWorktree } from "./utils/worktree.ts";
 
@@ -555,11 +554,6 @@ const _pad = Math.max(0, _rows - 6);
 if (_pad > 0) process.stdout.write('\n'.repeat(_pad));
 
 // ─── Render ───────────────────────────────────────────────────────────────────
-
-// Populate the command registry with external commands from
-// ~/.config/opencode/commands/ so PromptInput highlighting and the slash
-// completion overlay cover them from the very first frame.
-loadExternalCommands();
 
 // Create the paste filter: transforms stdin to intercept bracketed-paste sequences.
 // Ink reads from the stream's readable side; pastes are routed to a callback.

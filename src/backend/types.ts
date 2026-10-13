@@ -388,4 +388,29 @@ export interface Backend {
    * never arises there.
    */
   isSessionActive(sessionID: string): Promise<boolean | undefined>;
+
+  /**
+   * The orchestra (/brain or /duo) run active in the REPL's session, for the status-line badge.
+   * `null` when no run is active, or when the state cannot be read.
+   * - `V2Backend` reads it over the API: the session's `metadata.orchestra`, which oconona publishes
+   *   (contract: `ORCHESTRA_METADATA_KEY` in src/backend/v2-orchestra.ts). No filesystem access.
+   * - `V1Backend` (legacy) reads oconona's sidecar files under ~/.config/opencode/orchestra/sessions/
+   *   on octmux's own disk (src/backend/v1-orchestra.ts). That works only with a server on the same
+   *   host; v1 has no API channel for this state.
+   */
+  getOrchestraState(sessionID: string): Promise<OrchestraState | null>;
 }
+
+/**
+ * Protocol-neutral orchestra run state, the input of the status-line badge (src/orchestra-watch.ts).
+ * Subagent rows are not part of it: they come from the event stream (`subagent-*` ReplEvents).
+ */
+export type OrchestraState = {
+  mode: "brain" | "duo";
+  /** Badge title as published by oconona, already truncated to 48 characters. */
+  title: string;
+  /** oconona telemetry parser warnings; shown as " !" on the badge. */
+  parserWarnings: Array<{ code: string; message: string }>;
+  /** The model bound to the harness session, for the parent row label. */
+  model?: { providerID: string; id: string };
+};
