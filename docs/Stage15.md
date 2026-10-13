@@ -2,6 +2,8 @@
 title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
+updated_by: Claude Code (Claude Haiku 5.5)
+updated_at: 2026-10-13--17-51
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -27,8 +29,9 @@ OpenCode wire protocol is in use. The seam is the `Backend` interface in
 
 | Sub-stage | Content | Status |
 |---|---|---|
-| 15.1 | `Backend` interface; `V1Backend` adapter; all call sites use `Backend` | shipped (this entry) |
-| 15.2 | `V2Backend`; interface reshaped around protocol-neutral operations | planned |
+| 15.1 | `Backend` interface; `V1Backend` adapter; all call sites use `Backend` | shipped |
+| 15.2a | Backend contract reshape on the v1 side: flat session arguments, `SessionRecord`, v2-only `ReplEvent` kinds, history split, `v1-queries` | shipped |
+| 15.2 | `V2Backend` and the v2 core (sessions, prompts, events) | next |
 | 15.3 | v2 parity with v1 features | planned |
 
 Stage 15.1 does not make v2 usable. A v2 server still exits with the Stage 14
@@ -40,28 +43,93 @@ message "native v2 session support is not yet implemented".
 
 `Backend` (`src/backend/types.ts`) has three kinds of member:
 
-- `session: BackendSession` — session-scoped REST operations: `getMessages`,
-  `getChildren`, `get`, `abort`, `create`, `compact`, `list`, `fork`, `update`,
-  `sendCommand`, `sendPrompt`. Each one mirrors the v1 `client.session.*` call it
-  replaces.
-- `events: BackendEvents` — the event pipeline helpers: `translateEvent`,
-  `resetEventState`, `synthesizeSessionIdleEvents`, `hasOpenStreamingPart`,
-  `recordOwnMessageID`, `recordOwnCommandPrefix`, `classifyUserTurn`.
+- `session: BackendSession` — session-scoped operations with flat named arguments:
+  `getMessages`, `getChildren`, `get`, `abort`, `create`, `compact`, `list`, `fork`,
+  `update`, `sendCommand`, `sendPrompt`, `setModel`. The interface doc-comment
+  states the resolution convention: a method whose call sites read the response
+  resolves with the SDK response's `data`; a method whose call sites do not read it
+  resolves `void`, or `{ interrupted }` for `abort`.
+- `events: BackendEvents` — the event pipeline and the session-read queries:
+  `translateEvent`, `hasPendingToolCalls`, `getLatestAssistantActivity`,
+  `getTokenUsage`, `getHistory`, `resetEventState`, `synthesizeSessionIdleEvents`,
+  `hasOpenStreamingPart`, `recordOwnMessageID`, `recordOwnCommandPrefix`,
+  `classifyUserTurn`.
 - Flat operations: `listCommands`, `getDefaultModelConfig`, `listProviders`,
   `listQuestions`, `listPermissions`, `rejectQuestion`, `replyQuestion`,
-  `replyPermission`, `isSessionDescendant`, `subscribeEvents`, `replaySession`.
+  `replyPermission`, `isSessionDescendant`, `subscribeEvents`.
 
-`ReplEvent` is re-exported from `src/events.ts` unchanged. Stage 15.1 does not
-neutralise the event type.
+`ReplEvent` is re-exported from `src/events.ts`. It carries the v2-only kinds
+described in "`ReplEvent` v2-only kinds" below.
 
-### Why option-object arguments
+### Flat session arguments and `SessionRecord`
 
-Session methods take the same option objects as the v1 SDK (`{ path: { id } }`,
-`{ query: { directory } }`, `{ body: … }`). The types are derived from the
-generated `*Data` types with `url` removed (`V1Request<TData>`). Call sites were
-swapped without changing their argument shapes, so the swap is a rename. The
-only renames are `summarize` → `compact`, `command` → `sendCommand`, and
-`promptAsync` → `sendPrompt`. Stage 15.2 is expected to replace these shapes.
+Session methods take named arguments, for example `getMessages(sessionID)`,
+`compact(sessionID, model)`, `sendPrompt({ sessionID, text, promptID?, model? })`,
+and `replyPermission({ sessionID, permissionID, decision, message? })`. The SDK
+option-object wrapper (`{ path, query, body }`) does not appear in the interface.
+`V1Backend` builds the matching SDK request internally.
+
+Session reads return `SessionRecord` (`src/backend/types.ts`): `id`, `parentID?`,
+`directory`, `title`, `time.updated`, and the bound `model?`. It lists only the
+fields octmux reads. The v1 SDK `Session` type satisfies it. `model` is declared
+here because the SDK `Session` type omits it, although the runtime value is present.
+
+`replyPermission` takes a protocol-neutral `decision` (`"once" | "always" | "reject"`).
+v1 sends it as `body.response`. `message` is accepted and ignored by v1, which has
+no such field.
+
+### Session-read queries behind `BackendEvents`
+
+`src/backend/v1-queries.ts` holds the v1 scans for the reconciler's pending-tool
+check, the stall watchdog and the status-line token usage. Each scan is pure
+over a message list. Each exported async wrapper fetches the messages first.
+`V1Backend.events` calls the wrappers.
+
+- `hasPendingToolCalls`: true when any tool part is `pending` or `running`.
+- `getLatestAssistantActivity`: describes the newest assistant message for the
+  watchdog. It reports whether the message has content, whether it is completed, and
+  whether it is blocked on a paired child session (`openChild`, with a staleness flag).
+- `getTokenUsage`: the context size of the newest post-summary assistant message, and
+  the running cost summed over the session and its direct children. It returns `null`
+  when there is no post-summary usage. In that case the cost roll-up is skipped.
+
+Child lookups are best-effort. A failed child listing or child fetch is skipped, and
+the parent's cost still counts.
+
+### Replay: translate, then apply
+
+`src/replay.ts` is split into three steps:
+
+- `translateHistory(messages)` is pure. It returns `HistoryOp[]`, which is an ordered
+  list of renderer and editor operations. It applies the compaction rules and the
+  filters for synthetic and ignored user parts.
+- `fetchHistory(client, sessionID)` fetches the messages and translates them. Errors
+  yield `[]`.
+- `applyHistory(renderer, editor, ops)` is the only code that calls the renderer or the
+  editor for history replay.
+
+`events.getHistory(sessionID)` on the Backend returns the operations. The caller passes
+them to `applyHistory`. A translation error keeps the operations produced so far and
+omits the final editor seed.
+
+### `ReplEvent` v2-only kinds
+
+Stage 15.2a adds these kinds to `ReplEvent` (`src/events.ts`). v1 never emits them, so
+they are inert on the v1 path:
+
+- `form-asked`, `form-replied`: v2 forms.
+- `turn-retry`: a non-terminal retry. It does not flip the generating state.
+- `compaction-started`, `compaction-progress`, `compaction-ended`, `compaction-failed`.
+- `model-selected`: the model bound to the session. Kept distinct from the v1
+  `model-switched` kind.
+- `resync-needed`: internal. Set when a durable `seq` gap is detected, so the caller
+  clears and replays.
+
+Two existing kinds gained a field:
+
+- `block-end.exitCode` (v2 only): the exit code of a completed shell tool.
+- `permission-asked.resources`: the resources a permission request covers. v1 sets
+  it to `[title]`.
 
 ### `listProviders` and the v2 `/api/provider` route
 
@@ -73,11 +141,15 @@ credentials.
 
 ### Module placement
 
-`src/backend/v1.ts` is the only file that imports the v1 event, replay and ancestry
-code. The following modules are referenced by `V1Backend`, not moved:
+`src/backend/v1.ts` is the only file that wires the v1 event, replay, query and
+ancestry code into the seam. The following modules are referenced by `V1Backend`,
+not moved:
 
 - `src/events.ts` — event translation and the module-level pipeline state.
-- `src/replay.ts` — `replaySession`, which still takes the raw v1 client.
+- `src/replay.ts` — `translateHistory`, `fetchHistory` and `applyHistory` (see
+  "Replay: translate, then apply").
+- `src/backend/v1-queries.ts` — the session-read scans (see "Session-read queries
+  behind `BackendEvents`").
 - `src/utils/session-ancestry.ts` — `isSessionDescendant`, with its cached session list.
 
 `app.tsx`, `index.tsx`, `orchestra-watch.ts` and `utils/formatters.ts` import
@@ -104,9 +176,46 @@ code. The following modules are referenced by `V1Backend`, not moved:
   path works against it.
 - A v2 server is not used for sessions, prompts or events. octmux prints the
   Stage 14 message and exits 1.
+- The Backend session API uses flat named arguments and `SessionRecord`. The v1
+  path is the only implementation.
+- `ReplEvent` carries the v2-only kinds. v1 never emits them.
 - `V2Backend` is Stage 15.2.
 
 ---
+
+### 2026-10-13--17-51 — Stage 15.2a — Backend contract reshape on the v1 side
+
+**Implemented by:** Claude Code (Claude Haiku 5.5) — 2026-10-13--17-51
+**Commit(s):** `47bd8a6`
+
+- Flat session API: `BackendSession` takes named arguments, and the SDK option
+  objects are gone from the interface. `SessionRecord` replaces the SDK `Session`
+  type at call sites. `setModel` is added (v1 no-op). `replyPermission` takes flat
+  arguments.
+- `ReplEvent`: additive v2-only kinds (`form-*`, `turn-retry`, `compaction-*`,
+  `model-selected`, `resync-needed`). `permission-asked.resources` (v1 sets
+  `[title]`). `block-end.exitCode` (v2 only). v1 does not emit the new kinds.
+- History split: `src/replay.ts` gains a pure `translateHistory` returning
+  `HistoryOp[]`, `fetchHistory`, and a shared `applyHistory`. `events.getHistory`
+  exposes the operations. `replaySession` is removed.
+- `src/backend/v1-queries.ts` (new): the reconciler Layer 4, stall-watchdog and
+  token-usage scans moved out of `app.tsx` behind `BackendEvents`
+  (`hasPendingToolCalls`, `getLatestAssistantActivity`, `getTokenUsage`). The
+  running cost includes the direct-children roll-up.
+- Verification:
+  - `bun test src/`: 383 pass. This includes a replay equivalence test against the
+    previous `replaySession` body, and 37 `v1-queries` tests pinned to the original
+    inline behaviour.
+  - tsgo errors 75 → 67. The 8 removed are `Property 'model' does not exist on type
+    'Session'`, resolved by `SessionRecord`.
+  - Fresh Reviewer checkpoint.
+  - Live v1 smoke test: startup, prompt, tool call, Ctrl-C, `/sessions`, and
+    `--resume` replay.
+- Observations from the smoke test. All are pre-existing and tracked separately:
+  - Replay hides tool output when tools-output is off.
+  - Replay shows no "Interrupted" marker for an aborted turn.
+  - The "/brain-abandon" hint after Ctrl-C appears even without an active `/brain` run.
+  - One 3 s health-probe timeout right after a previous octmux exit. The retry succeeded.
 
 ### 2026-10-13--16-41 — Stage 15.1 — protocol-neutral Backend interface, v1 adapter
 
