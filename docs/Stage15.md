@@ -3,7 +3,7 @@ title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-13--23-29
+updated_at: 2026-10-13--23-33
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -391,6 +391,19 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
 - v2 is at feature parity with v1. The limits are listed under "Known limits".
 
 ---
+
+### 2026-10-13--23-33 — Stage 15.3.1 — refresh stale Backend and resync comments
+
+**Implemented by:** Claude Code (Claude Opus 5.5) — 2026-10-13--23-33
+**Commit(s):** `0d346d1`
+
+- Comment-only; no behaviour change. Found while writing `docs/OpenCode-v1-v2-adaptation-layer.md`.
+- `src/backend/types.ts`:
+  - The file header describes both backends and the v1-derived neutral shapes.
+  - `BackendEvents` names the `V2EventTranslator` forwarding next to the `src/events.ts` one.
+  - `replyForm` and `cancelForm` state that `V2Backend` rejects on an error status.
+- `src/events.ts`: the `resync-needed` comment describes the incremental resync.
+- Verification: `bun test src/` passes 748 tests, 0 fail; the tsgo error set is unchanged.
 
 ### 2026-10-13--22-50 — Stage 15.3 — OpenCode v2 parity
 
