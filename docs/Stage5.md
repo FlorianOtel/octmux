@@ -2,8 +2,8 @@
 title: "octmux — Stage 5 implementation log"
 created_at: 2026-05-25--17-10
 created_by: Claude Code (Claude Opus 4.7 1M)
-updated_by: Actor (Claude Haiku 4.5) — 2026-09-06--13-21
-updated_at: 2026-09-06--13-21
+updated_by: Claude Code (Claude Opus 5.5)
+updated_at: 2026-10-13--23-04
 context: >
   Implementation log for Stage 5 (re-scoped) of octmux: /help slash command,
   live slash-command completion overlay, and bold-cyan input highlighting.
@@ -421,6 +421,27 @@ in the planner output.
 ---
 
 ## Implementation log (reverse chronological — newest at top)
+
+### 2026-10-13--23-04 — Stage 5.6.1 — one compaction divider per compaction part
+**Implemented by:** Claude Code (Claude Opus 5.5) — 2026-10-13--23-04
+**Commit(s):** `3c5e213`
+
+**Problem:** On a v1 server, `/compact` printed a second `── compaction ──` divider just before
+the last summary line. OpenCode sends `message.part.updated` for the same compaction part more
+than once during a compaction, and `filterEvent` (`src/events.ts`) emitted `compaction-divider`
+for every one. The bug dates from Stage 5.6. An A/B run against the Stage 15.2 build `b1e205d`
+showed the same output.
+
+**Fix:** `filterEvent` records each compaction part id in `dividedCompactionPartIDs` and emits
+the divider only for the first update of that part. `resetEventState` clears the set on a session
+switch. History replay (`src/replay.ts`) reads each stored part once and is unaffected. The v2
+path renders its divider on `compaction-ended` and is unaffected.
+
+**Verification:** a new test in `src/events.test.ts` sends the same compaction part three times:
+the first update gives one divider, and the other two give none. A different part id still gives
+a divider, and `resetEventState` re-arms the first one. The test fails on the Stage 5.6 code.
+Live against the local v1 server, `/compact` printed one divider. `bun test src/` passes 748
+tests, 0 fail; the tsgo error set is unchanged.
 
 ### 2026-09-06--13-21 — Stage 5.1.x — --resume/--resume-last/--fork directory-scoping fix
 **Implemented by:** Actor (Claude Haiku 4.5) — 2026-09-06--13-21

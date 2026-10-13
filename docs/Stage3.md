@@ -1,8 +1,8 @@
 ---
 title: "octmux — Stage 3: Custom raw-mode input + Ink rendering + typed block renderer + tmux multiplex"
 created_at: 2026-05-20--00-34
-created_by: Claude Code (Actor, Claude Haiku 4.5)
-updated_by: local/qwen3-4b-q6 — 2026-06-15--11-58
+updated_by: Claude Code (Claude Opus 5.5)
+updated_at: 2026-10-13--23-04
 updated_at: 2026-06-15--11-58
 context: >
   Stage 3 is the foundational UX phase split across three major sub-initiatives:
@@ -64,6 +64,33 @@ Ink-based (React for CLI) component tree, reducing LineEditor to a pure state
 container. All Stage 3 behavior was preserved under the new Ink rendering model._
 
 ### Implementation log (reverse chronological — newest at top)
+
+### 2026-10-13--23-04 — Stage 3E.2.1: multi-character insert moves the cursor past the text
+
+**Implemented by:** Claude Code (Claude Opus 5.5) — 2026-10-13--23-04
+**Commit(s):** `3c5e213`
+
+**Problem:** `LineEditor.insert` (`src/editor.ts`, Stage 3E.2) inserted its whole argument but
+advanced the cursor by one. Ink delivers keys that arrive in one read as one input string. That
+covers fast typing, `tmux send-keys` with a word, and a paste without bracketed-paste mode. In
+those cases the cursor stayed one character into the text, so Backspace deleted the first
+character (`abc` → `bc`). Yank (Ctrl-Y) calls `insert` with the whole kill ring and had the same
+fault.
+
+**Fix:** `insert` advances the cursor by the inserted length. On a pasted-block row it places
+the text on a new row with the cursor at its end. Yank now leaves the cursor after the yanked
+text, as in Emacs and readline.
+
+**Verification:** new `src/editor.test.ts` tests cover:
+- a multi-character chunk followed by Backspace;
+- a chunk inserted mid-line;
+- a chunk typed on a pasted-block row;
+- yank of a multi-character kill ring.
+
+They fail on the Stage 3E.2 code. Four existing yank round-trip tests asserted the old cursor
+column (one character into the yanked text). Their expected columns now put the cursor after the
+yanked text. Live against the local v1 server, `abc` sent as one `tmux send-keys` then Backspace
+gives `ab`. `bun test src/` passes 748 tests, 0 fail; the tsgo error set is unchanged.
 
 ### 2026-06-07--20-07 — Stage 3E.7.1: Paste atomicity hotfixes (8 items)
 
