@@ -3,7 +3,7 @@ title: "OpenCode v2 support — decision record"
 created_at: 2026-10-13--23-26
 created_by: Claude Code (Claude Opus 5.5)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-14--00-15
+updated_at: 2026-10-14--00-25
 context: >
   The operator asked that every decision taken during octmux's OpenCode v2 work be recorded in the
   repository. The work covers the Stage 14 /brain run and the Stage C /brain runs, sessions C1 to C3,
@@ -777,7 +777,8 @@ amendments A1–A8:
 - the read-before-write and tolerance rules;
 - keeping the v1 sidecar files.
 
-**Status:** Recorded; the amendments are handled by C4-8 to C4-11.
+**Status:** Agreed. oconona fully acknowledged the amended contract (Stage 15.4.1) on 2026-10-14, so the
+contract is final on both sides. The amendments are handled by C4-8 to C4-11.
 
 **C4-8: A3: never read the badge from a child session.** A child session is created with a copy of its
 parent's metadata (OpenCode `packages/core/src/session.ts`), so every subagent carries a stale
@@ -853,9 +854,8 @@ badge on the parent. **Status:** Implemented in `fe6c7a5`.
 
 ### 7.1 Fenced orchestra work (oconona)
 
-- oconona to publish `metadata.orchestra` on the harness session (contract C4-2,
-  `src/backend/v2-orchestra.ts`; handover `~/Gin-AI/tmp/oconona-OCv2-support.md`). Until then the v2
-  badge stays empty.
+- oconona implements the agreed contract (C4-2, as amended by C4-7 to C4-11; `src/backend/v2-orchestra.ts`)
+  with its in-server plugin. Until it ships, the v2 badge stays empty. No octmux work is open.
 - v2 child-model backfill from the child's `session.step.started` (C3-3).
 - oconona on v2: session-id resolution (port, auth, `/api/session` path and wrapped shape), telemetry from
   `session_v2`, `subagent` instead of `task` in prompts and hooks (handover §2.1, §2.3).

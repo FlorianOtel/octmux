@@ -3,7 +3,7 @@ title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-14--00-15
+updated_at: 2026-10-14--00-25
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -403,7 +403,8 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
 **Commit(s):** `fe6c7a5`
 
 oconona reviewed the Stage 15.4 contract. It acknowledged the schema, the write points and the rules,
-and sent amendments A1–A8. The octmux changes:
+and sent amendments A1–A8. It then fully acknowledged the amended contract, so the contract is final on
+both sides; octmux has no open work on it. The octmux changes:
 - **A3 (harness only):**
   - A child session is created with a copy of its parent's metadata, so every subagent carries a stale
     `orchestra.active: true` that is never cleared.
