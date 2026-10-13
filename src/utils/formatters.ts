@@ -1,6 +1,6 @@
 import * as path from "path";
 import type { Backend } from "../backend/types.ts";
-import type { OrchestraBadge } from "../orchestra-watch.ts";
+import type { OrchestraBadge, OrchestraRunEnded } from "../orchestra-watch.ts";
 
 /**
  * Derive the project name shown in the status line from the configured server directory.
@@ -297,4 +297,21 @@ export async function validateModel(
     // Silently swallow errors
   }
   return null;
+}
+
+/**
+ * The one-line notice printed when an orchestra run ends (v2: the harness session's final
+ * `metadata.orchestra` write). Example: `orchestra brain run ended: pass · 2 parser warnings
+ * (snapshot_missing, cost_source_none)`. At most three distinct warning codes are listed.
+ */
+export function formatRunEnded(ended: OrchestraRunEnded): string {
+  let line = `orchestra ${ended.mode} run ended`;
+  if (ended.outcome) line += `: ${ended.outcome}`;
+  const n = ended.parserWarnings.length;
+  if (n > 0) {
+    const codes = [...new Set(ended.parserWarnings.map(w => w.code))];
+    const shown = codes.slice(0, 3).join(", ") + (codes.length > 3 ? ", …" : "");
+    line += ` · ${n} parser warning${n === 1 ? "" : "s"} (${shown})`;
+  }
+  return line;
 }

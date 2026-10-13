@@ -686,12 +686,17 @@ export class V2Backend implements Backend {
 
   /**
    * The orchestra run state, read over the API from the session's `metadata.orchestra`
-   * (contract in src/backend/v2-orchestra.ts). `null` when absent, inactive, stale or unreadable.
+   * (contract in src/backend/v2-orchestra.ts). `null` when absent, stale, malformed or unreadable.
+   *
+   * Only a top-level session can be a harness session. A child session is created with a copy of its
+   * parent's metadata, so every subagent of a run carries `orchestra.active: true`, and that copy is
+   * never cleared. A session with a `parentID` therefore never yields a badge.
    */
   async getOrchestraState(sessionID: string): Promise<OrchestraState | null> {
     const outcome = await attempt(() => this.client.session.get({ sessionID }));
     if (!outcome.ok) return null;
     const info = outcome.value;
+    if (info.parentID !== undefined && info.parentID !== null) return null;
     const model = info.model ? { providerID: info.model.providerID, id: info.model.id } : undefined;
     return parseOrchestraMetadata(info.metadata, model);
   }

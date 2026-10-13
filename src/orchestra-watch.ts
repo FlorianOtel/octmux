@@ -23,6 +23,13 @@ export type OrchestraBadge = {
 // "frozen visually" and "still present". If you change one, change the other.
 const SUBAGENT_EVICTION_MS = 120_000;
 
+/** Payload of the "run-ended" event: the final state of a finished run. */
+export type OrchestraRunEnded = {
+  mode: "brain" | "duo";
+  outcome?: string;
+  parserWarnings: Array<{ code: string; message: string }>;
+};
+
 // How often the orchestra state is re-read from the backend.
 const ORCHESTRA_POLL_MS = 5000;
 
@@ -42,6 +49,9 @@ export class OrchestraWatcher extends EventEmitter {
   private _pendingSubagentQueue: Array<{ sessionID: string; agent: string; model: string; description?: string }> = [];
   // Guards against overlapping refreshes (a slow read and the next poll tick).
   private refreshInFlight = false;
+  // The session whose run was last seen active. An inactive state for that same session is the end
+  // of the run, and emits one "run-ended" event.
+  private activeRunSessionID: string | null = null;
 
   constructor(backend: Backend) {
     super();
@@ -117,12 +127,31 @@ export class OrchestraWatcher extends EventEmitter {
     }
     // The operator may have switched sessions during the read; that result is dropped.
     if (sessionID !== this.lastSessionIDInput) return;
+    this.trackRunEnd(sessionID, state);
     this._updateBadge(this.toBadge(state));
   }
 
-  /** Builds the badge from the backend state, keeping the current subagent rows. */
+  /**
+   * Emits "run-ended" once when a run seen active in this session reports `active: false` (v2's final
+   * write, with `outcome` and the parser warnings produced at cleanup). A run that disappears without a
+   * final state, or that was never seen active, emits nothing.
+   */
+  private trackRunEnd(sessionID: string, state: OrchestraState | null): void {
+    if (state?.active) {
+      this.activeRunSessionID = sessionID;
+      return;
+    }
+    if (state && this.activeRunSessionID === sessionID) {
+      const ended: OrchestraRunEnded = { mode: state.mode, parserWarnings: state.parserWarnings };
+      if (state.outcome !== undefined) ended.outcome = state.outcome;
+      this.emit("run-ended", ended);
+    }
+    this.activeRunSessionID = null;
+  }
+
+  /** Builds the badge from the backend state, keeping the current subagent rows. Shown only while active. */
   private toBadge(state: OrchestraState | null): OrchestraBadge {
-    if (state === null) return null;
+    if (state === null || !state.active) return null;
     const parentModelRaw = state.model ? `${state.model.providerID}/${state.model.id}` : undefined;
     return {
       mode: state.mode,
@@ -210,6 +239,7 @@ export class OrchestraWatcher extends EventEmitter {
    * Emit a "changed" event if badge state changed.
    */
   on(event: "changed", callback: (badge: OrchestraBadge) => void): this;
+  on(event: "run-ended", callback: (ended: OrchestraRunEnded) => void): this;
   on(event: string, callback: (...args: any[]) => void): this {
     return super.on(event, callback);
   }

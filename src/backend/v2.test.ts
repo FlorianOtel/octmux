@@ -980,12 +980,20 @@ describe("V2Backend.getOrchestraState (orchestra badge over the API, session met
     });
     const backend = new V2Backend(BASE, CWD, client);
     expect(await backend.getOrchestraState("ses_a")).toEqual({
+      active: true,
       mode: "brain",
       title: "orchestra full - task",
       parserWarnings: [],
       model: { providerID: "sohoai", id: "glm-5.3-flash" },
     });
     expect(calls).toEqual([{ method: "session.get", input: { sessionID: "ses_a" } }]);
+  });
+
+  test("a child session never yields a badge: it carries a stale copy of its parent's metadata", async () => {
+    const { client } = makeFake({
+      "session.get": v2Session({ id: "ses_child", parentID: "ses_a", metadata: { orchestra: active } }),
+    });
+    expect(await new V2Backend(BASE, CWD, client).getOrchestraState("ses_child")).toBeNull();
   });
 
   test("resolves null when the session has no orchestra metadata", async () => {

@@ -31,7 +31,7 @@ import { SessionPickerModal, type SessionPickerItem } from "./components/Session
 import { SlashCompletionOverlay } from "./components/SlashCompletionOverlay.tsx";
 import { ToggleStatusLine } from "./components/ToggleStatusLine.tsx";
 import { expandCommands, setServerCommands } from "./command-registry.ts";
-import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, prettyModelName, contextLabel, validateModel, deriveProjectName, abandonHint } from "./utils/formatters.ts";
+import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, prettyModelName, contextLabel, validateModel, deriveProjectName, abandonHint, formatRunEnded } from "./utils/formatters.ts";
 
 const TOGGLES_CONFIG = loadTogglesConfig();
 
@@ -547,6 +547,8 @@ export function App(props: AppProps) {
     const watcher = new OrchestraWatcher(props.backend);
     watcherRef.current = watcher;
     watcher.on("changed", setOrchestraBadge);
+    // One line when a run ends, with its outcome and the parser warnings produced at cleanup.
+    watcher.on("run-ended", (ended) => renderer.commitSystemMessage(formatRunEnded(ended)));
     watcher.start();
     watcher.setOcSessionID(sessionID);
     return () => {

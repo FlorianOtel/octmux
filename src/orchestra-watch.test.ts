@@ -406,6 +406,7 @@ describe("OrchestraWatcher.refresh (backend-driven state)", () => {
     };
   }
   const STATE: State = {
+    active: true,
     mode: "brain",
     title: "orchestra full - task",
     parserWarnings: [],
@@ -468,5 +469,58 @@ describe("OrchestraWatcher.refresh (backend-driven state)", () => {
     release(STATE);
     await pending;
     expect(getBadge(w)).toBeNull();
+  });
+});
+
+describe("OrchestraWatcher run-ended (A5: final state of a finished run)", () => {
+  type State = Awaited<ReturnType<import("./backend/types.ts").Backend["getOrchestraState"]>>;
+  const ACTIVE: State = { active: true, mode: "brain", title: "orchestra full - task", parserWarnings: [] };
+
+  function watcherWith(states: Record<string, State>): { w: OrchestraWatcher; ended: unknown[] } {
+    const backend: any = { getOrchestraState: async (id: string) => states[id] ?? null, listProviders: async () => ({}) };
+    const w = new OrchestraWatcher(backend);
+    const ended: unknown[] = [];
+    w.on("run-ended", (e) => ended.push(e));
+    return { w, ended };
+  }
+
+  test("active then inactive emits one run-ended with outcome and warnings, and clears the badge", async () => {
+    const states: Record<string, State> = { ses_a: ACTIVE };
+    const { w, ended } = watcherWith(states);
+    w.setOcSessionID("ses_a");
+    await w.refresh();
+    expect(getBadge(w)).not.toBeNull();
+    states.ses_a = { ...ACTIVE, active: false, outcome: "pass", parserWarnings: [{ code: "c", message: "m" }] };
+    await w.refresh();
+    await w.refresh();
+    expect(getBadge(w)).toBeNull();
+    expect(ended).toEqual([{ mode: "brain", outcome: "pass", parserWarnings: [{ code: "c", message: "m" }] }]);
+  });
+
+  test("an inactive state never preceded by an active one emits nothing (e.g. attaching after the run)", async () => {
+    const { w, ended } = watcherWith({ ses_a: { ...ACTIVE, active: false, outcome: "pass" } });
+    w.setOcSessionID("ses_a");
+    await w.refresh();
+    expect(ended).toEqual([]);
+    expect(getBadge(w)).toBeNull();
+  });
+
+  test("a run that disappears without a final state emits nothing", async () => {
+    const states: Record<string, State> = { ses_a: ACTIVE };
+    const { w, ended } = watcherWith(states);
+    w.setOcSessionID("ses_a");
+    await w.refresh();
+    states.ses_a = null;
+    await w.refresh();
+    expect(ended).toEqual([]);
+  });
+
+  test("an active run in one session and an inactive state in another emit nothing", async () => {
+    const { w, ended } = watcherWith({ ses_a: ACTIVE, ses_b: { ...ACTIVE, active: false } });
+    w.setOcSessionID("ses_a");
+    await w.refresh();
+    w.setOcSessionID("ses_b");
+    await w.refresh();
+    expect(ended).toEqual([]);
   });
 });

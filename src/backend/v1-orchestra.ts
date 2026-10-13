@@ -8,6 +8,8 @@
  * reading the files on octmux's own disk. That only works when the server runs on the
  * same host as octmux, under the same $HOME.
  *
+ * Only a live run is reported (`active: true`); the files carry no final state.
+ *
  * File contract (oconona v7.5, see docs/octmux--orchestra-implementation-details.md):
  * - `<dir>/.oc-session-id`: the harness OpenCode session id.
  * - `<dir>/.brain-inflight` / `<dir>/.duo-inflight`: present while the run is active; the
@@ -126,7 +128,7 @@ export class V1OrchestraFileReader {
             try {
               // The stored value embeds the mode prefix ("orchestra light - <title>"); passed through.
               const title = fs.readFileSync(duoPath, "utf-8").trim().slice(0, 48);
-              best = { mode: "duo", title, parserWarnings, model: this.harnessModel };
+              best = { active: true, mode: "duo", title, parserWarnings, model: this.harnessModel };
               bestPrio = 2;
               bestMtime = mtime;
             } catch {
@@ -143,7 +145,7 @@ export class V1OrchestraFileReader {
           if (bestPrio < 1 && (mtime > bestMtime || bestPrio < 0)) {
             // The stored value embeds the mode prefix ("orchestra full - <title>"); passed through.
             const raw = fs.readFileSync(brainPath, "utf-8").trim();
-            best = { mode: "brain", title: (raw || "orchestra full - brain").slice(0, 48), parserWarnings, model: this.harnessModel };
+            best = { active: true, mode: "brain", title: (raw || "orchestra full - brain").slice(0, 48), parserWarnings, model: this.harnessModel };
             bestPrio = 1;
             bestMtime = mtime;
           }

@@ -2,7 +2,7 @@ import { test, expect, describe, afterAll } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deriveProjectName, abandonHint } from "./formatters.ts";
+import { deriveProjectName, abandonHint, formatRunEnded } from "./formatters.ts";
 import type { OrchestraBadge } from "../orchestra-watch.ts";
 
 // fetchGitBranch runs while Ink is mounted. Any stderr the git child writes
@@ -93,5 +93,21 @@ describe("abandonHint", () => {
 
   test("duo badge names /duo-abandon", () => {
     expect(abandonHint(badgeFor("duo"))).toBe(" — run /duo-abandon to clean up the session");
+  });
+});
+
+describe("formatRunEnded", () => {
+  test("mode and outcome", () => {
+    expect(formatRunEnded({ mode: "brain", outcome: "pass", parserWarnings: [] })).toBe("orchestra brain run ended: pass");
+  });
+  test("no outcome", () => {
+    expect(formatRunEnded({ mode: "duo", parserWarnings: [] })).toBe("orchestra duo run ended");
+  });
+  test("warnings: count, distinct codes, at most three listed", () => {
+    const w = (code: string) => ({ code, message: "m" });
+    expect(formatRunEnded({ mode: "brain", outcome: "block", parserWarnings: [w("a")] }))
+      .toBe("orchestra brain run ended: block · 1 parser warning (a)");
+    expect(formatRunEnded({ mode: "brain", parserWarnings: [w("a"), w("a"), w("b"), w("c"), w("d")] }))
+      .toBe("orchestra brain run ended · 5 parser warnings (a, b, c, …)");
   });
 });

@@ -14,6 +14,7 @@ function meta(entry: Record<string, unknown>): Record<string, unknown> {
 describe("parseOrchestraMetadata", () => {
   test("an active brain entry gives the badge state with the session model", () => {
     expect(parseOrchestraMetadata(meta({}), MODEL, NOW)).toEqual({
+      active: true,
       mode: "brain",
       title: "orchestra full - task",
       parserWarnings: [],
@@ -28,6 +29,7 @@ describe("parseOrchestraMetadata", () => {
       NOW,
     );
     expect(state).toEqual({
+      active: true,
       mode: "duo",
       title: "orchestra light - x",
       parserWarnings: [{ code: "snapshot_missing", message: "m" }],
@@ -46,9 +48,26 @@ describe("parseOrchestraMetadata", () => {
     expect(parseOrchestraMetadata({ orchestra: "brain" }, MODEL, NOW)).toBeNull();
   });
 
-  test("an inactive entry gives null; only active === true counts", () => {
-    expect(parseOrchestraMetadata(meta({ active: false }), MODEL, NOW)).toBeNull();
+  test("an inactive entry is returned with active: false and its outcome (oconona's final write)", () => {
+    const state = parseOrchestraMetadata(
+      meta({ active: false, outcome: "pass", parserWarnings: [{ code: "snapshot_missing", message: "m" }] }),
+      undefined,
+      NOW,
+    );
+    expect(state).toEqual({
+      active: false,
+      mode: "brain",
+      title: "orchestra full - task",
+      parserWarnings: [{ code: "snapshot_missing", message: "m" }],
+      outcome: "pass",
+    });
+  });
+
+  test("a non-boolean active gives null; an empty or non-string outcome is dropped", () => {
     expect(parseOrchestraMetadata(meta({ active: "true" }), MODEL, NOW)).toBeNull();
+    expect(parseOrchestraMetadata(meta({ active: undefined }), MODEL, NOW)).toBeNull();
+    expect(parseOrchestraMetadata(meta({ active: false, outcome: "" }), MODEL, NOW)).not.toHaveProperty("outcome");
+    expect(parseOrchestraMetadata(meta({ active: false, outcome: 3 }), MODEL, NOW)).not.toHaveProperty("outcome");
   });
 
   test("a malformed mode or title gives null", () => {

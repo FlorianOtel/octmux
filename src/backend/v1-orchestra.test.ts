@@ -45,6 +45,7 @@ describe("V1OrchestraFileReader", () => {
     });
     const reader = new V1OrchestraFileReader(harnessList(), root);
     expect(await reader.read("ses_repl")).toEqual({
+      active: true,
       mode: "brain",
       title: "orchestra full - task",
       parserWarnings: [{ code: "w", message: "m" }],
