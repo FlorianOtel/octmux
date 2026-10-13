@@ -2,8 +2,8 @@
 title: "octmux — Implementation Plan"
 created_at: 2026-05-18--21-58
 created_by: Claude Code (Claude Sonnet 4.6 1M)
-updated_by: Claude Code (Claude Haiku 4.5)
-updated_at: 2026-05-26--21-15
+updated_by: Claude Code (Claude Haiku 5.5)
+updated_at: 2026-10-13--13-25
 context: >
   octmux is a text-only barebones REPL UI for OpenCode that mimics the Claude
   Code CLI feel: text REPL, one bottom status line, Emacs-style line edits,
@@ -119,6 +119,7 @@ Detailed implementation logs for each version have been moved to dedicated docum
 - **Stage 3 (original, superseded):** plan spec only; no implementation log (never shipped as-is)
 - **Stage 3 Extended (3E.1–3E.6) + Stage 3 UX (3U.1–3U.8):** `docs/Version3.md` ← authoritative (combined log)
 - **Stage 4:** `docs/Version4.md` ← authoritative
+- **Stage 14:** `docs/Stage14.md` ← authoritative
 
 ---
 
