@@ -3,7 +3,7 @@ title: "OpenCode v1/v2 adaptation layer"
 created_at: 2026-10-13--23-24
 created_by: Claude Code (Claude Opus 5.5)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-13--23-59
+updated_at: 2026-10-14--00-15
 context: >
   The operator asked for an extensive, authoritative description of the redesign that lets one
   octmux binary serve both the OpenCode v1 API (@opencode-ai/sdk, the local systemd server) and the
@@ -339,7 +339,7 @@ the `model` argument of `sendPrompt` and `sendCommand` (section 4.5).
 | `replyForm` | no-op | `session.form.reply({ sessionID, formID, answer })` |
 | `cancelForm` | no-op | `session.form.cancel({ sessionID, formID })` (no observed `form.cancelled` frame; capture doc §4.6) |
 | `isSessionActive` | `undefined`, no request | `session.active()`; `true` when the map has the session, `false` when not, `undefined` on error |
-| `getOrchestraState` | legacy: oconona's sidecar files on octmux's disk (`src/backend/v1-orchestra.ts`), harness matched by local cwd | `session.get()`; the session's `metadata.orchestra` parsed by `parseOrchestraMetadata` (`src/backend/v2-orchestra.ts`); `null` when absent, inactive, stale or on error |
+| `getOrchestraState` | legacy: oconona's sidecar files on octmux's disk (`src/backend/v1-orchestra.ts`), harness matched by local cwd | `session.get()`; the session's `metadata.orchestra` parsed by `parseOrchestraMetadata` (`src/backend/v2-orchestra.ts`); `null` for a child session (it inherits its parent's metadata), or when absent, stale, malformed or on error; an inactive entry carries `outcome` and feeds the `run-ended` notice |
 | `isSessionDescendant` | `utils/session-ancestry.ts` (cached `GET /session` list, 5 s TTL, one-shot revalidation, depth 5) | `isSessionDescendantV2` (`src/backend/v2-ancestry.ts`): per-session `session.get` parent lookups, 5 s TTL cache per backend, depth 5, failures not cached |
 | `subscribeEvents` | `client.global.event({})` | `{ stream: wrapFrames(client.event.subscribe()) }` |
 
@@ -713,6 +713,8 @@ live translator tracks direct children only.
 `notifySubagentEnded`, `notifySubagentActivity`), which draws the subagent rows below the status
 line. `parent-turn-end` sweeps orphaned rows. The badge itself comes from
 `Backend.getOrchestraState`: over the API on v2, from oconona's sidecar files on v1 (section 7).
+On v2 the watcher also emits `run-ended` when a run seen active turns inactive; `app.tsx` prints it as
+one system line (`formatRunEnded`) with the outcome and the parser warnings produced at cleanup.
 
 The stall watchdog reads `getLatestAssistantActivity`. v2 searches the newest assistant message for
 a running `subagent` call with `metadata.sessionID` from the end of the content list (v1 checks only
@@ -931,5 +933,3 @@ The full list is in `docs/Stage15.md` "Known limits". The key ones:
 - The orchestra badge on v2 stays empty until oconona publishes `metadata.orchestra`; on v1
   (legacy) it needs the server on the same host (section 7).
 - `--auto-spawn` is v1-only; `--worktree` suits a same-host server.
-- `GET /api/session` ignores the location filter on the server side (`docs/Stage15.md` Stage 15.3
-  follow-ups).

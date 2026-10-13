@@ -3,7 +3,7 @@ title: "OpenCode v2 support — decision record"
 created_at: 2026-10-13--23-26
 created_by: Claude Code (Claude Opus 5.5)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-14--00-05
+updated_at: 2026-10-14--00-15
 context: >
   The operator asked that every decision taken during octmux's OpenCode v2 work be recorded in the
   repository. The work covers the Stage 14 /brain run and the Stage C /brain runs, sessions C1 to C3,
@@ -48,7 +48,7 @@ wire protocol is in `docs/OpenCode-v2-protocol-capture.md`.
 | 15.2-1–15.2-14 | Stage 15.2 accepted design decisions and deliberate deviations (session C2) | session C2 conversation; `docs/Stage15.md` |
 | 15.2-D1… | Stage 15.2 defects found live or in review, and their fixes | `DECISIONS-draft.md` (C9 block), `review-comments.md`, `docs/Stage15.md` 15.2 entry |
 | C3-1–C3-27 | Session C3 (Stage 15.3 and the follow-up fixes) | session `20261013T190810Z-2568784`; `docs/Stage15.md` 15.3 entry |
-| C4-1–C4-6 | Stage 15.4: client-only boundary (orchestra state, model and command names over the API) | session C3 conversation; `docs/Stage15.md` 15.4 entry |
+| C4-1–C4-11 | Stage 15.4 and 15.4.1: client-only boundary (orchestra state, model and command names over the API) and oconona's contract amendments A1–A8 | session C3 conversation; `docs/Stage15.md` 15.4 entry |
 | R1–R14 | Standing rules (security, live-test hygiene, doc/commit discipline) | collected from all three sessions; see §2 of this record |
 
 Two naming clashes to watch:
@@ -91,6 +91,8 @@ Two naming clashes to watch:
 | session C3 | 15.3.1 | `0d346d1` | code: comment-only refresh | 23:33 |
 | session C3 | 15.3.1 | `a7f15ba` | docs: hash backfill | 23:34 |
 | session C3 | 15.4 | `4962c17` | code: client-only boundary | 23:59 |
+| session C3 | 15.4 | `d73213c` | docs: hash backfill | 00:02 |
+| session C3 | 15.4.1 | `fe6c7a5` | code: oconona amendments A3, A5, A6 | 00:15 |
 
 ## 2. Standing rules
 
@@ -709,7 +711,7 @@ Stage 15.4 (`4962c17`) by C4-1 to C4-5.
 
 **C3-27 — Remaining pre-existing items left out of 15.3.** The `isRendered` `userText` parameter is dead
 in production (Review 4 minor, kept); session-picker "fork of" label; 8-char id prefixes on `/fork` and
-`/new`; server ignores `location[directory]` on `GET /api/session`; and the carried 15.2 list.
+`/new`; and the carried 15.2 list. (A "server ignores the `GET /api/session` filter" item is withdrawn, see C4-10.)
 **Status:** Open (§7 of this record).
 
 ## 5a. Stage 15.4: client-only boundary (after session C3)
@@ -767,6 +769,50 @@ with different keys leave only the second key. oconona must read the current met
 back with `orchestra` set. **Status:** Recorded in the contract (`src/backend/v2-orchestra.ts`) and the
 oconona handover.
 
+**C4-7: Contract ACK and amendments from oconona.** oconona acknowledged the following and sent
+amendments A1–A8:
+- the harness session and `metadata.orchestra`;
+- schema `version: 1`;
+- the write points;
+- the read-before-write and tolerance rules;
+- keeping the v1 sidecar files.
+
+**Status:** Recorded; the amendments are handled by C4-8 to C4-11.
+
+**C4-8: A3: never read the badge from a child session.** A child session is created with a copy of its
+parent's metadata (OpenCode `packages/core/src/session.ts`), so every subagent carries a stale
+`orchestra.active: true`. `V2Backend.getOrchestraState` returns `null` for a session with a `parentID`.
+Verified live: the child inherited `active: true`; octmux showed no badge on the child and showed the
+badge on the parent. **Status:** Implemented in `fe6c7a5`.
+
+**C4-9: A5/A6: end-of-run notice.** (Operator chose this over "accept; document only".)
+- Parser warnings are produced at cleanup, so they arrive in the final `active: false` write, together
+  with the optional `outcome` (A6).
+- The badge stays active-only.
+- When a run seen active turns inactive in the same session, octmux prints one line, for example
+  `orchestra brain run ended: pass · 2 parser warnings (…)`.
+- A run that was never seen active, or whose key is removed, prints nothing.
+- v1 is unchanged.
+
+**Status:** Implemented in `fe6c7a5`.
+
+**C4-10: A1/A2: transport and lookup.**
+- oconona writes through an in-server plugin (`ctx.session.update`), not HTTP PATCH. The contract names
+  the transport as oconona's choice; both replace `metadata` as a whole.
+- On v2, oconona takes the session id from `OPENCODE_SESSION_ID`.
+- Correction: the session-list filter is the flat `directory` query (with `parentID=null` for root
+  sessions), which octmux already sends. The earlier "server ignores the filter" finding came from a
+  tester that used `location[directory]`, and it is withdrawn.
+
+**Status:** Recorded in `src/backend/v2-orchestra.ts`, `docs/Stage15.md` (15.4.1) and the handover.
+
+**C4-11: A4, A7, A8: no octmux change.**
+- oconona refreshes `updatedAt` hourly on shell activity, so runs longer than 24 h keep their badge (A4).
+- `orchestra-hook.sh` is removed as dead code; OpenCode never read those hooks (A7).
+- v1 keeps the file-based, same-host badge (A8).
+
+**Status:** Recorded.
+
 ## 6. Rejected alternatives
 
 | Alternative | Rejected by, when | Reason | Ref |
@@ -799,6 +845,7 @@ oconona handover.
 | Fixing orchestra protocol gaps in octmux now | Operator, session C3 | Fenced off for oconona | C3-2 |
 | Keep the orchestra file read on v2 and document it | Operator, Stage 15.4 | octmux is a client; v2 is the main path | C4-2 |
 | Remove the orchestra file read on both protocols | Operator, Stage 15.4 | v1 has no API alternative; keep it as legacy | C4-3 |
+| Accept the rarely seen " !"; document only | Operator, Stage 15.4.1 | An end-of-run notice shows the cleanup warnings | C4-9 |
 | Replay marker text "Interrupted: What next?" | Operator, session C3 | Replay must be distinguishable from live | C3-14 |
 | Sharing the orchestra directory via NFS/sshfs | Handover analysis, session C3 | Outside both projects; subtle path and latency errors (oconona to decide) | C3-4 |
 
@@ -818,7 +865,6 @@ oconona handover.
 - Session picker labels any session with `parentID` as a fork; on v2 the subagent child is labelled a
   fork and a real `/fork` gets no label (`SessionPickerModal.tsx`).
 - `/fork` and `/new` print only the 8-character id prefix; short id prefixes collide in the pickers.
-- Server ignores the `location[directory]` filter on `GET /api/session` (server side).
 - `isRendered`'s `userText` parameter is unused in production.
 - Tmux-window line buffers keyed by role (F-d).
 - Tall pickers leave stale rows after Esc.

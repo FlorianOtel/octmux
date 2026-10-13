@@ -3,7 +3,7 @@ title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-13--23-59
+updated_at: 2026-10-14--00-15
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -364,7 +364,9 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
 - Orchestra badge on v2: read over the API from the harness session's `metadata.orchestra`
   (`Backend.getOrchestraState`, contract in `src/backend/v2-orchestra.ts`). It works with a remote
   server, and stays empty until oconona publishes that metadata
-  (`~/Gin-AI/tmp/oconona-OCv2-support.md`).
+  (`~/Gin-AI/tmp/oconona-OCv2-support.md`). A session with a `parentID` never shows a badge, because
+  a child inherits a copy of its parent's metadata. The end-of-run notice needs a final
+  `active: false` write; a run whose key is removed, or that was not seen active, prints none.
 - Orchestra badge on v1 (legacy): v1 has no API channel for the run state, so `V1Backend` reads
   oconona's sidecar files under `~/.config/opencode/orchestra/sessions/` on octmux's own disk and
   matches the harness session by the local cwd. It works only with a server on the same host.
@@ -394,6 +396,40 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
 - v2 is at feature parity with v1. The limits are listed under "Known limits".
 
 ---
+
+### 2026-10-14--00-15 — Stage 15.4.1 — orchestra contract amendments from oconona
+
+**Implemented by:** Claude Code (Claude Opus 5.5) — 2026-10-14--00-15
+**Commit(s):** `fe6c7a5`
+
+oconona reviewed the Stage 15.4 contract. It acknowledged the schema, the write points and the rules,
+and sent amendments A1–A8. The octmux changes:
+- **A3 (harness only):**
+  - A child session is created with a copy of its parent's metadata, so every subagent carries a stale
+    `orchestra.active: true` that is never cleared.
+  - `V2Backend.getOrchestraState` returns `null` for a session with a `parentID`.
+  - Verified live on 2.0.28: the child inherited `active: true`; octmux showed no badge on the child and
+    showed the badge on the parent.
+- **A5/A6 (end-of-run notice):**
+  - oconona produces parser warnings at cleanup, so they arrive in the final `active: false` write,
+    together with `outcome` (`pass`, `fix-loop`, `block`, `abandoned`).
+  - `parseOrchestraMetadata` returns inactive entries; the badge is shown only while active.
+  - `OrchestraWatcher` emits `run-ended` once when a run seen active turns inactive in the same session.
+  - `app.tsx` prints one system line through `formatRunEnded` (`src/utils/formatters.ts`), e.g.
+    `orchestra brain run ended: pass · 2 parser warnings (snapshot_missing, cost_source_none)`.
+  - v1 is unchanged: its files carry no final state.
+- **A1 (transport):** oconona writes through an in-server OpenCode plugin (`ctx.session.update`), not
+  HTTP PATCH. The contract names the transport as oconona's choice; both replace `metadata` as a whole.
+- **A2 (correction):** the session list's filter is the flat `directory` query. octmux already sends it
+  (`V2Backend.session.list`), and the server honours it. The 15.3 note that the server ignores the
+  filter came from a live tester that used `location[directory]`. On v2, oconona reads the session id
+  from `OPENCODE_SESSION_ID`.
+- **A4, A7, A8:** no octmux change.
+  - oconona refreshes `updatedAt` during long runs (A4).
+  - `orchestra-hook.sh` is removed as dead code (A7).
+  - v1 keeps the file-based badge (A8).
+- **Verification:** `bun test src/` passes 781 tests, 0 fail; the tsgo error set is unchanged. Live, the
+  notice printed once and the badge cleared. Test sessions were deleted by recorded id.
 
 ### 2026-10-13--23-59 — Stage 15.4 — client-only boundary: orchestra state and names over the API
 
@@ -515,7 +551,9 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
     (`SessionPickerModal.tsx:35`). On v2 the subagent child is labelled a fork, and a real v2
     `/fork` (no `parentID`) gets no label.
   - `/fork` and `/new` print only the 8-char id prefix.
-  - `GET /api/session` ignores the `location[directory]` filter (server side).
+  - (Corrected in 15.4.1: the session list's filter is the flat `directory` query, which octmux sends
+    and the server honours. The live tester had used `location[directory]`, which is not a parameter
+    of this route.)
   - `isRendered`'s `userText` parameter is unused in production. Only the tests reach the prefix
     branch.
   - Carried from 15.2: tmux-window line buffers are keyed by role (F-d); short session-id
