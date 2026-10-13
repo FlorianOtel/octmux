@@ -83,7 +83,8 @@ export type ReplEvent =
   // Model bound to the session (v2 `session.model.selected`, capture doc §4.3). Kept distinct from
   // the v1 foreign-client `model-switched` kind on purpose (PLAN-C2C3.md §B.1).
   | { kind: "model-selected"; sessionID: string; providerID: string; modelID: string }
-  // Internal (v2 translator): a durable `seq` gap was detected, so app.tsx must clear and replay (§4.11).
+  // Internal (v2 translator): a durable `seq` gap was detected, so app.tsx runs an incremental resync
+  // (getMissedHistory) that renders only the missed messages and clears nothing (§4.11).
   | { kind: "resync-needed"; sessionID: string };
 
 // Track user message IDs so we don't echo the user's own input back to them.

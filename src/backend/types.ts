@@ -3,18 +3,15 @@
  * (app.tsx, index.tsx, orchestra-watch.ts, utils/formatters.ts) and whichever
  * OpenCode wire protocol is in use.
  *
- * Stage 15.1 (C1): this interface is v1-derived. Every member mirrors a call
- * shape octmux uses today against the v1 SDK client, so that call sites can be
- * swapped from `props.client.*` / raw `fetch()` / free functions to
- * `props.backend.*` without changing argument shapes, return types or behaviour.
- * `V1Backend` (src/backend/v1.ts) is the only implementation shipped in C1.
+ * Two implementations: `V1Backend` (src/backend/v1.ts, the v1 SDK client) and
+ * `V2Backend` (src/backend/v2.ts, @opencode/client). src/index.tsx picks one after
+ * protocol detection; nothing else in octmux knows which protocol is in use.
  *
- * Stage 15.2a (C2.1–2.2a): the session operations are reshaped to flat named
- * arguments. The SDK option-object wrapper (`{ path, query, body }`) is gone from
- * the interface; `V1Backend` builds the same SDK requests internally.
- *
- * Stage 15.2 (C2) adds `V2Backend` and reshapes the rest of the interface around
- * protocol-neutral operations; the v1-derived shapes here are expected to churn.
+ * Session operations take flat named arguments; each backend builds its own wire
+ * requests. The neutral output shapes (`ReplEvent`, `HistoryOp`, `SessionRecord`)
+ * descend from v1, so `V2Backend` adapts v2 data onto them, and `V1Backend` fills
+ * the members v2 introduced (forms, missed history, session activity) with no-ops.
+ * See docs/OpenCode-v1-v2-adaptation-layer.md.
  */
 
 import type { Command, createOpencodeClient, SessionMessagesResponses } from "@opencode-ai/sdk/client";
@@ -228,10 +225,12 @@ export type TokenUsageSummary = {
 };
 
 /**
- * v1-derived event pipeline; Stage 15.2 reshapes this around protocol-neutral operations.
+ * The event pipeline and the session-read queries.
  *
- * Each member is a forwarder to the same-named export of `src/events.ts`.
- * The module-level state (ID sets, open-part maps) lives in `events.ts`, not here.
+ * `V1Backend` forwards each member to the same-named export of `src/events.ts`, whose
+ * module-level state (ID sets, open-part maps) lives there. `V2Backend` forwards to its own
+ * `V2EventTranslator` instance (src/backend/v2-events.ts) and to src/backend/v2-queries.ts.
+ * Members that only one protocol needs are no-ops on the other.
  */
 export interface BackendEvents {
   /** v1 `filterEvent()`. Turns one raw SDK event into zero, one or several ReplEvents. */
@@ -297,7 +296,7 @@ export interface Backend {
   /** Session-scoped REST operations (see `BackendSession`). */
   session: BackendSession;
 
-  /** v1-derived event pipeline helpers (see `BackendEvents`). */
+  /** The event pipeline and session-read queries (see `BackendEvents`). */
   events: BackendEvents;
 
   /** v1 `client.command.list()`. Slash commands offered by the server (built-in + custom). */
@@ -370,14 +369,14 @@ export interface Backend {
 
   /**
    * Answers a pending form (v2 only). v1 has no forms, so `V1Backend` does nothing.
-   * Error statuses are swallowed, as with the other void session operations.
+   * A write: `V2Backend` rejects on an error status (see `BackendSession`).
    */
   replyForm(sessionID: string, formID: string, answer: FormAnswer): Promise<void>;
 
   /**
    * Cancels a pending form without answering it (v2 only, Stage 15.2 C2.6b). Used when the operator
    * dismisses a form with Esc or Ctrl-C. `V1Backend` resolves without sending a request, because v1
-   * has no forms. Error statuses are swallowed, as with `replyForm`.
+   * has no forms. A write: `V2Backend` rejects on an error status, as with `replyForm`.
    */
   cancelForm(sessionID: string, formID: string): Promise<void>;
 
