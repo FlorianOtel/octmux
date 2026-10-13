@@ -9,32 +9,22 @@
  * `props.backend.*` without changing argument shapes, return types or behaviour.
  * `V1Backend` (src/backend/v1.ts) is the only implementation shipped in C1.
  *
- * Stage 15.2 (C2) adds `V2Backend` and reshapes the interface around
+ * Stage 15.2a (C2.1–2.2a): the session operations are reshaped to flat named
+ * arguments. The SDK option-object wrapper (`{ path, query, body }`) is gone from
+ * the interface; `V1Backend` builds the same SDK requests internally.
+ *
+ * Stage 15.2 (C2) adds `V2Backend` and reshapes the rest of the interface around
  * protocol-neutral operations; the v1-derived shapes here are expected to churn.
  */
 
-import type {
-  createOpencodeClient,
-  SessionListData,
-  SessionGetData,
-  SessionChildrenData,
-  SessionMessagesData,
-  SessionCreateData,
-  SessionForkData,
-  SessionAbortData,
-  SessionSummarizeData,
-  SessionUpdateData,
-  SessionCommandData,
-  SessionPromptAsyncData,
-  PostSessionIdPermissionsPermissionIdData,
-} from "@opencode-ai/sdk/client";
+import type { createOpencodeClient, SessionMessagesResponses } from "@opencode-ai/sdk/client";
 import type { Event } from "@opencode-ai/sdk";
 import type { ReplEvent } from "../events.ts";
-import type { Renderer } from "../renderer/types.ts";
-import type { LineEditor } from "../editor.ts";
+import type { HistoryOp } from "../replay.ts";
 
 // Re-exported unchanged so consumers can import the normalised event type from the Backend seam.
 export type { ReplEvent } from "../events.ts";
+export type { HistoryOp } from "../replay.ts";
 
 /**
  * The v1 SDK client exactly as octmux constructs it today (`createOpencodeClient`).
@@ -44,55 +34,146 @@ export type { ReplEvent } from "../events.ts";
 export type V1Client = ReturnType<typeof createOpencodeClient>;
 
 /**
- * Request options for a v1 SDK call: the generated `*Data` type minus its `url`
- * literal. This is the same shape the SDK's own `Options<TData>` exposes to
- * callers, so `{ path: { id } }`-style call sites keep compiling unchanged.
+ * Permission reply vocabulary. These are the v1 `body.response` strings, and the
+ * same values `handlePermission` in app.tsx already passes.
  */
-export type V1Request<TData> = Omit<TData, "url">;
+export type PermissionDecision = "once" | "always" | "reject";
 
 /**
- * Session-scoped operations. Method names and argument shapes mirror the v1
- * `client.session.*` calls they replace; the only rename is `summarize` →
- * `compact` (the user-facing `/compact` meaning) and `command`/`promptAsync` →
- * `sendCommand`/`sendPrompt`.
+ * A model binding passed with prompt, command and compact calls: `{ providerID, modelID }`,
+ * the same shape as the REPL's `activeModel` state.
+ */
+export type ModelRef = { providerID: string; modelID: string };
+
+/**
+ * The flat session record. It lists only the fields octmux's call sites read:
+ * `id`, `parentID`, `directory`, `title`, `time.updated`, and the bound `model`.
+ * Fields such as `projectID`, `version`, `summary` and `time.created` are not listed
+ * because no call site reads them.
+ *
+ * The SDK `Session` type (v1) satisfies this record. `model` is read at runtime but is
+ * absent from the SDK `Session` type, so declaring it here is what lets those reads type-check.
+ */
+export type SessionRecord = {
+  id: string;
+  /** Absent for top-level sessions. Present on subagent (child) sessions. */
+  parentID?: string;
+  /** Working directory the session belongs to. */
+  directory: string;
+  title: string;
+  time: { updated: number };
+  /** Model bound to the session. Read by session switch, `/model` and the orchestra watcher. */
+  model?: { providerID: string; id: string };
+};
+
+/**
+ * Session-scoped operations, with flat named arguments.
+ *
+ * Resolution convention, applied uniformly to every method below:
+ * - A method whose call sites read the response resolves with the SDK response's
+ *   `data` field. That is `undefined` when the server answered with an error status,
+ *   which is exactly what the old `resp.data` checks saw. Call sites keep their
+ *   `?? []`, `!` and `?.` handling unchanged.
+ * - A method whose call sites never read the response resolves `void`, or the
+ *   `{ interrupted }` result for `abort`. An error status is swallowed here, as it
+ *   was at those call sites.
+ * - A transport-level failure (the underlying fetch rejects) rejects the promise in
+ *   every case, as before.
+ *
+ * Method names mirror the v1 `client.session.*` calls they replace. The renames are
+ * `summarize` → `compact` (the user-facing `/compact` meaning), and
+ * `command`/`promptAsync` → `sendCommand`/`sendPrompt`.
  */
 export interface BackendSession {
-  /** v1 `client.session.messages({ path: { id } })` — message list for a session. */
-  getMessages(options: V1Request<SessionMessagesData>): ReturnType<V1Client["session"]["messages"]>;
+  /** v1 `client.session.messages({ path: { id } })`. Message list in the v1 `{ info, parts }[]` shape. */
+  getMessages(sessionID: string): Promise<SessionMessagesResponses[200] | undefined>;
 
-  /** v1 `client.session.children({ path: { id } })` — direct child (subagent) sessions. */
-  getChildren(options: V1Request<SessionChildrenData>): ReturnType<V1Client["session"]["children"]>;
+  /** v1 `client.session.children({ path: { id } })`. Direct child (subagent) sessions. */
+  getChildren(sessionID: string): Promise<SessionRecord[] | undefined>;
 
-  /** v1 `client.session.get({ path: { id } })` — single session record (includes bound model). */
-  get(options: V1Request<SessionGetData>): ReturnType<V1Client["session"]["get"]>;
+  /** v1 `client.session.get({ path: { id } })`. Single session record, including the bound model. */
+  get(sessionID: string): Promise<SessionRecord | undefined>;
 
-  /** v1 `client.session.abort({ path: { id } })` — abort the in-flight turn. */
-  abort(options: V1Request<SessionAbortData>): ReturnType<V1Client["session"]["abort"]>;
+  /** v1 `client.session.abort({ path: { id } })`. Resolves `interrupted: true` when the server reports the abort took effect. */
+  abort(sessionID: string): Promise<{ interrupted: boolean }>;
 
-  /** v1 `client.session.create({ query: { directory } })` — create a new session. */
-  create(options: V1Request<SessionCreateData>): ReturnType<V1Client["session"]["create"]>;
+  /** v1 `client.session.create({ query: { directory } })`. Creates a new session. */
+  create(options: { directory: string }): Promise<SessionRecord | undefined>;
 
   /**
    * v1 `client.session.summarize({ path: { id }, body: { providerID, modelID } })`.
    * Named `compact` here because it is what `/compact` triggers.
    */
-  compact(options: V1Request<SessionSummarizeData>): ReturnType<V1Client["session"]["summarize"]>;
+  compact(sessionID: string, model: ModelRef): Promise<void>;
 
-  /** v1 `client.session.list()` — all sessions visible to the server for the current directory. */
-  list(): ReturnType<V1Client["session"]["list"]>;
+  /** v1 `client.session.list()`. All sessions visible to the server for the current directory. */
+  list(): Promise<SessionRecord[] | undefined>;
 
-  /** v1 `client.session.fork({ path: { id }, query? })` — fork a session into a child. */
-  fork(options: V1Request<SessionForkData>): ReturnType<V1Client["session"]["fork"]>;
+  /**
+   * v1 `client.session.fork({ path: { id }, query? })`. Forks a session into a child.
+   * `directory` is sent as the `query.directory` only when given, as before.
+   */
+  fork(sessionID: string, options?: { directory?: string }): Promise<SessionRecord | undefined>;
 
-  /** v1 `client.session.update({ path: { id }, body: { title } })` — rename a session. */
-  update(options: V1Request<SessionUpdateData>): ReturnType<V1Client["session"]["update"]>;
+  /** v1 `client.session.update({ path: { id }, body: { title } })`. Renames a session. */
+  update(sessionID: string, options: { title: string }): Promise<void>;
 
-  /** v1 `client.session.command({ path: { id }, body })` — run a slash command inside a session. */
-  sendCommand(options: V1Request<SessionCommandData>): ReturnType<V1Client["session"]["command"]>;
+  /**
+   * v1 `client.session.command({ path: { id }, body })`. Runs a slash command inside a session.
+   * `name` is sent as `body.command`, `args` as `body.arguments`, `promptID` as `body.messageID`,
+   * and `model` as the `"provider/model"` string in `body.model`.
+   */
+  sendCommand(options: {
+    sessionID: string;
+    name: string;
+    args: string;
+    promptID?: string;
+    model?: ModelRef;
+  }): Promise<void>;
 
-  /** v1 `client.session.promptAsync({ path: { id }, body })` — send a prompt without awaiting the turn. */
-  sendPrompt(options: V1Request<SessionPromptAsyncData>): ReturnType<V1Client["session"]["promptAsync"]>;
+  /**
+   * v1 `client.session.promptAsync({ path: { id }, body })`. Sends a prompt without awaiting the turn.
+   * The body is `parts: [{ type: "text", text }]`, `messageID: promptID`, and `model` when given.
+   */
+  sendPrompt(options: { sessionID: string; text: string; promptID?: string; model?: ModelRef }): Promise<void>;
+
+  /**
+   * Sets the session-level model. v1 has no session-level model-set operation: the
+   * `/model` command only updates octmux's local `activeModel` and relies on the per-prompt
+   * model override. So the v1 implementation is a no-op.
+   */
+  setModel(sessionID: string, model: ModelRef): Promise<void>;
 }
+
+/**
+ * Newest assistant message of a session, as the stall watchdog reads it. `null` when the session
+ * has no assistant message yet.
+ *
+ * - `hasContent`: the message has at least one part.
+ * - `completedAt`: `time.completed` of the message, or `null`/`undefined` while it is still running.
+ * - `openChild`: set only for an incomplete message that has content and whose last part is a
+ *   running `task` call paired to a child session. `stale` is true when that child's own newest
+ *   turn has shown no progress for 3 minutes. Otherwise `openChild` is `null`.
+ */
+export type LatestAssistantActivity =
+  | {
+      hasContent: boolean;
+      completedAt: number | null | undefined;
+      openChild: { sessionID: string; stale: boolean } | null;
+    }
+  | null;
+
+/**
+ * Token usage for the status line. `used` is the context size of the newest post-summary
+ * assistant message. `runningCost` is the cost summed over the session and its direct children.
+ * `providerID` and `modelID` are those of the same message.
+ */
+export type TokenUsageSummary = {
+  used: number;
+  providerID: string | undefined;
+  modelID: string | undefined;
+  runningCost: number;
+};
 
 /**
  * v1-derived event pipeline; Stage 15.2 reshapes this around protocol-neutral operations.
@@ -101,8 +182,26 @@ export interface BackendSession {
  * The module-level state (ID sets, open-part maps) lives in `events.ts`, not here.
  */
 export interface BackendEvents {
-  /** v1 `filterEvent()` — turns one raw SDK event into zero, one or several ReplEvents. */
+  /** v1 `filterEvent()`. Turns one raw SDK event into zero, one or several ReplEvents. */
   translateEvent(event: Event, sessionID: string): ReplEvent | ReplEvent[] | null;
+
+  /**
+   * True if any tool part of the session is still `pending` or `running`. Reconciler guard
+   * (Layer 4) that stops an idle synthesis while work is still in flight.
+   */
+  hasPendingToolCalls(sessionID: string): Promise<boolean>;
+
+  /** Newest assistant message for the stall watchdog. See `LatestAssistantActivity`. */
+  getLatestAssistantActivity(sessionID: string): Promise<LatestAssistantActivity>;
+
+  /** Status-line token usage and running cost. `null` when there is no post-summary usage. See `TokenUsageSummary`. */
+  getTokenUsage(sessionID: string): Promise<TokenUsageSummary | null>;
+
+  /**
+   * Replay operations for a session's history, in order. Pass them to `applyHistory` (src/replay.ts).
+   * Fetch errors yield `[]`. Replay is best-effort.
+   */
+  getHistory(sessionID: string): Promise<HistoryOp[]>;
 
   /** Clears all event-pipeline state (called on session switch and reset). */
   resetEventState(): void;
@@ -133,14 +232,14 @@ export interface Backend {
   /** v1-derived event pipeline helpers (see `BackendEvents`). */
   events: BackendEvents;
 
-  /** v1 `client.command.list()` — slash commands offered by the server (built-in + custom). */
+  /** v1 `client.command.list()`. Slash commands offered by the server (built-in + custom). */
   listCommands(): ReturnType<V1Client["command"]["list"]>;
 
-  /** v1 `client.config.get()` — server config; `data.model` is the default "provider/model" string. */
+  /** v1 `client.config.get()`. Server config; `data.model` is the default "provider/model" string. */
   getDefaultModelConfig(): ReturnType<V1Client["config"]["get"]>;
 
   /**
-   * v1 `client.provider.list()` — providers and their models (used for context-window and validation).
+   * v1 `client.provider.list()`. Providers and their models (used for context-window and validation).
    *
    * WARNING — this is NOT the v2 route `/api/provider`. That v2 route returns plaintext API keys
    * and must never be called from octmux. Any future v2 implementation of this method must
@@ -148,22 +247,29 @@ export interface Backend {
    */
   listProviders(): ReturnType<V1Client["provider"]["list"]>;
 
-  /** Raw `GET {baseUrl}/question` — pending MCP/tool questions. Caller checks `ok` and parses JSON. */
+  /** Raw `GET {baseUrl}/question`. Pending MCP/tool questions. Caller checks `ok` and parses JSON. */
   listQuestions(): Promise<Response>;
 
-  /** Raw `GET {baseUrl}/permission` — pending permission requests. Caller checks `ok` and parses JSON. */
+  /** Raw `GET {baseUrl}/permission`. Pending permission requests. Caller checks `ok` and parses JSON. */
   listPermissions(): Promise<Response>;
 
-  /** Raw `POST {baseUrl}/question/{reqID}/reject` — reject a pending question. */
+  /** Raw `POST {baseUrl}/question/{reqID}/reject`. Rejects a pending question. */
   rejectQuestion(reqID: string): Promise<Response>;
 
-  /** Raw `POST {baseUrl}/question/{reqID}/reply` — answer a pending question (one array of answers per sub-question). */
+  /** Raw `POST {baseUrl}/question/{reqID}/reply`. Answers a pending question (one array of answers per sub-question). */
   replyQuestion(reqID: string, answers: string[][]): Promise<Response>;
 
-  /** v1 `client.postSessionIdPermissionsPermissionId({ path: { id, permissionID }, body: { response } })`. */
-  replyPermission(
-    options: V1Request<PostSessionIdPermissionsPermissionIdData>,
-  ): ReturnType<V1Client["postSessionIdPermissionsPermissionId"]>;
+  /**
+   * Answers a pending permission request. v1 maps `decision` to `body.response`.
+   * `message` is accepted for the protocol-neutral shape. The v1 body has no such field,
+   * so the v1 implementation ignores it.
+   */
+  replyPermission(options: {
+    sessionID: string;
+    permissionID: string;
+    decision: PermissionDecision;
+    message?: string;
+  }): Promise<void>;
 
   /**
    * True if `candidateSessionID` is a descendant of `ancestorSessionID`.
@@ -176,10 +282,4 @@ export interface Backend {
    * Used for the initial subscription and for reconnects.
    */
   subscribeEvents(): ReturnType<V1Client["global"]["event"]>;
-
-  /**
-   * Replays a session's history into the renderer and editor on attach.
-   * Forwards to `replaySession()` in `src/replay.ts`.
-   */
-  replaySession(renderer: Renderer, sessionID: string, editor: LineEditor): Promise<void>;
 }

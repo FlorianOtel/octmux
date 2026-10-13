@@ -8,6 +8,7 @@ import { UserTurnDebouncer } from "./user-turn-debouncer.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
 import type { ReplEvent } from "./events.ts";
 import { mintUserMessageID } from "./message-id.ts";
+import { applyHistory } from "./replay.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand, parseResyncCommand } from "./commands.ts";
 import type { Renderer } from "./renderer/types.ts";
@@ -30,21 +31,6 @@ import { fetchGitBranch, getContextWindow, getToolCallSupport, getDefaultModel, 
 
 const TOGGLES_CONFIG = loadTogglesConfig();
 
-type MessageForUsageScan = {
-  info: {
-    role?: string;
-    summary?: boolean | unknown;
-    providerID?: string;
-    modelID?: string;
-    tokens?: {
-      input: number;
-      output?: number;
-      reasoning?: number;
-      cache?: { read?: number; write?: number };
-    };
-  };
-};
-
 type QuestionType = {
   question: string;
   header: string;
@@ -52,165 +38,6 @@ type QuestionType = {
   multiple?: boolean;
   custom?: boolean;
 };
-
-/**
- * Stage 5.7.2: Pure helper for token usage scanning with forward-from-summary semantics.
- * Finds the last assistant message with info.summary === true, then scans forward
- * from that boundary for the latest non-summary assistant message with non-zero tokens.
- * If no post-summary assistant exists, falls back to the latest non-summary assistant
- * (mirroring pre-summary backward-walk behavior).
- *
- * @param messages Flat message list shaped after OC SDK Message type
- * @returns { used, providerID, modelID } | null
- */
-export function pickPostSummaryAssistantTokenUsage(messages: MessageForUsageScan[]): { used: number; providerID: string | undefined; modelID: string | undefined } | null {
-  const assistantMessages = messages.filter(m => m.info.role === "assistant");
-  if (assistantMessages.length === 0) return null;
-
-  // Find the last assistant message with summary === true
-  let summaryIdx = -1;
-  for (let i = assistantMessages.length - 1; i >= 0; i--) {
-    const info = assistantMessages[i].info;
-    if (info.summary === true) {
-      summaryIdx = i;
-      break;
-    }
-  }
-
-  // No summary exists — use backward-walk semantics (existing behavior)
-  if (summaryIdx === -1) {
-    // Find latest non-summary assistant message
-    let latestIdx = -1;
-    for (let i = assistantMessages.length - 1; i >= 0; i--) {
-      if (assistantMessages[i].info.summary !== true) {
-        latestIdx = i;
-        break;
-      }
-    }
-
-    if (latestIdx === -1) {
-      // All assistants are summaries — return null
-      return null;
-    }
-
-    // Get tokens from latest non-summary assistant
-    const msg = assistantMessages[latestIdx];
-    const tokens = msg.info.tokens;
-    if (!tokens) return null;
-
-    let used = tokens.input + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0);
-    // If zero tokens, scan backwards for most recent non-zero non-summary assistant
-    if (used === 0) {
-      for (let j = latestIdx - 1; j >= 0; j--) {
-        const fallback = assistantMessages[j];
-        if (fallback.info.summary === true) continue;
-        const ft = fallback.info.tokens;
-        if (!ft) continue;
-        const fallbackUsed = ft.input + (ft.cache?.read ?? 0) + (ft.cache?.write ?? 0);
-        if (fallbackUsed > 0) {
-          used = fallbackUsed;
-          break;
-        }
-      }
-    }
-
-    const fallbackModel = assistantMessages[latestIdx].info;
-    return { used, providerID: fallbackModel.providerID, modelID: fallbackModel.modelID };
-  }
-
-  // Summary exists — scan forward from summaryIdx + 1
-  const postSummaryMessages = assistantMessages.slice(summaryIdx + 1);
-  if (postSummaryMessages.length === 0) return null;
-
-  // Find the latest non-summary assistant in post-summary region
-  let latestIdx = -1;
-  for (let i = postSummaryMessages.length - 1; i >= 0; i--) {
-    if (postSummaryMessages[i].info.summary !== true) {
-      latestIdx = i;
-      break;
-    }
-  }
-
-  if (latestIdx === -1) {
-    // All post-summary assistants are summaries — return null
-    return null;
-  }
-
-  // Found a non-zero post-summary assistant
-  const msg = postSummaryMessages[latestIdx];
-  const tokens = msg.info.tokens;
-  if (!tokens) return null;
-
-  let used = tokens.input + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0);
-  // If zero tokens, fall forward to most recent non-zero post-summary assistant
-  if (used === 0) {
-    for (let j = latestIdx - 1; j >= 0; j--) {
-      if (postSummaryMessages[j].info.summary === true) continue;
-      const ft = postSummaryMessages[j].info.tokens;
-      if (!ft) continue;
-      const fallbackUsed = ft.input + (ft.cache?.read ?? 0) + (ft.cache?.write ?? 0);
-      if (fallbackUsed > 0) {
-        used = fallbackUsed;
-        break;
-      }
-    }
-  }
-
-  const postSummaryModel = postSummaryMessages[latestIdx].info;
-  return { used, providerID: postSummaryModel.providerID, modelID: postSummaryModel.modelID };
-}
-
-type PartForStallCheck = {
-  type?: string;
-  tool?: string;
-  state?: { status?: string; metadata?: { sessionId?: string } };
-  time?: { start?: number; end?: number };
-};
-
-/**
- * Pure helper for the stall watchdog (2026-09-11 incident, see docs/StageN.md):
- * a harness turn can have non-empty `parts` (its own text plus the `task`
- * tool-call part itself) yet still be genuinely stalled, because a `task`
- * tool call stays `status: "running"` until the dispatched subagent's own
- * model stream produces a result — and that stream can go silent forever
- * with no further SSE event on the harness session (the subagent's session
- * is a separate SSE-event source). The plain "does the newest message have
- * any parts yet" check is blind to this case.
- *
- * Returns the subagent's session ID if the newest assistant message's LAST
- * part is a `task` tool call still in `running` state and already paired to
- * a child session, else null (not a task dispatch, already resolved, or not
- * paired yet — too early to judge).
- */
-export function findRunningTaskChildSessionID(parts: PartForStallCheck[]): string | null {
-  const last = parts[parts.length - 1];
-  if (!last || last.type !== "tool" || last.tool !== "task") return null;
-  if (last.state?.status !== "running") return null;
-  return last.state.metadata?.sessionId ?? null;
-}
-
-/**
- * True if a turn shows no forward progress within `thresholdMs`: either it
- * has no parts at all, or the newest timestamp across all parts (`time.start`
- * / `time.end`, whichever is latest) is older than `now - thresholdMs`. A
- * `completed` turn is never stale.
- */
-export function isTurnStale(
-  parts: PartForStallCheck[],
-  completedAt: number | null | undefined,
-  now: number,
-  thresholdMs: number,
-): boolean {
-  if (completedAt != null) return false;
-  if (parts.length === 0) return true;
-  let newest = 0;
-  for (const p of parts) {
-    if (p.time?.start) newest = Math.max(newest, p.time.start);
-    if (p.time?.end) newest = Math.max(newest, p.time.end);
-  }
-  if (newest === 0) return true;
-  return now - newest >= thresholdMs;
-}
 
 function formatOptionsBlock(qs: QuestionType[]): string {
   return qs.map((q, qi) => {
@@ -480,14 +307,8 @@ export function App(props: AppProps) {
           if (!props.backend.events.hasOpenStreamingPart()) {
             // Layer 4: REST confirmation — original anyPending + isGenerating check
             try {
-              const resp = await props.backend.session.getMessages({ path: { id: sessionIDRef.current } });
-              const msgs = resp.data ?? [];
-              const anyPending = msgs.some(m =>
-                (m.parts ?? []).some(p =>
-                  p.type === "tool" &&
-                  (p.state?.status === "pending" || p.state?.status === "running")
-                )
-              );
+              // Stage 15.2 (C2.1–2.2b): the pending-tool scan lives behind the Backend seam.
+              const anyPending = await props.backend.events.hasPendingToolCalls(sessionIDRef.current);
               if (!anyPending && isGeneratingRef.current) {
                 applyReplEvents(props.backend.events.synthesizeSessionIdleEvents());
               }
@@ -630,16 +451,14 @@ export function App(props: AppProps) {
       if (Date.now() - lastSseEventTimeRef.current < 180_000) return;
       if (stallBannerShownRef.current) return;
       try {
-        const resp = await props.backend.session.getMessages({ path: { id: sessionIDRef.current } });
-        const msgs = resp.data ?? [];
-        const assistants = msgs.filter(m => m.info.role === "assistant");
-        if (assistants.length === 0) return;
-        const newest = assistants[assistants.length - 1];
-        const parts = newest.parts ?? [];
-        const completed = (newest.info as { time?: { completed?: number | null } }).time?.completed;
-        if (completed != null) return;
+        // Stage 15.2 (C2.1–2.2b): the newest-assistant scan lives behind the Backend seam.
+        // Same branch order as before: no assistant or a completed turn → no banner;
+        // no parts → "Generation stalled"; a stale paired subagent → "Subagent stalled".
+        const activity = await props.backend.events.getLatestAssistantActivity(sessionIDRef.current);
+        if (activity === null) return;
+        if (activity.completedAt != null) return;
 
-        if (parts.length === 0) {
+        if (!activity.hasContent) {
           stallBannerShownRef.current = true;
           renderer.commitSystemMessage("Generation stalled — press Ctrl-C to abort");
           return;
@@ -647,15 +466,8 @@ export function App(props: AppProps) {
 
         // Layer 2: harness turn has content, but its last part may be a `task`
         // tool call blocking on a subagent that has itself gone silent.
-        const childSessionID = findRunningTaskChildSessionID(parts as PartForStallCheck[]);
-        if (!childSessionID) return;
-        const childResp = await props.backend.session.getMessages({ path: { id: childSessionID } });
-        const childMsgs = childResp.data ?? [];
-        const childAssistants = childMsgs.filter(m => m.info.role === "assistant");
-        if (childAssistants.length === 0) return;
-        const childNewest = childAssistants[childAssistants.length - 1];
-        const childCompleted = (childNewest.info as { time?: { completed?: number | null } }).time?.completed;
-        if (!isTurnStale((childNewest.parts ?? []) as PartForStallCheck[], childCompleted, Date.now(), 180_000)) return;
+        if (activity.openChild === null || !activity.openChild.stale) return;
+        const childSessionID = activity.openChild.sessionID;
 
         stallBannerShownRef.current = true;
         renderer.commitSystemMessage(
@@ -774,12 +586,10 @@ export function App(props: AppProps) {
   // the latest non-summary assistant (mirroring pre-summary backward-walk behavior).
   const refreshTokenUsage = useCallback(async (sid: string) => {
     try {
-      const messagesResp = await props.backend.session.getMessages({ path: { id: sid } });
-      const messages = messagesResp.data ?? [];
-
-      // Use the pure helper for token usage scanning
-      const result = pickPostSummaryAssistantTokenUsage(messages as MessageForUsageScan[]);
-      if (!result) {
+      // Stage 15.2 (C2.1–2.2b): the post-summary usage scan and the parent + child cost
+      // roll-up both live behind the Backend seam (`events.getTokenUsage`).
+      const usage = await props.backend.events.getTokenUsage(sid);
+      if (!usage) {
         // No post-summary assistant messages (e.g. immediately after /compact).
         // Preserve the known context window so the bar shows "0K/200K" rather
         // than "0K/?". If there was no prior value, fall through to null.
@@ -796,47 +606,13 @@ export function App(props: AppProps) {
       // only needs to update display-only values (token bar and running cost).
       const ctxWindow = await getContextWindow(
         props.backend,
-        result.providerID ?? "",
-        result.modelID ?? "",
+        usage.providerID ?? "",
+        usage.modelID ?? "",
       );
-      setTokenUsage({ used: result.used, contextWindow: ctxWindow });
+      setTokenUsage({ used: usage.used, contextWindow: ctxWindow });
 
-      // Compute running cost: sum all assistant messages in parent + children
-      let totalCost = 0;
-      for (const msg of messages) {
-        if (msg.info.role === "assistant") {
-          const cost = msg.info.cost;
-          if (cost && !isNaN(cost) && cost >= 0) {
-            totalCost += cost;
-          }
-        }
-      }
-
-      // Sum child sessions (one level deep)
-      try {
-        const childrenResp = await props.backend.session.getChildren({ path: { id: sid } });
-        const children = childrenResp.data ?? [];
-        for (const child of children) {
-          try {
-            const childMessagesResp = await props.backend.session.getMessages({ path: { id: child.id } });
-            const childMessages = childMessagesResp.data ?? [];
-            for (const msg of childMessages) {
-              if (msg.info.role === "assistant") {
-                const cost = msg.info.cost;
-                if (cost && !isNaN(cost) && cost >= 0) {
-                  totalCost += cost;
-                }
-              }
-            }
-          } catch {
-            // Silently skip failed child session fetches
-          }
-        }
-      } catch {
-        // Silently skip if children endpoint is unavailable
-      }
-
-      setRunningCost(totalCost);
+      // Parent + children running cost, already summed behind the seam.
+      setRunningCost(usage.runningCost);
     } catch {
       // Silently swallow errors; bar stays at last value
     }
@@ -844,8 +620,14 @@ export function App(props: AppProps) {
 
   // Stable replay callback: emit prior session history to renderer and seed editor.
   // Declared BEFORE the one-shot session.get effect (critical for TDZ).
+  // Stage 15.2 (C2.1–2.2b): history is translated behind the seam (`events.getHistory`); only the
+  // renderer/editor side effects happen here. Best-effort, as before: a renderer error is swallowed.
   const runReplay = useCallback(async (sid: string) => {
-    await props.backend.replaySession(renderer, sid, editor);
+    try {
+      applyHistory(renderer, editor, await props.backend.events.getHistory(sid));
+    } catch {
+      // Replay is best-effort, not critical to startup
+    }
   }, [props.backend, renderer, editor]);
 
   // Per-messageID debouncer for foreign user turns (Stage 13.x).
@@ -938,16 +720,18 @@ export function App(props: AppProps) {
           } else if (permModeRef.current === "allow") {
             // Fire in background without awaiting
             props.backend.replyPermission({
-              path: { id: ev.sessionID, permissionID: ev.permID },
-              body: { response: "always" },
+              sessionID: ev.sessionID,
+              permissionID: ev.permID,
+              decision: "always",
             }).catch(() => {
               // Silently swallow errors; permission will be retried or escalated by the server
             });
           } else if (permModeRef.current === "deny") {
             // Fire in background without awaiting
             props.backend.replyPermission({
-              path: { id: ev.sessionID, permissionID: ev.permID },
-              body: { response: "reject" },
+              sessionID: ev.sessionID,
+              permissionID: ev.permID,
+              decision: "reject",
             }).catch(() => {
               // Silently swallow errors
             });
@@ -1046,6 +830,22 @@ export function App(props: AppProps) {
         else if (ev.kind === "foreign-user-part") {
           userTurnDebouncerRef.current?.arm(ev.messageID);
         }
+        // v2-only ReplEvent kinds (Stage 15.2). v1's filterEvent never emits these, so
+        // these branches are unreachable on v1. They are explicit no-ops until
+        // Stage 15.2 step 6 wires them (PLAN-C2C3.md §C step 6).
+        else if (
+          ev.kind === "form-asked" ||
+          ev.kind === "form-replied" ||
+          ev.kind === "turn-retry" ||
+          ev.kind === "compaction-started" ||
+          ev.kind === "compaction-progress" ||
+          ev.kind === "compaction-ended" ||
+          ev.kind === "compaction-failed" ||
+          ev.kind === "model-selected" ||
+          ev.kind === "resync-needed"
+        ) {
+          // v2-only; handled in Stage 15.2 step 6. No behaviour here.
+        }
       } catch (err) {
         renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -1083,8 +883,7 @@ export function App(props: AppProps) {
   useEffect(() => {
     (async () => {
       try {
-        const resp = await props.backend.session.get({ path: { id: sessionID } });
-        const sess = resp.data;
+        const sess = await props.backend.session.get(sessionID);
         if (sess?.model) {
           setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
         } else {
@@ -1199,7 +998,7 @@ export function App(props: AppProps) {
     if (key.ctrl && input === "c") {
       if (isGenerating) {
         const q = question;
-        props.backend.session.abort({ path: { id: sessionID } }).catch(() => {});
+        props.backend.session.abort(sessionID).catch(() => {});
         setIsGenerating(false);
         setLastSubmitted("");
         if (q) {
@@ -1244,7 +1043,7 @@ export function App(props: AppProps) {
 
   const switchSession = useCallback(async (newID: string, banner: string) => {
     if (isGenerating) {
-      props.backend.session.abort({ path: { id: sessionID } }).catch(() => {});
+      props.backend.session.abort(sessionID).catch(() => {});
       setIsGenerating(false);
     }
     props.backend.events.resetEventState();
@@ -1257,8 +1056,7 @@ export function App(props: AppProps) {
     setRunningCost(0);
     setSessionID(newID);
     try {
-      const resp = await props.backend.session.get({ path: { id: newID } });
-      const sess = resp.data;
+      const sess = await props.backend.session.get(newID);
       if (sess?.model) {
         setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
       } else {
@@ -1342,8 +1140,8 @@ export function App(props: AppProps) {
       // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       try {
-        const resp = await props.backend.session.create({ query: { directory: process.cwd() } });
-        const newID = resp.data!.id;
+        const created = await props.backend.session.create({ directory: process.cwd() });
+        const newID = created!.id;
         await switchSession(newID, `new session started (${newID.slice(0, 8)})`);
       } catch (err) {
         renderer.commitSystemMessage(`/new failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1361,9 +1159,9 @@ export function App(props: AppProps) {
       }
       setIsCompacting(true);
       try {
-        await props.backend.session.compact({
-          path: { id: sessionID },
-          body: { providerID: activeModel.providerID, modelID: activeModel.modelID },
+        await props.backend.session.compact(sessionID, {
+          providerID: activeModel.providerID,
+          modelID: activeModel.modelID,
         });
       } catch (err) {
         setIsCompacting(false);
@@ -1377,8 +1175,7 @@ export function App(props: AppProps) {
       // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       try {
-        const resp = await props.backend.session.list();
-        const all = (resp.data ?? []).sort((a, b) => b.time.updated - a.time.updated);
+        const all = ((await props.backend.session.list()) ?? []).sort((a, b) => b.time.updated - a.time.updated);
         if (all.length === 0) { renderer.commitSystemMessage("no sessions found"); return; }
         const items: SessionPickerItem[] = all.map(s => ({
           id: s.id, title: s.title ?? "", parentID: s.parentID,
@@ -1397,8 +1194,8 @@ export function App(props: AppProps) {
       // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       try {
-        const resp = await props.backend.session.fork({ path: { id: sessionID } });
-        const childID = resp.data!.id;
+        const forked = await props.backend.session.fork(sessionID);
+        const childID = forked!.id;
         await switchSession(childID, `forked session (child: ${childID.slice(0, 8)}, parent: ${sessionID.slice(0, 8)})`);
       } catch (err) {
         renderer.commitSystemMessage(`/fork failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1422,7 +1219,7 @@ export function App(props: AppProps) {
         renderer.commitSystemMessage("usage: /rename <name>");
       } else {
         try {
-          await props.backend.session.update({ path: { id: sessionID }, body: { title: renameResult.newLabel } });
+          await props.backend.session.update(sessionID, { title: renameResult.newLabel });
           renderer.rename(renameResult.newLabel);
           setSessionLabel(renameResult.newLabel);
           renderer.commitSystemMessage(`session renamed to "${renameResult.newLabel}"`);
@@ -1462,10 +1259,10 @@ export function App(props: AppProps) {
             //   - The Provider.models values there are the same Model type with limit.context
             //     guaranteed non-null, so the defensive optional-chaining below is not needed.
             props.backend.listProviders(),
-            props.backend.session.get({ path: { id: sessionID } }),
+            props.backend.session.get(sessionID),
           ]);
           const provData = provResp.data!;
-          const sess = sessResp.data!;
+          const sess = sessResp!;
           const curProvID  = activeModel?.providerID ?? sess.model?.providerID;
           const curModelID = activeModel?.modelID    ?? sess.model?.id;
           const items: ModelPickerItem[] = [];
@@ -1587,13 +1384,11 @@ export function App(props: AppProps) {
         setIsGenerating(true);
         try {
           await props.backend.session.sendCommand({
-            path: { id: sessionID },
-            body: {
-              command: cmdName,
-              arguments: args,
-              messageID: ownID,
-              ...(activeModel ? { model: `${activeModel.providerID}/${activeModel.modelID}` } : {}),
-            },
+            sessionID,
+            name: cmdName,
+            args,
+            promptID: ownID,
+            model: activeModel ?? undefined,
           });
         } catch (err) {
           setIsGenerating(false);
@@ -1641,12 +1436,10 @@ export function App(props: AppProps) {
 
     try {
       await props.backend.session.sendPrompt({
-        path: { id: sessionID },
-        body: {
-          parts: [{ type: "text", text }],
-          messageID: ownID,
-          ...(activeModel ? { model: activeModel } : {}),
-        },
+        sessionID,
+        text,
+        promptID: ownID,
+        model: activeModel ?? undefined,
       });
     } catch (err) {
       setIsGenerating(false);
@@ -1659,8 +1452,9 @@ export function App(props: AppProps) {
   const handlePermission = useCallback(async (answer: "once" | "always" | "reject") => {
     if (!permission) return;
     await props.backend.replyPermission({
-      path: { id: permission.sessionID, permissionID: permission.permID },
-      body: { response: answer },
+      sessionID: permission.sessionID,
+      permissionID: permission.permID,
+      decision: answer,
     }).catch(() => {});
     setPermission(null);
   }, [permission, props.backend]);

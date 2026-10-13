@@ -1,40 +1,72 @@
-import type { createOpencodeClient } from "@opencode-ai/sdk/client";
+import type { createOpencodeClient, SessionMessagesResponses } from "@opencode-ai/sdk/client";
 import type { Renderer } from "./renderer/types.ts";
+import type { Role } from "./blocks.ts";
 import { LineEditor } from "./editor.ts";
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
 /**
- * Replay the full message history of a session into the renderer and editor.
+ * One renderer or editor operation produced by translating a session's history.
  *
- * On attach (--resume, --resume-last, --fork, /sessions picker, /fork), this
- * synthesises the prior conversation: text blocks + thinking blocks + tool blocks
- * become visible scrollback; the session title shows in the chrome label; user
- * prompts seed the LineEditor history for up-arrow recall.
+ * Why a dedicated union rather than `ReplEvent`: replay needs operations that `ReplEvent`
+ * cannot express without distorting its meaning. Examples are committing a user-input line
+ * (`ReplEvent` only has `foreign-user-turn`, which carries a messageID the history path
+ * does not have), a turn-end commit (no `ReplEvent` equivalent), and seeding the editor's
+ * up-arrow history. Each variant mirrors one renderer or editor call made by the old
+ * `replaySession` body, so `applyHistory` can reproduce that call sequence exactly.
  *
- * When a session has been compacted (contains a summary message), pre-summary
- * assistant messages are collapsed and replaced by a single indicator line plus
- * the summary block. User prompts are always visible (they seed the LLM via the
- * prompt template, not the message log).
- *
- * For fresh sessions or empty compacted message lists, this is a no-op (returns
- * immediately with zero side effects).
+ * Stage 15.2 (C2.1–2.2b): produced by `translateHistory` (pure) and consumed by `applyHistory`
+ * (the only code here that touches the renderer or editor).
  */
-export async function replaySession(
-  client: Client,
-  renderer: Renderer,
-  sessionID: string,
-  editor: LineEditor,
-): Promise<void> {
-  try {
-    const resp = await client.session.messages({ path: { id: sessionID } });
-    const messages = resp.data ?? [];
-
-    if (messages.length === 0) {
-      // Fresh session or empty — no history to replay
-      return;
+export type HistoryOp =
+  /** `renderer.commitUserInput(text)`. */
+  | { op: "user-input"; text: string }
+  /** `renderer.commitSystemMessage(text)`. Used for the "N earlier messages summarized" line. */
+  | { op: "system-message"; text: string }
+  /**
+   * One complete block: `beginBlock`, then `appendToBlock` when `text` is present, then `endBlock`.
+   * `meta` is passed to `beginBlock` only when present (a tool-call's `{ toolName }`); otherwise
+   * `beginBlock` is called with two arguments, as before.
+   */
+  | {
+      op: "block";
+      partID: string;
+      role: Role;
+      meta?: { toolName: string };
+      text?: string;
+      status: "ok" | "error";
     }
+  /** `renderer.commitCompactionDivider(auto)`. */
+  | { op: "compaction-divider"; auto: boolean }
+  /** `renderer.commitTurnEnd()`, once per rendered assistant message. */
+  | { op: "turn-end" }
+  /** `editor.seedHistory(texts)`. Emitted last, and only when the translation completed without error. */
+  | { op: "seed-history"; texts: string[] };
 
+/**
+ * Pure translation of a session's v1 message list into renderer/editor operations.
+ *
+ * This is the message→renderer logic that used to live inline in `replaySession`. The
+ * branch order and every filter are unchanged, so the operations come out in the same
+ * order the old code made its calls.
+ *
+ * Compaction awareness: when a summary message exists, pre-summary assistant messages are
+ * collapsed into one indicator line, and the first summary message is rendered as a summary block.
+ *
+ * Error behaviour: the old code swallowed errors mid-loop, keeping whatever it had already
+ * rendered, and skipped the final editor seed. This function does the same. On an error it
+ * returns the operations produced so far, without a `seed-history` op.
+ *
+ * @param messages The v1 `session.messages` response data (`{ info, parts }[]`).
+ * @returns The ordered operations. An empty message list gives `[]`.
+ */
+export function translateHistory(messages: SessionMessagesResponses[200]): HistoryOp[] {
+  const ops: HistoryOp[] = [];
+
+  // An empty or fresh session has no history to replay.
+  if (messages.length === 0) return ops;
+
+  try {
     // ─── Pass 1: find the first summary message and count pre-summary assistant messages ───
     let firstSummaryIdx = -1;
     let preSummaryAssistantCount = 0;
@@ -51,26 +83,26 @@ export async function replaySession(
 
     const userTexts: string[] = [];
 
-    // ─── Pass 2: render with compaction awareness ───
+    // ─── Pass 2: translate with compaction awareness ───
     for (let idx = 0; idx < messages.length; idx++) {
       const msg = messages[idx];
       const info = msg.info;
 
-      // ─── User message: extract text and emit user-input block ───
+      // ─── User message: extract text and emit user-input op ───
       if (info.role === "user") {
         const parts = msg.parts ?? [];
         const textParts: string[] = [];
         for (const p of parts) {
           // Filter synthetic/ignored parts to prevent system-reminder parts from
           // appearing in scrollback on session resume (mirrors guard in events.ts
-          // line ~386 for live SSE user message handling).
+          // for live SSE user message handling).
           if (p.type === "text" && p.text && p.synthetic !== true && p.ignored !== true) {
             textParts.push(p.text);
           }
         }
         const text = textParts.join("\n");
         if (text) {
-          renderer.commitUserInput(text);
+          ops.push({ op: "user-input", text });
           userTexts.push(text);
         }
         continue;
@@ -80,35 +112,33 @@ export async function replaySession(
       if (info.role === "assistant") {
         const parts = msg.parts ?? [];
 
-        // Pre-summary assistant message: skip rendering (collapsed)
+        // Pre-summary assistant message: skip rendering (collapsed).
+        // The summary message replaces these collapsed messages.
         if (firstSummaryIdx !== -1 && idx < firstSummaryIdx) {
-          // Already counted in preSummaryAssistantCount; skip parts rendering.
-          // The summary message replaces these collapsed messages.
           continue;
         }
 
-        // The first summary message: render via streaming pipeline (matches live path)
+        // The first summary message: rendered via the streaming pipeline (matches the live path).
         if (firstSummaryIdx !== -1 && idx === firstSummaryIdx) {
           // Emit collapse indicator if there were collapsed messages
           if (preSummaryAssistantCount > 0) {
             const suffix = preSummaryAssistantCount === 1 ? "" : "s";
-            renderer.commitSystemMessage(
-              "[" + preSummaryAssistantCount + " earlier message" + suffix + " summarized — see compacted summary below]",
-            );
+            ops.push({
+              op: "system-message",
+              text: "[" + preSummaryAssistantCount + " earlier message" + suffix + " summarized — see compacted summary below]",
+            });
           }
 
-          // Render summary text parts and compaction parts
+          // Summary text parts and compaction parts
           for (const p of parts) {
             if (p.type === "text" && p.text) {
-              renderer.beginBlock(p.id, "summary");
-              renderer.appendToBlock(p.id, p.text);
-              renderer.endBlock(p.id, "ok");
+              ops.push({ op: "block", partID: p.id, role: "summary", text: p.text, status: "ok" });
             } else if (p.type === "compaction") {
               const compPart = p as unknown as { type: "compaction"; auto?: boolean };
-              renderer.commitCompactionDivider(!!compPart.auto);
+              ops.push({ op: "compaction-divider", auto: !!compPart.auto });
             }
           }
-          renderer.commitTurnEnd();
+          ops.push({ op: "turn-end" });
           continue;
         }
 
@@ -116,16 +146,12 @@ export async function replaySession(
         for (const p of parts) {
           // ─── Text part ───
           if (p.type === "text" && p.text) {
-            renderer.beginBlock(p.id, "text");
-            renderer.appendToBlock(p.id, p.text);
-            renderer.endBlock(p.id, "ok");
+            ops.push({ op: "block", partID: p.id, role: "text", text: p.text, status: "ok" });
           }
 
           // ─── Reasoning (thinking) part ───
           else if (p.type === "reasoning" && p.text) {
-            renderer.beginBlock(p.id, "thinking");
-            renderer.appendToBlock(p.id, p.text);
-            renderer.endBlock(p.id, "ok");
+            ops.push({ op: "block", partID: p.id, role: "thinking", text: p.text, status: "ok" });
           }
 
           // ─── Tool part ───
@@ -139,49 +165,124 @@ export async function replaySession(
             };
 
             if (toolPart.state.status === "completed") {
-              // Tool call block
-              renderer.beginBlock(toolPart.id, "tool-call", {
-                toolName: toolPart.tool,
+              // Tool call block, then the tool result block when output exists
+              ops.push({
+                op: "block",
+                partID: toolPart.id,
+                role: "tool-call",
+                meta: { toolName: toolPart.tool },
+                status: "ok",
               });
-              renderer.endBlock(toolPart.id, "ok");
 
-              // Tool result block (if output exists)
               const output = toolPart.state.output ?? "";
               if (output) {
-                const resultPartID = toolPart.id + "-result";
-                renderer.beginBlock(resultPartID, "tool-result");
-                renderer.appendToBlock(resultPartID, output);
-                renderer.endBlock(resultPartID, "ok");
+                ops.push({
+                  op: "block",
+                  partID: toolPart.id + "-result",
+                  role: "tool-result",
+                  text: output,
+                  status: "ok",
+                });
               }
             } else if (toolPart.state.status === "error") {
-              // Tool error: emit tool-call block with error status, no result
-              renderer.beginBlock(toolPart.id, "tool-call", {
-                toolName: toolPart.tool,
+              // Tool error: tool-call block with error status, no result
+              ops.push({
+                op: "block",
+                partID: toolPart.id,
+                role: "tool-call",
+                meta: { toolName: toolPart.tool },
+                status: "error",
               });
-              renderer.endBlock(toolPart.id, "error");
             }
           }
 
           // ─── Compaction part (post-summary) ───
           else if (p.type === "compaction") {
             const compPart = p as unknown as { type: "compaction"; auto?: boolean };
-            renderer.commitCompactionDivider(!!compPart.auto);
+            ops.push({ op: "compaction-divider", auto: !!compPart.auto });
           }
 
           // ─── Other part types (step-*, snapshot, patch, agent, retry, subtask, file) ───
-          // Skip these entirely — out of scope for Stage 5.2
+          // Skipped entirely, as before.
         }
 
         // End turn after all parts
-        renderer.commitTurnEnd();
+        ops.push({ op: "turn-end" });
       }
     }
 
-    // Seed the editor history from collected user texts
+    // Seed the editor history from the collected user texts
     if (userTexts.length > 0) {
-      editor.seedHistory(userTexts);
+      ops.push({ op: "seed-history", texts: userTexts });
     }
-  } catch (err) {
-    // Silently swallow errors — replay is best-effort, not critical to startup
+  } catch {
+    // Silently swallow translation errors: replay is best-effort. The ops produced
+    // before the error are kept; no seed-history op is added.
+  }
+
+  return ops;
+}
+
+/**
+ * Fetches a session's message list and translates it into history operations.
+ * Errors are swallowed and yield `[]`: replay is best-effort, not critical to startup.
+ *
+ * @param client    v1 SDK client.
+ * @param sessionID Session to replay.
+ */
+export async function fetchHistory(client: Client, sessionID: string): Promise<HistoryOp[]> {
+  try {
+    const resp = await client.session.messages({ path: { id: sessionID } });
+    return translateHistory(resp.data ?? []);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Performs history operations against the renderer and editor, in order. This is the only
+ * place that calls the renderer or editor for history replay.
+ *
+ * An error thrown by the renderer propagates to the caller, as before.
+ *
+ * @param renderer Renderer to drive.
+ * @param editor   Editor whose up-arrow history is seeded.
+ * @param ops      Operations from `translateHistory` or `fetchHistory`.
+ */
+export function applyHistory(
+  renderer: Renderer,
+  editor: Pick<LineEditor, "seedHistory">,
+  ops: HistoryOp[],
+): void {
+  for (const op of ops) {
+    switch (op.op) {
+      case "user-input":
+        renderer.commitUserInput(op.text);
+        break;
+      case "system-message":
+        renderer.commitSystemMessage(op.text);
+        break;
+      case "block":
+        // Two-argument beginBlock unless meta is present, matching the old call shapes exactly.
+        if (op.meta !== undefined) {
+          renderer.beginBlock(op.partID, op.role, op.meta);
+        } else {
+          renderer.beginBlock(op.partID, op.role);
+        }
+        if (op.text !== undefined) {
+          renderer.appendToBlock(op.partID, op.text);
+        }
+        renderer.endBlock(op.partID, op.status);
+        break;
+      case "compaction-divider":
+        renderer.commitCompactionDivider(op.auto);
+        break;
+      case "turn-end":
+        renderer.commitTurnEnd();
+        break;
+      case "seed-history":
+        editor.seedHistory(op.texts);
+        break;
+    }
   }
 }

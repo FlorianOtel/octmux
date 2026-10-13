@@ -363,16 +363,16 @@ let resolvedDirectory: string | undefined;
 if (resumeArg) {
   // --resume <id>: validate that the session exists
   try {
-    const resp = await bootstrapBackend.session.get({ path: { id: resumeArg } });
-    if (!resp.data?.id) {
+    const resumed = await bootstrapBackend.session.get(resumeArg);
+    if (!resumed?.id) {
       console.error(`octmux: session not found: ${resumeArg}`);
       process.exit(1);
     }
     sessionID = resumeArg;
-    const title = resp.data.title ?? "";
+    const title = resumed.title ?? "";
     sessionLabel = title || sessionID.slice(0, 8);
     startupBanner = `resumed session ${sessionID.slice(0, 8)}${title ? ` — "${title}"` : ""}`;
-    resolvedDirectory = resp.data.directory;
+    resolvedDirectory = resumed.directory;
   } catch (err) {
     console.error(`octmux: failed to resume session ${resumeArg}: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -380,8 +380,7 @@ if (resumeArg) {
 } else if (resumeLast) {
   // --resume-last: find the most recently updated session
   try {
-    const resp = await bootstrapBackend.session.list();
-    const sessions = resp.data ?? [];
+    const sessions = (await bootstrapBackend.session.list()) ?? [];
     if (sessions.length === 0) {
       console.error("octmux: no sessions found to resume");
       process.exit(1);
@@ -400,20 +399,20 @@ if (resumeArg) {
 } else if (forkArg) {
   // --fork <id>: validate parent exists, then fork it and attach to the child.
   try {
-    const parent = await bootstrapBackend.session.get({ path: { id: forkArg } });
-    if (!parent.data?.id) {
+    const parent = await bootstrapBackend.session.get(forkArg);
+    if (!parent?.id) {
       console.error(`octmux: parent session not found: ${forkArg}`);
       process.exit(1);
     }
-    const child = await bootstrapBackend.session.fork({ path: { id: forkArg }, query: { directory: cwd } });
-    if (!child.data?.id) {
+    const child = await bootstrapBackend.session.fork(forkArg, { directory: cwd });
+    if (!child?.id) {
       console.error(`octmux: fork returned no child session for parent ${forkArg}`);
       process.exit(1);
     }
-    sessionID = child.data.id;
+    sessionID = child.id;
     sessionLabel = sessionID.slice(0, 8);
     startupBanner = `forked from ${forkArg.slice(0, 8)} → ${sessionID.slice(0, 8)}`;
-    resolvedDirectory = child.data.directory;
+    resolvedDirectory = child.directory;
   } catch (err) {
     console.error(`octmux: failed to fork session ${forkArg}: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -421,8 +420,8 @@ if (resumeArg) {
 } else {
   // Default: create a new session anchored to octmux's launch directory.
   // Without this, OC inherits the daemon's cwd ($HOME) instead of where octmux was invoked.
-  const session = await bootstrapBackend.session.create({ query: { directory: cwd } });
-  sessionID = session.data!.id;
+  const session = await bootstrapBackend.session.create({ directory: cwd });
+  sessionID = session!.id;
   sessionLabel = sessionID.slice(0, 8);
 }
 

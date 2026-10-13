@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { findRunningTaskChildSessionID, isTurnStale } from "./app";
+import { findRunningTaskChildSessionID, isTurnStale } from "./backend/v1-queries.ts";
 
 // Regression coverage for the 2026-09-11 incident: a /brain Task-tool dispatch to
 // an actor-heavy subagent (sohoai/glm-5.3) hung for 11+ hours because the harness's

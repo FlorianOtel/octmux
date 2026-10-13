@@ -12,9 +12,7 @@
  * `src/replay.ts`, `src/utils/session-ancestry.ts`) and are only referenced.
  */
 
-import type { Backend, BackendEvents, BackendSession, V1Client } from "./types.ts";
-import type { Renderer } from "../renderer/types.ts";
-import type { LineEditor } from "../editor.ts";
+import type { Backend, BackendEvents, BackendSession, PermissionDecision, V1Client } from "./types.ts";
 import { getAuthHeaders } from "../auth-headers.ts";
 import {
   filterEvent,
@@ -25,8 +23,13 @@ import {
   recordOwnCommandPrefix,
   classifyUserTurn,
 } from "../events.ts";
-import { replaySession } from "../replay.ts";
+import { fetchHistory } from "../replay.ts";
 import { isSessionDescendant } from "../utils/session-ancestry.ts";
+import {
+  queryHasPendingToolCalls,
+  queryLatestAssistantActivity,
+  queryTokenUsage,
+} from "./v1-queries.ts";
 
 /**
  * Backend over the v1 SDK client plus the raw HTTP endpoints octmux still calls
@@ -51,18 +54,74 @@ export class V1Backend implements Backend {
   ) {
     // Arrow functions read `this.client` at call time, so the property initialisers
     // below do not depend on the order of parameter-property assignment.
+    //
+    // Each member builds exactly the SDK request the REPL made before the flat-argument
+    // reshape (Stage 15.2a), and resolves per the convention documented on BackendSession:
+    // `.data` for call sites that read the response, `void` for those that never did.
     this.session = {
-      getMessages: (options) => this.client.session.messages(options),
-      getChildren: (options) => this.client.session.children(options),
-      get: (options) => this.client.session.get(options),
-      abort: (options) => this.client.session.abort(options),
-      create: (options) => this.client.session.create(options),
-      compact: (options) => this.client.session.summarize(options),
-      list: () => this.client.session.list(),
-      fork: (options) => this.client.session.fork(options),
-      update: (options) => this.client.session.update(options),
-      sendCommand: (options) => this.client.session.command(options),
-      sendPrompt: (options) => this.client.session.promptAsync(options),
+      // Read-style operations: resolve with `.data` (undefined on an error status).
+      getMessages: async (sessionID) => (await this.client.session.messages({ path: { id: sessionID } })).data,
+      getChildren: async (sessionID) => (await this.client.session.children({ path: { id: sessionID } })).data,
+      get: async (sessionID) => (await this.client.session.get({ path: { id: sessionID } })).data,
+      list: async () => (await this.client.session.list()).data,
+      create: async ({ directory }) => (await this.client.session.create({ query: { directory } })).data,
+
+      // `query` is only sent when a directory is given, so the no-option request matches today's call.
+      fork: async (sessionID, options) =>
+        (
+          await this.client.session.fork({
+            path: { id: sessionID },
+            ...(options?.directory !== undefined ? { query: { directory: options.directory } } : {}),
+          })
+        ).data,
+
+      // Abort: the SDK types the response body as a boolean. `interrupted` is that boolean,
+      // so an error status reports `false` (the call sites ignore the value either way).
+      abort: async (sessionID) => {
+        const resp = await this.client.session.abort({ path: { id: sessionID } });
+        return { interrupted: resp.data === true };
+      },
+
+      // Void-style operations: the response is never read, so error statuses are swallowed as before.
+      compact: async (sessionID, model) => {
+        await this.client.session.summarize({
+          path: { id: sessionID },
+          body: { providerID: model.providerID, modelID: model.modelID },
+        });
+      },
+      update: async (sessionID, options) => {
+        await this.client.session.update({ path: { id: sessionID }, body: { title: options.title } });
+      },
+
+      // Prompt body: `parts`, then `messageID`, then `model` only when given (same key order as before).
+      sendPrompt: async (options) => {
+        await this.client.session.promptAsync({
+          path: { id: options.sessionID },
+          body: {
+            parts: [{ type: "text", text: options.text }],
+            messageID: options.promptID,
+            ...(options.model
+              ? { model: { providerID: options.model.providerID, modelID: options.model.modelID } }
+              : {}),
+          },
+        });
+      },
+
+      // Command body: `command`, `arguments`, `messageID`, then `model` as a "provider/model" string.
+      sendCommand: async (options) => {
+        await this.client.session.command({
+          path: { id: options.sessionID },
+          body: {
+            command: options.name,
+            arguments: options.args,
+            messageID: options.promptID,
+            ...(options.model ? { model: `${options.model.providerID}/${options.model.modelID}` } : {}),
+          },
+        });
+      },
+
+      // v1 has no session-level model-set operation (see BackendSession.setModel). No request is sent.
+      setModel: async () => {},
     };
 
     // Shorthand entries reference the imported functions directly: no logic is added.
@@ -74,6 +133,15 @@ export class V1Backend implements Backend {
       recordOwnMessageID,
       recordOwnCommandPrefix,
       classifyUserTurn,
+
+      // Session queries (Stage 15.2 C2.1–2.2b). Each reads through `this.session`, so the request
+      // is the same `client.session.*` call the REPL made before the scan moved out of app.tsx.
+      hasPendingToolCalls: (sessionID) => queryHasPendingToolCalls(this.session, sessionID),
+      getLatestAssistantActivity: (sessionID) => queryLatestAssistantActivity(this.session, sessionID, Date.now()),
+      getTokenUsage: (sessionID) => queryTokenUsage(this.session, sessionID),
+
+      // History: fetch the message list and translate it into replay operations (src/replay.ts).
+      getHistory: (sessionID) => fetchHistory(this.client, sessionID),
     };
   }
 
@@ -123,11 +191,21 @@ export class V1Backend implements Backend {
     });
   }
 
-  /** v1 `client.postSessionIdPermissionsPermissionId(...)`. */
-  replyPermission(
-    options: Parameters<V1Client["postSessionIdPermissionsPermissionId"]>[0],
-  ): ReturnType<V1Client["postSessionIdPermissionsPermissionId"]> {
-    return this.client.postSessionIdPermissionsPermissionId(options);
+  /**
+   * v1 `client.postSessionIdPermissionsPermissionId({ path: { id, permissionID }, body: { response } })`.
+   * `decision` is sent as `body.response`. `message` has no v1 counterpart and is not sent.
+   * The response is never read, so an error status is swallowed as before.
+   */
+  async replyPermission(options: {
+    sessionID: string;
+    permissionID: string;
+    decision: PermissionDecision;
+    message?: string;
+  }): Promise<void> {
+    await this.client.postSessionIdPermissionsPermissionId({
+      path: { id: options.sessionID, permissionID: options.permissionID },
+      body: { response: options.decision },
+    });
   }
 
   /**
@@ -142,13 +220,5 @@ export class V1Backend implements Backend {
   /** v1 `client.global.event({})`; the caller reads `.stream` from the result. */
   subscribeEvents(): ReturnType<V1Client["global"]["event"]> {
     return this.client.global.event({});
-  }
-
-  /**
-   * Forwards to `replaySession()` in `src/replay.ts`, which still takes the raw client.
-   * Behaviour is unchanged: that function calls `client.session.messages` internally.
-   */
-  replaySession(renderer: Renderer, sessionID: string, editor: LineEditor): Promise<void> {
-    return replaySession(this.client, renderer, sessionID, editor);
   }
 }

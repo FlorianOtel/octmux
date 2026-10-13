@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { pickPostSummaryAssistantTokenUsage } from "./app";
+import { pickPostSummaryAssistantTokenUsage } from "./backend/v1-queries.ts";
 
 type MessageForUsageScan = {
   info: {

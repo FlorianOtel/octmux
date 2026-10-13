@@ -95,8 +95,7 @@ export class OrchestraWatcher extends EventEmitter {
    */
   private async resolveHarnessSessionID(sessionID: string): Promise<string | null> {
     try {
-      const resp = await this.backend.session.list();
-      const sessions = resp.data ?? [];
+      const sessions = (await this.backend.session.list()) ?? [];
 
       // Filter: parentID === null && directory matches current working directory
       const currentCwd = this.safeRealpath(process.cwd());
