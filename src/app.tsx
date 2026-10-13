@@ -1,15 +1,12 @@
 import { Box, Static, Text, useStdout, useInput, measureElement } from "ink";
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore } from "react";
-import type { createOpencodeClient } from "@opencode-ai/sdk/client";
 import type { Command as OcCommand } from "@opencode-ai/sdk/client";
+import type { Backend } from "./backend/types.ts";
 import * as path from "path";
 import { LineEditor } from "./editor.ts";
-import { replaySession } from "./replay.ts";
 import { UserTurnDebouncer } from "./user-turn-debouncer.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
-import { filterEvent, resetEventState, synthesizeSessionIdleEvents, hasOpenStreamingPart, recordOwnMessageID, recordOwnCommandPrefix, classifyUserTurn, type ReplEvent } from "./events.ts";
-import { isSessionDescendant } from "./utils/session-ancestry.ts";
-import { getAuthHeaders } from "./auth-headers.ts";
+import type { ReplEvent } from "./events.ts";
 import { mintUserMessageID } from "./message-id.ts";
 import { formatLine } from "./blocks.ts";
 import { parseShowCommand, parseBlockOutputCommand, parseExitCommand, parseRenameCommand, parseModelCommand, parseHelpCommand, parseNewCommand, parseCompactCommand, parseSessionsCommand, parseForkCommand, parseResyncCommand } from "./commands.ts";
@@ -254,17 +251,13 @@ function commitOptionsBlock(renderer: Renderer, reqID: string, qs: QuestionType[
   renderer.commitSystemMessage(formatOptionsBlock(qs));
 }
 
-type Client = ReturnType<typeof createOpencodeClient>;
-
 type AppProps = {
-  client: Client;
+  backend: Backend;
   sessionID: string;
   sessionLabel: string;
   eventStream: AsyncIterable<{ payload: unknown }>;
   onExit: () => Promise<void>;
-  baseUrl: string;
   renderer: Renderer;
-  cwd: string;
   onRedraw?: () => void;
   setPasteCallback?: (cb: (text: string) => void) => void;
   singleMode: boolean;
@@ -484,10 +477,10 @@ export function App(props: AppProps) {
         // Layer 2: skip if an SSE event arrived recently (within 5 s)
         if (Date.now() - lastSseEventTimeRef.current >= 5000) {
           // Layer 3: skip if a streaming text/reasoning part is open
-          if (!hasOpenStreamingPart()) {
+          if (!props.backend.events.hasOpenStreamingPart()) {
             // Layer 4: REST confirmation — original anyPending + isGenerating check
             try {
-              const resp = await props.client.session.messages({ path: { id: sessionIDRef.current } });
+              const resp = await props.backend.session.getMessages({ path: { id: sessionIDRef.current } });
               const msgs = resp.data ?? [];
               const anyPending = msgs.some(m =>
                 (m.parts ?? []).some(p =>
@@ -496,7 +489,7 @@ export function App(props: AppProps) {
                 )
               );
               if (!anyPending && isGeneratingRef.current) {
-                applyReplEvents(synthesizeSessionIdleEvents());
+                applyReplEvents(props.backend.events.synthesizeSessionIdleEvents());
               }
             } catch {}
           }
@@ -514,7 +507,7 @@ export function App(props: AppProps) {
       // Question/permission discovery: run unconditionally (safe modal recovery, no stream mutation)
       // 1. Missed question discovery
       try {
-        const r = await fetch(`${props.baseUrl}/question`, { headers: { "x-opencode-directory": props.cwd, ...getAuthHeaders() } });
+        const r = await props.backend.listQuestions();
         if (r.ok) {
           const list = await r.json() as Array<{
             id: string; sessionID: string;
@@ -528,13 +521,13 @@ export function App(props: AppProps) {
             list.map(q =>
               q.sessionID === sessionIDRef.current
                 ? Promise.resolve(true)
-                : isSessionDescendant(q.sessionID, sessionIDRef.current, props.baseUrl, props.cwd)
+                : props.backend.isSessionDescendant(q.sessionID, sessionIDRef.current)
             )
           );
           const ours = list.filter((_, i) => flags[i]).sort((a, b) => a.id.localeCompare(b.id));
           const oldest = ours[0];
           if (oldest && oldest.id !== questionIDRef.current) {
-            const evRaw = filterEvent({
+            const evRaw = props.backend.events.translateEvent({
               type: "question.asked",
               properties: { id: oldest.id, sessionID: oldest.sessionID, questions: oldest.questions },
             } as unknown as Event, oldest.sessionID);
@@ -548,7 +541,7 @@ export function App(props: AppProps) {
 
       // 2. Missed permission discovery
       try {
-        const r = await fetch(`${props.baseUrl}/permission`, { headers: { "x-opencode-directory": props.cwd, ...getAuthHeaders() } });
+        const r = await props.backend.listPermissions();
         if (r.ok) {
           const list = await r.json() as Array<{
             id: string; sessionID: string; permission: string; patterns?: string[];
@@ -557,13 +550,13 @@ export function App(props: AppProps) {
             list.map(p =>
               p.sessionID === sessionIDRef.current
                 ? Promise.resolve(true)
-                : isSessionDescendant(p.sessionID, sessionIDRef.current, props.baseUrl, props.cwd)
+                : props.backend.isSessionDescendant(p.sessionID, sessionIDRef.current)
             )
           );
           const ours = list.filter((_, i) => flags[i]).sort((a, b) => a.id.localeCompare(b.id));
           const oldest = ours[0];
           if (oldest && oldest.id !== permissionIDRef.current) {
-            const evRaw = filterEvent({
+            const evRaw = props.backend.events.translateEvent({
               type: "permission.asked",
               properties: { id: oldest.id, sessionID: oldest.sessionID, permission: oldest.permission, patterns: oldest.patterns ?? [] },
             } as unknown as Event, oldest.sessionID);
@@ -637,7 +630,7 @@ export function App(props: AppProps) {
       if (Date.now() - lastSseEventTimeRef.current < 180_000) return;
       if (stallBannerShownRef.current) return;
       try {
-        const resp = await props.client.session.messages({ path: { id: sessionIDRef.current } });
+        const resp = await props.backend.session.getMessages({ path: { id: sessionIDRef.current } });
         const msgs = resp.data ?? [];
         const assistants = msgs.filter(m => m.info.role === "assistant");
         if (assistants.length === 0) return;
@@ -656,7 +649,7 @@ export function App(props: AppProps) {
         // tool call blocking on a subagent that has itself gone silent.
         const childSessionID = findRunningTaskChildSessionID(parts as PartForStallCheck[]);
         if (!childSessionID) return;
-        const childResp = await props.client.session.messages({ path: { id: childSessionID } });
+        const childResp = await props.backend.session.getMessages({ path: { id: childSessionID } });
         const childMsgs = childResp.data ?? [];
         const childAssistants = childMsgs.filter(m => m.info.role === "assistant");
         if (childAssistants.length === 0) return;
@@ -673,12 +666,12 @@ export function App(props: AppProps) {
       }
     }, 30_000);
     return () => clearInterval(t);
-  }, [isGenerating, props.client, renderer]);
+  }, [isGenerating, props.backend, renderer]);
 
   // One-shot: set up orchestra badge watcher. Must be declared BEFORE any effect that
   // references orchestraBadge (TDZ guard per feedback-react-effect-tdz.md).
   useEffect(() => {
-    const watcher = new OrchestraWatcher(props.client);
+    const watcher = new OrchestraWatcher(props.backend);
     watcherRef.current = watcher;
     watcher.on("changed", setOrchestraBadge);
     watcher.start();
@@ -687,7 +680,7 @@ export function App(props: AppProps) {
       watcher.dispose();
       watcherRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- props.client is module-level singleton; watcher initialises once
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- props.backend is module-level singleton; watcher initialises once
   }, []);
 
   // Update watcher with new session ID when it changes
@@ -705,7 +698,7 @@ export function App(props: AppProps) {
   useEffect(() => {
     (async () => {
       try {
-        const resp = await props.client.command.list();
+        const resp = await props.backend.listCommands();
         const cmds = resp.data ?? [];
         const map = new Map<string, OcCommand>();
         for (const cmd of cmds) map.set(cmd.name, cmd);
@@ -716,17 +709,17 @@ export function App(props: AppProps) {
         );
       }
     })();
-  }, [props.client, renderer]);
+  }, [props.backend, renderer]);
 
   // When model changes: refresh context window in status bar, preserving used tokens.
   // This fires on startup (when setActiveModel is called) and on /model switches.
   useEffect(() => {
     if (!activeModel) return;
-    getContextWindow(props.client, activeModel.providerID, activeModel.modelID)
+    getContextWindow(props.backend, activeModel.providerID, activeModel.modelID)
       .then(ctxWindow =>
         setTokenUsage(prev => ({ used: prev?.used ?? 0, contextWindow: ctxWindow }))
       );
-  }, [props.client, activeModel]);
+  }, [props.backend, activeModel]);
 
   // Slash-completion: subscribe to editor changes and recompute overlay state
   useEffect(() => {
@@ -781,7 +774,7 @@ export function App(props: AppProps) {
   // the latest non-summary assistant (mirroring pre-summary backward-walk behavior).
   const refreshTokenUsage = useCallback(async (sid: string) => {
     try {
-      const messagesResp = await props.client.session.messages({ path: { id: sid } });
+      const messagesResp = await props.backend.session.getMessages({ path: { id: sid } });
       const messages = messagesResp.data ?? [];
 
       // Use the pure helper for token usage scanning
@@ -802,7 +795,7 @@ export function App(props: AppProps) {
       // seed activeModel from session.get().data.model, so refreshTokenUsage
       // only needs to update display-only values (token bar and running cost).
       const ctxWindow = await getContextWindow(
-        props.client,
+        props.backend,
         result.providerID ?? "",
         result.modelID ?? "",
       );
@@ -821,11 +814,11 @@ export function App(props: AppProps) {
 
       // Sum child sessions (one level deep)
       try {
-        const childrenResp = await props.client.session.children({ path: { id: sid } });
+        const childrenResp = await props.backend.session.getChildren({ path: { id: sid } });
         const children = childrenResp.data ?? [];
         for (const child of children) {
           try {
-            const childMessagesResp = await props.client.session.messages({ path: { id: child.id } });
+            const childMessagesResp = await props.backend.session.getMessages({ path: { id: child.id } });
             const childMessages = childMessagesResp.data ?? [];
             for (const msg of childMessages) {
               if (msg.info.role === "assistant") {
@@ -847,13 +840,13 @@ export function App(props: AppProps) {
     } catch {
       // Silently swallow errors; bar stays at last value
     }
-  }, [props.client]);
+  }, [props.backend]);
 
   // Stable replay callback: emit prior session history to renderer and seed editor.
   // Declared BEFORE the one-shot session.get effect (critical for TDZ).
   const runReplay = useCallback(async (sid: string) => {
-    await replaySession(props.client, renderer, sid, editor);
-  }, [props.client, renderer, editor]);
+    await props.backend.replaySession(renderer, sid, editor);
+  }, [props.backend, renderer, editor]);
 
   // Per-messageID debouncer for foreign user turns (Stage 13.x).
   const userTurnDebouncerRef = useRef<UserTurnDebouncer | null>(null);
@@ -944,7 +937,7 @@ export function App(props: AppProps) {
             setPermission({ permID: ev.permID, title: ev.title, sessionID: ev.sessionID });
           } else if (permModeRef.current === "allow") {
             // Fire in background without awaiting
-            props.client.postSessionIdPermissionsPermissionId({
+            props.backend.replyPermission({
               path: { id: ev.sessionID, permissionID: ev.permID },
               body: { response: "always" },
             }).catch(() => {
@@ -952,7 +945,7 @@ export function App(props: AppProps) {
             });
           } else if (permModeRef.current === "deny") {
             // Fire in background without awaiting
-            props.client.postSessionIdPermissionsPermissionId({
+            props.backend.replyPermission({
               path: { id: ev.sessionID, permissionID: ev.permID },
               body: { response: "reject" },
             }).catch(() => {
@@ -971,7 +964,7 @@ export function App(props: AppProps) {
           // Fire in background — do not block the event-application loop.
           (async () => {
             try {
-              const r = await fetch(`${props.baseUrl}/question`, { headers: { "x-opencode-directory": props.cwd, ...getAuthHeaders() } });
+              const r = await props.backend.listQuestions();
               if (!r.ok) return;
               const all = await r.json() as Array<{
                 id: string; sessionID: string;
@@ -1032,7 +1025,7 @@ export function App(props: AppProps) {
           // Adopt the new model only if it's available locally (validated via validateModel).
           if (ev.sessionID === sessionIDRef.current) {
             (async () => {
-              const valid = await validateModel(props.client, ev.providerID, ev.modelID);
+              const valid = await validateModel(props.backend, ev.providerID, ev.modelID);
               if (valid) {
                 setActiveModel({ providerID: valid.providerID, modelID: valid.modelID });
               } else {
@@ -1057,7 +1050,7 @@ export function App(props: AppProps) {
         renderer.commitError(`[renderer error] ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-  }, [props.client, renderer, refreshTokenUsage]);
+  }, [props.backend, renderer, refreshTokenUsage]);
 
   // Reassign every render — same pattern as runReconcilerPassRef (~:411-455) —
   // so onFire always calls the CURRENT applyReplEvents/isGeneratingRef closures.
@@ -1065,7 +1058,7 @@ export function App(props: AppProps) {
     userTurnDebouncerRef.current?.setCallbacks({
       isHeld: () => isGeneratingRef.current,
       onFire: (messageID) => {
-        const events = classifyUserTurn(messageID);
+        const events = props.backend.events.classifyUserTurn(messageID);
         if (events.length > 0) applyReplEvents(events);
       },
     });
@@ -1090,13 +1083,13 @@ export function App(props: AppProps) {
   useEffect(() => {
     (async () => {
       try {
-        const resp = await props.client.session.get({ path: { id: sessionID } });
+        const resp = await props.backend.session.get({ path: { id: sessionID } });
         const sess = resp.data;
         if (sess?.model) {
           setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
         } else {
           // No model bound to session yet — seed from server config default
-          const defaultModel = await getDefaultModel(props.client);
+          const defaultModel = await getDefaultModel(props.backend);
           if (defaultModel) {
             setActiveModel(defaultModel);
           }
@@ -1110,7 +1103,7 @@ export function App(props: AppProps) {
       await refreshTokenUsage(sessionID);
       await runReplay(sessionID);
     })();
-  }, [props.client, sessionID, refreshTokenUsage, runReplay, renderer]);
+  }, [props.backend, sessionID, refreshTokenUsage, runReplay, renderer]);
 
   // SSE loop with reconnect: thin translation layer — all rendering delegated to renderer.
   // Stage 4.5.3: wrapped in try/catch with exponential backoff reconnect (1s → 30s cap).
@@ -1140,7 +1133,7 @@ export function App(props: AppProps) {
             lastSseEventTimeRef.current = Date.now();
             setSseHealth("ok");
             backoff = 1000;
-            const evRaw = filterEvent(globalEvent.payload as unknown as Event, sessionIDRef.current);
+            const evRaw = props.backend.events.translateEvent(globalEvent.payload as unknown as Event, sessionIDRef.current);
             if (!evRaw) {
               // For permission/question events from descendant sessions, filterEvent returns null
               // because it only accepts events from sessionIDRef.current. Re-check those event types
@@ -1151,9 +1144,9 @@ export function App(props: AppProps) {
                 ev.properties?.sessionID &&
                 ev.properties.sessionID !== sessionIDRef.current
               ) {
-                const isDesc = await isSessionDescendant(ev.properties.sessionID, sessionIDRef.current, props.baseUrl, props.cwd);
+                const isDesc = await props.backend.isSessionDescendant(ev.properties.sessionID, sessionIDRef.current);
                 if (isDesc) {
-                  const childEvRaw = filterEvent(globalEvent.payload as unknown as Event, ev.properties.sessionID);
+                  const childEvRaw = props.backend.events.translateEvent(globalEvent.payload as unknown as Event, ev.properties.sessionID);
                   if (childEvRaw) applyReplEvents(Array.isArray(childEvRaw) ? childEvRaw : [childEvRaw]);
                 }
               }
@@ -1169,7 +1162,7 @@ export function App(props: AppProps) {
         await new Promise(r => setTimeout(r, backoff));
         backoff = Math.min(backoff * 2, 30000);
         try {
-          const fresh = await props.client.global.event({});
+          const fresh = await props.backend.subscribeEvents();
           stream = fresh.stream;
           // One-shot reconciliation pass after reconnect
           await runReconcilerPassRef.current?.();
@@ -1184,7 +1177,7 @@ export function App(props: AppProps) {
       }
     })();
     return () => { cancelled = true; };
-  }, [props.client, props.eventStream, applyReplEvents]);
+  }, [props.backend, props.eventStream, applyReplEvents]);
 
   // Sync queue mode; auto-submit pending queue when model goes idle
   useEffect(() => {
@@ -1206,15 +1199,11 @@ export function App(props: AppProps) {
     if (key.ctrl && input === "c") {
       if (isGenerating) {
         const q = question;
-        props.client.session.abort({ path: { id: sessionID } }).catch(() => {});
+        props.backend.session.abort({ path: { id: sessionID } }).catch(() => {});
         setIsGenerating(false);
         setLastSubmitted("");
         if (q) {
-          fetch(`${props.baseUrl}/question/${q.reqID}/reject`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-opencode-directory": props.cwd, ...getAuthHeaders() },
-            body: JSON.stringify({}),
-          }).catch(() => {});
+          props.backend.rejectQuestion(q.reqID).catch(() => {});
         }
         // Defensive: ensure PromptInput cannot be left disabled by a stale modal
         // or stray session.updated event. Ctrl-C-during-generation explicitly
@@ -1255,10 +1244,10 @@ export function App(props: AppProps) {
 
   const switchSession = useCallback(async (newID: string, banner: string) => {
     if (isGenerating) {
-      props.client.session.abort({ path: { id: sessionID } }).catch(() => {});
+      props.backend.session.abort({ path: { id: sessionID } }).catch(() => {});
       setIsGenerating(false);
     }
-    resetEventState();
+    props.backend.events.resetEventState();
     userTurnDebouncerRef.current?.reset();
     renderer.clearAll();
     setProcTimes({ thinking: null, tools: null, generating: null });
@@ -1268,13 +1257,13 @@ export function App(props: AppProps) {
     setRunningCost(0);
     setSessionID(newID);
     try {
-      const resp = await props.client.session.get({ path: { id: newID } });
+      const resp = await props.backend.session.get({ path: { id: newID } });
       const sess = resp.data;
       if (sess?.model) {
         setActiveModel({ providerID: sess.model.providerID, modelID: sess.model.id });
       } else {
         // No model bound to session yet — seed from server config default
-        const defaultModel = await getDefaultModel(props.client);
+        const defaultModel = await getDefaultModel(props.backend);
         if (defaultModel) {
           setActiveModel(defaultModel);
         }
@@ -1284,7 +1273,7 @@ export function App(props: AppProps) {
     renderer.commitSystemMessage(banner);
     await refreshTokenUsage(newID);
     await runReplay(newID);
-  }, [isGenerating, sessionID, props.client, renderer, refreshTokenUsage, runReplay]);
+  }, [isGenerating, sessionID, props.backend, renderer, refreshTokenUsage, runReplay]);
 
   const handleResync = useCallback(async () => {
     // Ctrl-R / /resync triggers the guarded reconciler (see lines 166–244).
@@ -1296,13 +1285,9 @@ export function App(props: AppProps) {
 
   const handleQuestion = useCallback(async (answers: string[][]) => {
     if (!question) return;
-    await fetch(`${props.baseUrl}/question/${question.reqID}/reply`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-opencode-directory": props.cwd, ...getAuthHeaders() },
-      body: JSON.stringify({ answers }),
-    }).catch(() => {});
+    await props.backend.replyQuestion(question.reqID, answers).catch(() => {});
     setQuestion(null);
-  }, [question, props.baseUrl, props.cwd]);
+  }, [question, props.backend]);
 
   const handleSubmit = useCallback(async (text: string) => {
     // Stage 9.4: per-question collection. Collect one sub-Q answer at a time,
@@ -1357,7 +1342,7 @@ export function App(props: AppProps) {
       // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       try {
-        const resp = await props.client.session.create({ query: { directory: process.cwd() } });
+        const resp = await props.backend.session.create({ query: { directory: process.cwd() } });
         const newID = resp.data!.id;
         await switchSession(newID, `new session started (${newID.slice(0, 8)})`);
       } catch (err) {
@@ -1376,7 +1361,7 @@ export function App(props: AppProps) {
       }
       setIsCompacting(true);
       try {
-        await props.client.session.summarize({
+        await props.backend.session.compact({
           path: { id: sessionID },
           body: { providerID: activeModel.providerID, modelID: activeModel.modelID },
         });
@@ -1392,7 +1377,7 @@ export function App(props: AppProps) {
       // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       try {
-        const resp = await props.client.session.list();
+        const resp = await props.backend.session.list();
         const all = (resp.data ?? []).sort((a, b) => b.time.updated - a.time.updated);
         if (all.length === 0) { renderer.commitSystemMessage("no sessions found"); return; }
         const items: SessionPickerItem[] = all.map(s => ({
@@ -1412,7 +1397,7 @@ export function App(props: AppProps) {
       // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       try {
-        const resp = await props.client.session.fork({ path: { id: sessionID } });
+        const resp = await props.backend.session.fork({ path: { id: sessionID } });
         const childID = resp.data!.id;
         await switchSession(childID, `forked session (child: ${childID.slice(0, 8)}, parent: ${sessionID.slice(0, 8)})`);
       } catch (err) {
@@ -1437,7 +1422,7 @@ export function App(props: AppProps) {
         renderer.commitSystemMessage("usage: /rename <name>");
       } else {
         try {
-          await props.client.session.update({ path: { id: sessionID }, body: { title: renameResult.newLabel } });
+          await props.backend.session.update({ path: { id: sessionID }, body: { title: renameResult.newLabel } });
           renderer.rename(renameResult.newLabel);
           setSessionLabel(renameResult.newLabel);
           renderer.commitSystemMessage(`session renamed to "${renameResult.newLabel}"`);
@@ -1476,8 +1461,8 @@ export function App(props: AppProps) {
             //     source === "config" to show only what is explicitly in opencode.json.
             //   - The Provider.models values there are the same Model type with limit.context
             //     guaranteed non-null, so the defensive optional-chaining below is not needed.
-            props.client.provider.list(),
-            props.client.session.get({ path: { id: sessionID } }),
+            props.backend.listProviders(),
+            props.backend.session.get({ path: { id: sessionID } }),
           ]);
           const provData = provResp.data!;
           const sess = sessResp.data!;
@@ -1560,11 +1545,11 @@ export function App(props: AppProps) {
         // commands above (/exit, /new, etc.) emit no SSE user message and must not mint/record.
         renderer.commitUserInput(text);
         const ownID = mintUserMessageID();
-        recordOwnMessageID(ownID);
+        props.backend.events.recordOwnMessageID(ownID);
         setLastSubmitted(text);
         if (activeModel) {
           const supportsTools = await getToolCallSupport(
-            props.client,
+            props.backend,
             activeModel.providerID,
             activeModel.modelID,
           );
@@ -1580,12 +1565,12 @@ export function App(props: AppProps) {
         // unsupported model (e.g. from mobile app). This check prevents the
         // server from rejecting the request.
         if (activeModel) {
-          const validModel = await validateModel(props.client, activeModel.providerID, activeModel.modelID);
+          const validModel = await validateModel(props.backend, activeModel.providerID, activeModel.modelID);
           if (!validModel) {
             renderer.commitSystemMessage(
               `active model ${activeModel.providerID}/${activeModel.modelID} not available — falling back to default`,
             );
-            const fallback = await getDefaultModel(props.client);
+            const fallback = await getDefaultModel(props.backend);
             if (fallback) {
               setActiveModel(fallback);
             }
@@ -1597,11 +1582,11 @@ export function App(props: AppProps) {
         // of the system-reminder. When classifyOpenUserTurns detects a user turn
         // starting with this prefix, it suppresses the foreign-user-turn event,
         // preventing the full .md command from being rendered as user input.
-        recordOwnCommandPrefix("# /" + cmdName);
+        props.backend.events.recordOwnCommandPrefix("# /" + cmdName);
 
         setIsGenerating(true);
         try {
-          await props.client.session.command({
+          await props.backend.session.sendCommand({
             path: { id: sessionID },
             body: {
               command: cmdName,
@@ -1633,7 +1618,7 @@ export function App(props: AppProps) {
     // Mobile-Companion Part B: record this locally-submitted text so the SSE echo of
     // our own turn is recognised and suppressed (not re-rendered as a foreign turn).
     const ownID = mintUserMessageID();
-    recordOwnMessageID(ownID);
+    props.backend.events.recordOwnMessageID(ownID);
     renderer.commitUserInput(text);
     setIsGenerating(true);
 
@@ -1642,12 +1627,12 @@ export function App(props: AppProps) {
     // model (e.g. from mobile app). This check prevents the server from rejecting
     // the prompt request.
     if (activeModel) {
-      const validModel = await validateModel(props.client, activeModel.providerID, activeModel.modelID);
+      const validModel = await validateModel(props.backend, activeModel.providerID, activeModel.modelID);
       if (!validModel) {
         renderer.commitSystemMessage(
           `active model ${activeModel.providerID}/${activeModel.modelID} not available — falling back to default`,
         );
-        const fallback = await getDefaultModel(props.client);
+        const fallback = await getDefaultModel(props.backend);
         if (fallback) {
           setActiveModel(fallback);
         }
@@ -1655,7 +1640,7 @@ export function App(props: AppProps) {
     }
 
     try {
-      await props.client.session.promptAsync({
+      await props.backend.session.sendPrompt({
         path: { id: sessionID },
         body: {
           parts: [{ type: "text", text }],
@@ -1667,18 +1652,18 @@ export function App(props: AppProps) {
       setIsGenerating(false);
       renderer.commitError(`[send error] ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [props.client, sessionID, renderer, activeModel, opencodeCommands, switchSession, editor, question, currentSubIdx, handleQuestion]);
+  }, [props.backend, sessionID, renderer, activeModel, opencodeCommands, switchSession, editor, question, currentSubIdx, handleQuestion]);
 
   handleSubmitRef.current = handleSubmit;
 
   const handlePermission = useCallback(async (answer: "once" | "always" | "reject") => {
     if (!permission) return;
-    await props.client.postSessionIdPermissionsPermissionId({
+    await props.backend.replyPermission({
       path: { id: permission.sessionID, permissionID: permission.permID },
       body: { response: answer },
     }).catch(() => {});
     setPermission(null);
-  }, [permission, props.client]);
+  }, [permission, props.backend]);
 
  
 

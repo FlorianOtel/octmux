@@ -1,9 +1,9 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
 
-// Minimal stub client — the watcher only stores `client` on a private field;
+// Minimal stub Backend — the watcher only stores `backend` on a private field;
 // no method is invoked at runtime in these tests.
-const stubClient: any = {};
+const stubBackend: any = {};
 
 function makeBadge(overrides: Partial<NonNullable<OrchestraBadge>> = {}): NonNullable<OrchestraBadge> {
   return {
@@ -16,7 +16,7 @@ function makeBadge(overrides: Partial<NonNullable<OrchestraBadge>> = {}): NonNul
 }
 
 function freshWatcher(): OrchestraWatcher {
-  return new OrchestraWatcher(stubClient);
+  return new OrchestraWatcher(stubBackend);
 }
 
 // Helper to directly seed/inspect the private badge state via cast.

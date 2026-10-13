@@ -1,6 +1,4 @@
-import type { createOpencodeClient } from "@opencode-ai/sdk/client";
-
-type Client = ReturnType<typeof createOpencodeClient>;
+import type { Backend } from "../backend/types.ts";
 
 /**
  * Format a token count as a human-readable string.
@@ -60,13 +58,13 @@ const contextWindowCache = new Map<string, number>();
 
 /**
  * Get the context window size for a model.
- * 1. Calls client.provider.list(), finds matching provider/model, reads limit.context
+ * 1. Calls backend.listProviders(), finds matching provider/model, reads limit.context
  * 2. Falls back to MODEL_CONTEXT_FALLBACK[modelID]
  * 3. Falls back to 200_000
  * Never throws; swallows errors silently.
  */
 export async function getContextWindow(
-  client: Client,
+  backend: Backend,
   providerID: string,
   modelID: string,
 ): Promise<number> {
@@ -76,7 +74,7 @@ export async function getContextWindow(
   }
 
   try {
-    const resp = await client.provider.list();
+    const resp = await backend.listProviders();
     const provData = resp.data;
     if (provData) {
       // Pass 1: match provider ID first, then model by dict key OR mInfo.id field.
@@ -127,12 +125,12 @@ const toolCallCache = new Map<string, boolean | undefined>();
 /**
  * Discover whether a model supports the Anthropic-style tool-use protocol.
  * Mirrors `getContextWindow`: two-pass provider/model match against
- * `client.provider.list()`, swallows errors, never throws.
+ * `backend.listProviders()`, swallows errors, never throws.
  * Returns `undefined` when the field is missing or the lookup fails — callers
  * should treat undefined as "don't warn" (uncertain, not negative).
  */
 export async function getToolCallSupport(
-  client: Client,
+  backend: Backend,
   providerID: string,
   modelID: string,
 ): Promise<boolean | undefined> {
@@ -142,7 +140,7 @@ export async function getToolCallSupport(
   }
 
   try {
-    const resp = await client.provider.list();
+    const resp = await backend.listProviders();
     const provData = resp.data;
     if (provData) {
       for (const p of provData.all) {
@@ -180,14 +178,14 @@ export async function getToolCallSupport(
 
 /**
  * Get the default model from the OC server config.
- * Calls client.config.get(), reads config.model (e.g. "sohoai/glm-5.1"),
+ * Calls backend.getDefaultModelConfig(), reads config.model (e.g. "sohoai/glm-5.1"),
  * and splits on the first "/" to extract providerID/modelID.
  * Returns { providerID, modelID } | null. Swallows errors silently.
  * If config.model has no "/" or is not set, returns null.
  */
-export async function getDefaultModel(client: Client): Promise<{ providerID: string; modelID: string } | null> {
+export async function getDefaultModel(backend: Backend): Promise<{ providerID: string; modelID: string } | null> {
   try {
-    const resp = await client.config.get();
+    const resp = await backend.getDefaultModelConfig();
     const cfg = resp.data;
     if (!cfg?.model) return null;
 
@@ -237,7 +235,7 @@ export function contextLabel(contextWindow: number): string {
 
 /**
  * Validate that a model exists in connected providers.
- * Calls client.provider.list() and checks if the provider+model is present
+ * Calls backend.listProviders() and checks if the provider+model is present
  * in the connected providers list.
  * Returns the model info if found, or null if not connected.
  *
@@ -245,12 +243,12 @@ export function contextLabel(contextWindow: number): string {
  * mobile app in a shared session) from being sent to the server.
  */
 export async function validateModel(
-  client: Client,
+  backend: Backend,
   providerID: string,
   modelID: string,
 ): Promise<{ providerID: string; modelID: string } | null> {
   try {
-    const resp = await client.provider.list();
+    const resp = await backend.listProviders();
     const provData = resp.data;
     if (!provData) return null;
 

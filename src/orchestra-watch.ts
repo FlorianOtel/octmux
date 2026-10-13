@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { EventEmitter } from "events";
-import type { createOpencodeClient } from "@opencode-ai/sdk/client";
+import type { Backend } from "./backend/types.ts";
 
 export type OrchestraBadge = {
   mode: "brain" | "duo";
@@ -25,14 +25,12 @@ export type OrchestraBadge = {
 // "frozen visually" and "still present". If you change one, change the other.
 const SUBAGENT_EVICTION_MS = 120_000;
 
-type Client = ReturnType<typeof createOpencodeClient>;
-
 /**
  * Watches ~/.config/opencode/orchestra/sessions/ for active /brain or /duo sessions
  * matching the given OC session ID. Emits badge state changes.
  */
 export class OrchestraWatcher extends EventEmitter {
-  private client: Client;
+  private backend: Backend;
   private badge: OrchestraBadge = null;
   private watcher: fs.FSWatcher | null = null;
   private pollInterval: NodeJS.Timer | null = null;
@@ -42,9 +40,9 @@ export class OrchestraWatcher extends EventEmitter {
   private harnessOcSessionModel: { providerID: string; id: string } | null = null;
   private _pendingSubagentQueue: Array<{ sessionID: string; agent: string; model: string; description?: string }> = [];
 
-  constructor(client: Client) {
+  constructor(backend: Backend) {
     super();
-    this.client = client;
+    this.backend = backend;
   }
 
   /**
@@ -97,7 +95,7 @@ export class OrchestraWatcher extends EventEmitter {
    */
   private async resolveHarnessSessionID(sessionID: string): Promise<string | null> {
     try {
-      const resp = await this.client.session.list();
+      const resp = await this.backend.session.list();
       const sessions = resp.data ?? [];
 
       // Filter: parentID === null && directory matches current working directory

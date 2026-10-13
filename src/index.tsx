@@ -11,6 +11,7 @@ import { loadOctmuxConfig, type OctmuxConfig } from "./octmux-config.ts";
 import { detectProtocol, compareVersions, BUNDLED_OC_CLIENT_VERSION } from "./protocol-detect.ts";
 import { redactUrl } from "./utils/redact-url.ts";
 import { App } from "./app.tsx";
+import { V1Backend } from "./backend/v1.ts";
 import { Visibility } from "./renderer/visibility.ts";
 import { BlockBufferRenderer } from "./renderer/block-buffer.ts";
 import { TmuxWindowRenderer } from "./renderer/tmux-window.ts";
@@ -349,6 +350,10 @@ const cwd = process.cwd();
 // not by the launch cwd.
 const bootstrapClient = createOpencodeClient({ baseUrl, directory: cwd, headers: getAuthHeaders() });
 
+// Startup session operations (get/list/fork/create below) go through the Backend seam,
+// wrapping the bootstrap client with the launch cwd. The session-scoped calls are unchanged.
+const bootstrapBackend = new V1Backend(bootstrapClient, baseUrl, cwd);
+
 // Determine which session to use: resume by ID, resume last, fork, or create new.
 // Capture both banner and sessionLabel: banner for startup confirmation, sessionLabel for chrome.
 let sessionID: string;
@@ -358,7 +363,7 @@ let resolvedDirectory: string | undefined;
 if (resumeArg) {
   // --resume <id>: validate that the session exists
   try {
-    const resp = await bootstrapClient.session.get({ path: { id: resumeArg } });
+    const resp = await bootstrapBackend.session.get({ path: { id: resumeArg } });
     if (!resp.data?.id) {
       console.error(`octmux: session not found: ${resumeArg}`);
       process.exit(1);
@@ -375,7 +380,7 @@ if (resumeArg) {
 } else if (resumeLast) {
   // --resume-last: find the most recently updated session
   try {
-    const resp = await bootstrapClient.session.list();
+    const resp = await bootstrapBackend.session.list();
     const sessions = resp.data ?? [];
     if (sessions.length === 0) {
       console.error("octmux: no sessions found to resume");
@@ -395,12 +400,12 @@ if (resumeArg) {
 } else if (forkArg) {
   // --fork <id>: validate parent exists, then fork it and attach to the child.
   try {
-    const parent = await bootstrapClient.session.get({ path: { id: forkArg } });
+    const parent = await bootstrapBackend.session.get({ path: { id: forkArg } });
     if (!parent.data?.id) {
       console.error(`octmux: parent session not found: ${forkArg}`);
       process.exit(1);
     }
-    const child = await bootstrapClient.session.fork({ path: { id: forkArg }, query: { directory: cwd } });
+    const child = await bootstrapBackend.session.fork({ path: { id: forkArg }, query: { directory: cwd } });
     if (!child.data?.id) {
       console.error(`octmux: fork returned no child session for parent ${forkArg}`);
       process.exit(1);
@@ -416,7 +421,7 @@ if (resumeArg) {
 } else {
   // Default: create a new session anchored to octmux's launch directory.
   // Without this, OC inherits the daemon's cwd ($HOME) instead of where octmux was invoked.
-  const session = await bootstrapClient.session.create({ query: { directory: cwd } });
+  const session = await bootstrapBackend.session.create({ query: { directory: cwd } });
   sessionID = session.data!.id;
   sessionLabel = sessionID.slice(0, 8);
 }
@@ -428,7 +433,12 @@ const client = effectiveCwd === cwd
   ? bootstrapClient
   : createOpencodeClient({ baseUrl, directory: effectiveCwd, headers: getAuthHeaders() });
 
-const eventStream = await client.global.event({});
+// Protocol seam: the Backend wraps the client above and the raw endpoints (baseUrl) and
+// directory header (effectiveCwd) it needs. The initial SSE subscription goes through
+// backend.subscribeEvents() so the event stream has a single owner behind the seam.
+const backend = new V1Backend(client, baseUrl, effectiveCwd);
+
+const eventStream = await backend.subscribeEvents();
 
 // ─── Terminal setup (alternate scroll mode + bracketed paste) ──
 
@@ -500,14 +510,12 @@ const pasteFilter = createPasteFilter(process.stdin);
 let onRedraw: () => void = () => {};
 const appElement = (
   <App
-    client={client}
+    backend={backend}
     sessionID={sessionID}
     sessionLabel={sessionLabel}
     eventStream={eventStream.stream}
     onExit={async () => { await serverHandle?.dispose(); await renderer.dispose(); }}
-    baseUrl={baseUrl}
     renderer={renderer}
-    cwd={effectiveCwd}
     onRedraw={() => onRedraw()}
     setPasteCallback={pasteFilter.setPasteCallback}
     singleMode={single}
