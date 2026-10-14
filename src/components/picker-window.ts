@@ -7,8 +7,10 @@ export function pickerWindow(
   idx: number,
   rows: number = process.stdout.rows ?? 24,
 ): { start: number; end: number } {
-  // header + 2 indicator lines + prompt/status rows of slack
-  const max = Math.max(5, rows - 8);
+  // Reserve ~16 rows: picker header + 2 indicator lines, plus the always-live
+  // chrome below (status, rule, prompt, rule, status/perm/toggle lines,
+  // ctrl-c hint) and ActiveBlock slack. The live area must stay < rows.
+  const max = Math.max(3, rows - 16);
   if (total <= max) return { start: 0, end: total };
   const start = Math.min(Math.max(0, idx - Math.floor(max / 2)), total - max);
   return { start, end: start + max };
