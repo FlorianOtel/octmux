@@ -409,7 +409,7 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
 ### 2026-10-14--13-13 — Stage 15.2.1 — server location check and `server.directoryMap`
 
 **Implemented by:** Claude Code (Claude Opus 5.5) — 2026-10-14--13-13
-**Commit(s):** `<pending>`
+**Commit(s):** `9561fbe`
 
 Operator report: against the MBP v2 server, the OpenCode desktop app showed "Session location
 unavailable: /mnt/nfs/Florian/Gin-AI/projects/octmux". The MBP mounts the same NFS share at
