@@ -2,8 +2,8 @@
 title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
-updated_by: Claude Code (Claude Sonnet 5.5)
-updated_at: 2026-10-14--15-00
+updated_by: Claude Code (Claude Opus 5.5)
+updated_at: 2026-10-14--23-50
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -734,3 +734,14 @@ both sides; octmux has no open work on it. The octmux changes:
 
 - Cause: the stale-`TMUX_PANE` check read `/proc/self/fd/0`, which does not exist on macOS. `readlinkSync` threw and the catch printed "could not verify tmux pane context" even inside a real pane.
 - Fix: `src/index.tsx` gets stdin's tty path from the portable `tty` command (`execFileSync`, stdin inherited) and compares it to `#{pane_tty}`. The unused `readlinkSync` import is removed.
+
+### 2026-10-14--23-50 — Platform-independent build: pin `@opencode-ai/sdk` to npm 1.15.4
+**Implemented by:** Claude Code (Claude Opus 5.5) — 2026-10-14--23-50
+**Commit(s):** `PENDING`
+
+- Cause: `package.json` declared `"@opencode-ai/sdk": "file:/home/florian/.config/opencode/node_modules/@opencode-ai/sdk"`, an absolute Linux path, and `bun.lock` recorded it too. `bun install` turned it into symlinks to that host's `~/.config/opencode`, and these symlinks sat in the `node_modules/` that the Linux server and the Mac share over NFS. After a Linux rebuild, the Mac build failed with `Could not resolve: "@opencode-ai/sdk/client"`: the 78 symlinks pointed at `/home/florian/...`, which does not exist on the Mac. The fix each time was to swap the symlinks by hand.
+- Fix: pin the published npm package, `"@opencode-ai/sdk": "1.15.4"`. `bun.lock` now resolves it from the registry with an integrity hash; the old `file:` entry and the dev-dependency tree it pulled in are gone. `node_modules/@opencode-ai/sdk` is now real files, 79 files and no symlinks, identical from both hosts.
+- Equivalence: npm's `@opencode-ai/sdk@1.15.4` tarball is byte-identical to the copy in `~/.config/opencode` on both hosts (same sha256 tree hash over 79 files), so the compiled code is unchanged.
+- Verification: rebuilt on the Mac (Mach-O arm64, `77dbe2b`, 23:45) and on Linux (ELF x86-64, `77dbe2b`, 23:45) from the same `node_modules` with no manual steps, and installed both to `~/.local/bin/octmux`. `bun test src/`: Linux 804/804 pass. Mac 803/804: the only failure needs the fixture `/var/tmp/render-this-as-markdown.md`, which exists only on Linux, so it is unrelated to this change.
+- Docs: CLAUDE.md has new cross-platform build notes (do not return to `file:`; how to bump the pin; build one host at a time; check the binary's platform before installing). Implementation-plan.md has Locked decision 1 and Risk 1 updated.
+- Bumping later: change the pin in `package.json` and run `bun install` once on either host. Match the `@opencode-ai/plugin` version that `~/.config/opencode` installs.

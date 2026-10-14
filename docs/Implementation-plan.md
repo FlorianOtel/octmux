@@ -3,7 +3,7 @@ title: "octmux — Implementation Plan"
 created_at: 2026-05-18--21-58
 created_by: Claude Code (Claude Sonnet 4.6 1M)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-13--23-29
+updated_at: 2026-10-14--23-50
 context: >
   octmux is a text-only barebones REPL UI for OpenCode that mimics the Claude
   Code CLI feel: text REPL, one bottom status line, Emacs-style line edits,
@@ -32,9 +32,13 @@ itself.
 
 ## Locked decisions
 
-1. **Stack:** TypeScript on Bun. Use `@opencode-ai/sdk` (installed at
-   `~/.config/opencode/node_modules/@opencode-ai/sdk`, v1.15.4). Ship via
+1. **Stack:** TypeScript on Bun. Use `@opencode-ai/sdk` v1.15.4. Ship via
    `bun build --compile` as a single executable.
+   *Updated 2026-10-14:* the SDK was originally linked from
+   `~/.config/opencode/node_modules/@opencode-ai/sdk` with a `file:` dependency.
+   It is now pinned to the published npm package (`"1.15.4"`). The `file:` path
+   was absolute and host-specific, which broke builds from the shared NFS tree
+   on the other platform. See the CLAUDE.md build notes and the Stage 15 log.
 2. **Server lifecycle:** three modes (inverted in Stage 4.1c — default is now attach, not spawn).
    - Default — attach to port 4096 (the systemd service `scripts/opencode-server.service`).
      Rich error on connection failure guides user to start the service.
@@ -530,6 +534,9 @@ multi-session views, themes) is post-MVP.
    Stage 0 must confirm `bun install` resolves
    `"@opencode-ai/sdk": "file:..."` against that path. Compiled binary will
    inline it.
+   *Resolved 2026-10-14:* `@opencode-ai/sdk` is on public npm, and npm's 1.15.4
+   is byte-identical to the locally installed copy (same 79-file tree hash). The
+   dependency is now the npm pin `"1.15.4"`, not `file:`.
 2. **`/command` shape.** `SessionCommandData.body = { command: string,
    arguments: string }` confirmed. Unknown commands return 4xx; render
    politely.
