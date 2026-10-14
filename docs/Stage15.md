@@ -737,7 +737,7 @@ both sides; octmux has no open work on it. The octmux changes:
 
 ### 2026-10-14--23-50 — Platform-independent build: pin `@opencode-ai/sdk` to npm 1.15.4
 **Implemented by:** Claude Code (Claude Opus 5.5) — 2026-10-14--23-50
-**Commit(s):** `PENDING`
+**Commit(s):** `575e478`
 
 - Cause: `package.json` declared `"@opencode-ai/sdk": "file:/home/florian/.config/opencode/node_modules/@opencode-ai/sdk"`, an absolute Linux path, and `bun.lock` recorded it too. `bun install` turned it into symlinks to that host's `~/.config/opencode`, and these symlinks sat in the `node_modules/` that the Linux server and the Mac share over NFS. After a Linux rebuild, the Mac build failed with `Could not resolve: "@opencode-ai/sdk/client"`: the 78 symlinks pointed at `/home/florian/...`, which does not exist on the Mac. The fix each time was to swap the symlinks by hand.
 - Fix: pin the published npm package, `"@opencode-ai/sdk": "1.15.4"`. `bun.lock` now resolves it from the registry with an integrity hash; the old `file:` entry and the dev-dependency tree it pulled in are gone. `node_modules/@opencode-ai/sdk` is now real files, 79 files and no symlinks, identical from both hosts.
