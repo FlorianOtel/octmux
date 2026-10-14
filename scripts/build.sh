@@ -11,9 +11,8 @@ if [ -z "$BRANCH" ]; then
 fi
 BUILD_DATE=$(date '+%Y-%m-%d %H:%M')
 
-exec /home/florian/.bun/bin/bun build src/index.tsx \
+exec "${BUN:-$HOME/.bun/bin/bun}" build src/index.tsx \
   --compile \
-  --target bun-linux-x64 \
   --outfile dist/octmux \
   --define "BUILD_BRANCH=\"${BRANCH}\"" \
   --define "BUILD_COMMIT=\"${COMMIT}\"" \
