@@ -730,7 +730,7 @@ both sides; octmux has no open work on it. The octmux changes:
 
 ### 2026-10-14--15-00 — Fix `--multi-window` pane check on macOS
 **Implemented by:** Claude Code (Claude Sonnet 5.5) — 2026-10-14--15-00
-**Commit(s):** `PENDING`
+**Commit(s):** `349db9f`
 
 - Cause: the stale-`TMUX_PANE` check read `/proc/self/fd/0`, which does not exist on macOS. `readlinkSync` threw and the catch printed "could not verify tmux pane context" even inside a real pane.
 - Fix: `src/index.tsx` gets stdin's tty path from the portable `tty` command (`execFileSync`, stdin inherited) and compares it to `#{pane_tty}`. The unused `readlinkSync` import is removed.
