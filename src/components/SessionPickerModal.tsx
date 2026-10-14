@@ -13,11 +13,13 @@ export type SessionPickerItem = {
 type Props = {
   items: SessionPickerItem[];
   initialIdx: number;
+  /** Max rows of items to render; computed by the parent from measured chrome height. */
+  maxVisible?: number;
   onSelect: (item: SessionPickerItem) => void;
   onCancel: () => void;
 };
 
-export function SessionPickerModal({ items, initialIdx, onSelect, onCancel }: Props) {
+export function SessionPickerModal({ items, initialIdx, onSelect, onCancel, maxVisible }: Props) {
   const [idx, setIdx] = useState(initialIdx);
   useInput((input, key) => {
     if (key.upArrow)   { setIdx(i => Math.max(0, i - 1)); return; }
@@ -27,7 +29,7 @@ export function SessionPickerModal({ items, initialIdx, onSelect, onCancel }: Pr
     const n = parseInt(input, 10);
     if (!isNaN(n) && n >= 1 && n <= Math.min(items.length, 9)) onSelect(items[n - 1]);
   });
-  const { start, end } = pickerWindow(items.length, idx);
+  const { start, end } = pickerWindow(items.length, idx, maxVisible);
   return (
     <Box flexDirection="column">
       <Text dimColor>Session picker  (↑↓=navigate  Enter=select  Esc=cancel)</Text>

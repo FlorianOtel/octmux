@@ -13,11 +13,13 @@ export type ModelPickerItem = {
 type Props = {
   items: ModelPickerItem[];
   initialIdx: number;
+  /** Max rows of items to render; computed by the parent from measured chrome height. */
+  maxVisible?: number;
   onSelect: (item: ModelPickerItem) => void;
   onCancel: () => void;
 };
 
-export function ModelPickerModal({ items, initialIdx, onSelect, onCancel }: Props) {
+export function ModelPickerModal({ items, initialIdx, onSelect, onCancel, maxVisible }: Props) {
   const [idx, setIdx] = useState(initialIdx);
 
   useInput((input, key) => {
@@ -30,7 +32,7 @@ export function ModelPickerModal({ items, initialIdx, onSelect, onCancel }: Prop
     if (!isNaN(n) && n >= 1 && n <= items.length) { onSelect(items[n - 1]); return; }
   });
 
-  const { start, end } = pickerWindow(items.length, idx);
+  const { start, end } = pickerWindow(items.length, idx, maxVisible);
   return (
     <Box flexDirection="column">
       <Text dimColor>Model picker  (↑↓=navigate  Enter=select  Esc=cancel)</Text>

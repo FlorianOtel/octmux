@@ -258,6 +258,20 @@ export function App(props: AppProps) {
       if (height > 0 && height !== restRows) setRestRows(height); // guard: avoid render thrash
     }
   });
+  // Picker budget: measure the always-live chrome (status/rule/prompt/rule/status lines) so
+  // pickers can use every remaining row without the live area reaching `rows` (Ink would
+  // then emit clearTerminal incl. ESC[3J — iTerm2 warns and the screen flashes).
+  // Reserve: 1 (Ink >= boundary) + 3 (picker header + 2 more-indicators) + 2 (ctrl-c hint,
+  // one ActiveBlock row).
+  const chromeRef = useRef<any>(null);
+  const [chromeRows, setChromeRows] = useState(9);
+  useLayoutEffect(() => {
+    if (chromeRef.current) {
+      const { height } = measureElement(chromeRef.current);
+      if (height > 0 && height !== chromeRows) setChromeRows(height);
+    }
+  });
+  const pickerMaxVisible = Math.max(3, rows - chromeRows - 6);
   const w = Math.max(80, columns ?? 80);
   // Exact headroom: rows (live from A.2) − measured rest − 1 (closes Ink's >= boundary).
   // max(1,…) replaces the old max(16,…) floor (which could itself force overflow on small panes).
@@ -1825,6 +1839,7 @@ export function App(props: AppProps) {
         <ModelPickerModal
           items={modelPicker.items}
           initialIdx={modelPicker.idx}
+          maxVisible={pickerMaxVisible}
           onSelect={handleModelSelect}
           onCancel={handleModelCancel}
         />
@@ -1833,6 +1848,7 @@ export function App(props: AppProps) {
         <SessionPickerModal
           items={sessionPicker.items}
           initialIdx={sessionPicker.idx}
+          maxVisible={pickerMaxVisible}
           onSelect={handleSessionSelect}
           onCancel={handleSessionCancel}
         />
@@ -1847,7 +1863,7 @@ export function App(props: AppProps) {
           onMoveDown={handleSlashMoveDown}
         />
       )}
-      <Box flexDirection="column" marginBottom={0}>
+      <Box ref={chromeRef} flexDirection="column" marginBottom={0}>
         <SubprocessStatus thinking={procTimes.thinking} tools={procTimes.tools} generating={procTimes.generating} />
         {pendingQueue.length > 0 && (
           <Text color="yellow" dimColor>
