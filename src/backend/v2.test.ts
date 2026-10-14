@@ -54,6 +54,8 @@ function makeFake(replies: Record<string, Reply> = {}): { client: OpenCodeClient
       },
     },
     message: { list: method("message.list") },
+    location: { get: method("location.get") },
+    project: { list: method("project.list") },
     model: { list: method("model.list"), default: method("model.default") },
     command: { list: method("command.list") },
     permission: {
@@ -534,8 +536,8 @@ describe("V2Backend write operations reject on an error status (D1)", () => {
     });
     const backend = new V2Backend(BASE, CWD, client);
     expect(await rejectionMessage(backend.session.sendPrompt({ sessionID: "ses_a", text: "noop" }))).toBe(
-      "LocationNotFoundError: the OpenCode server has no directory /srv/octmux — set server.directory in " +
-        "~/.config/octmux/octmux.json to the server-side path",
+      "LocationNotFoundError: the OpenCode server has no directory /srv/octmux — set server.directory or " +
+        "server.directoryMap in ~/.config/octmux/octmux.json to the server-side path",
     );
   });
 
@@ -545,7 +547,7 @@ describe("V2Backend write operations reject on an error status (D1)", () => {
     });
     const backend = new V2Backend(BASE, CWD, client, "/home/florian/.config/octmux/octmux.json");
     expect(await rejectionMessage(backend.session.sendPrompt({ sessionID: "ses_a", text: "noop" }))).toContain(
-      "set server.directory in /home/florian/.config/octmux/octmux.json to the server-side path",
+      "in /home/florian/.config/octmux/octmux.json to the server-side path",
     );
   });
 
@@ -1226,5 +1228,83 @@ describe("V2Backend.events translator wiring (C2.4a)", () => {
     backend.events.resetEventState();
     expect(backend.events.hasOpenStreamingPart()).toBe(false);
     expect(backend.events.synthesizeSessionIdleEvents()).toEqual([{ kind: "session-idle" }]);
+  });
+});
+
+describe("V2Backend.checkLocation (location.get before session create, fork or resume)", () => {
+  const missing = () =>
+    declaredError({ _tag: "LocationNotFoundError", message: "Location not found: /mnt/nfs/x", location: { directory: "/mnt/nfs/x" } });
+
+  /**
+   * A fake whose `location.get` rejects with `LocationNotFoundError` for the `missingDirectories` and
+   * resolves for every other directory. The other methods come from `makeFake(replies)`.
+   */
+  function makeFakeLocation(missingDirectories: string[], replies: Record<string, Reply> = {}) {
+    const fake = makeFake(replies);
+    const client = fake.client as unknown as { location: { get: (input: { location: { directory: string } }) => Promise<unknown> } };
+    client.location.get = async (input) => {
+      fake.calls.push({ method: "location.get", input });
+      if (missingDirectories.includes(input.location.directory)) throw missing();
+      return { directory: input.location.directory, project: {} };
+    };
+    return fake;
+  }
+
+  test("calls location.get with the directory and resolves when the server has it", async () => {
+    const { client, calls } = makeFake({ "location.get": { directory: "/Volumes/Disks/x", project: {} } });
+    await new V2Backend(BASE, CWD, client).checkLocation("/Volumes/Disks/x");
+    expect(calls).toEqual([{ method: "location.get", input: { location: { directory: "/Volumes/Disks/x" } } }]);
+  });
+
+  test("LocationNotFoundError names the directory and lists the known projects, sorted, without global", async () => {
+    const { client } = makeFakeLocation(["/mnt/nfs/x"], {
+      "project.list": [
+        { id: "p2", canonical: "/Users/me" },
+        { id: "global", canonical: "/" },
+        { id: "p1", canonical: "/Volumes/Disks/x" },
+      ],
+    });
+    expect(await rejectionMessage(new V2Backend(BASE, CWD, client).checkLocation("/mnt/nfs/x"))).toBe(
+      "LocationNotFoundError: the OpenCode server has no directory /mnt/nfs/x — set server.directory or " +
+        "server.directoryMap in ~/.config/octmux/octmux.json to the server-side path\n" +
+        "Projects the OpenCode server knows:\n  /Users/me\n  /Volumes/Disks/x",
+    );
+  });
+
+  test("projects at paths the server cannot resolve (placeholders) are left out", async () => {
+    const { client } = makeFakeLocation(["/mnt/nfs/x", "/mnt/nfs/old"], {
+      "project.list": [
+        { id: "p1", canonical: "/mnt/nfs/old" },
+        { id: "p2", canonical: "/Users/me" },
+      ],
+    });
+    const message = await rejectionMessage(new V2Backend(BASE, CWD, client).checkLocation("/mnt/nfs/x"));
+    expect(message).toEndWith("Projects the OpenCode server knows:\n  /Users/me");
+  });
+
+  test("no list is added when no project resolves", async () => {
+    const { client } = makeFakeLocation(["/mnt/nfs/x", "/mnt/nfs/old"], {
+      "project.list": [{ id: "p1", canonical: "/mnt/nfs/old" }],
+    });
+    const message = await rejectionMessage(new V2Backend(BASE, CWD, client).checkLocation("/mnt/nfs/x"));
+    expect(message).toEndWith("to the server-side path");
+  });
+
+  test("a failing project.list leaves only the location message", async () => {
+    const { client } = makeFake({ "location.get": missing(), "project.list": transportError() });
+    const message = await rejectionMessage(new V2Backend(BASE, CWD, client).checkLocation("/mnt/nfs/x"));
+    expect(message).toEndWith("to the server-side path");
+  });
+
+  test("another typed error is formatted and does not list projects", async () => {
+    const { client, calls } = makeFake({ "location.get": declaredError({ _tag: "UnauthorizedError", message: "no" }) });
+    expect(await rejectionMessage(new V2Backend(BASE, CWD, client).checkLocation("/x"))).toBe("UnauthorizedError: no");
+    expect(calls.map((c) => c.method)).toEqual(["location.get"]);
+  });
+
+  test("a transport failure is rethrown unchanged", async () => {
+    const { client } = makeFake({ "location.get": transportError() });
+    const err = await new V2Backend(BASE, CWD, client).checkLocation("/x").then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ClientError);
   });
 });

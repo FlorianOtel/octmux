@@ -7,7 +7,7 @@ import { readlinkSync } from "node:fs";
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { findFreePort, spawnOpencodeServer, type ServerHandle } from "./server-lifecycle.ts";
 import { getAuthHeaders, setAuthPassword } from "./auth-headers.ts";
-import { loadOctmuxConfig, type OctmuxConfig } from "./octmux-config.ts";
+import { loadOctmuxConfig, mapServerDirectory, type OctmuxConfig } from "./octmux-config.ts";
 import { detectProtocol, compareVersions, BUNDLED_OC_CLIENT_VERSION } from "./protocol-detect.ts";
 import { redactUrl } from "./utils/redact-url.ts";
 import { App } from "./app.tsx";
@@ -133,14 +133,18 @@ if (worktreeFlag && loadedConfig?.config.server?.directory !== undefined) {
   process.exit(2);
 }
 
-// --auto-spawn starts a new opencode server on THIS machine. server.directory names a path the server sees,
-// which may be another host or container, and the spawned server is local, so the two cannot agree on one
-// path. Refuse the combination instead of silently ignoring one of the two.
-if (autoSpawn && loadedConfig?.config.server?.directory !== undefined) {
+// --auto-spawn starts a new opencode server on THIS machine. server.directory and server.directoryMap name
+// paths as another server sees them, which may be another host or container, and the spawned server is local,
+// so the two cannot agree on one path. Refuse the combination instead of silently ignoring one of the two.
+// (--worktree is fine with server.directoryMap: the worktree's local path is translated like any other cwd.)
+const serverPathKey = loadedConfig?.config.server?.directory !== undefined
+  ? "server.directory"
+  : loadedConfig?.config.server?.directoryMap !== undefined ? "server.directoryMap" : undefined;
+if (autoSpawn && serverPathKey !== undefined) {
   console.error(
-    `octmux: --auto-spawn cannot be combined with server.directory (set in ${loadedConfig.path}): ` +
-    "the spawned server runs locally, so it cannot be the server that server.directory names. " +
-    "Remove server.directory, or drop --auto-spawn.",
+    `octmux: --auto-spawn cannot be combined with ${serverPathKey} (set in ${loadedConfig!.path}): ` +
+    `the spawned server runs locally, so it cannot be the server that ${serverPathKey} describes. ` +
+    `Remove ${serverPathKey}, or drop --auto-spawn.`,
   );
   process.exit(2);
 }
@@ -372,13 +376,23 @@ process.on("SIGTERM", async () => { await serverHandle?.dispose(); await rendere
 const cwd = process.cwd();
 
 // The directory octmux sends to the server as a session location (the v1 x-opencode-directory
-// header, the v1 client `directory`, and the v2 `location`). Unset server.directory keeps today's
-// behaviour: the local cwd. Set, it is a path AS THE SERVER SEES IT, e.g. when the server runs on
-// another host. config.server.directory is already checked to be absolute by the config loader.
+// header, the v1 client `directory`, and the v2 `location`). It is a path AS THE SERVER SEES IT,
+// chosen in this order (the config loader refuses both keys together and checks they are absolute):
+//   1. server.directory: one fixed server path.
+//   2. server.directoryMap: the local cwd with its longest matching prefix rewritten, for a server
+//      that mounts the same storage elsewhere (e.g. "/mnt/nfs" here, "/Volumes/Disks" on a Mac).
+//   3. The local cwd unchanged: correct when the server runs on this machine.
+// Whether the server actually has the directory is checked below (checkServerLocation).
 const configServerDirectory = loadedConfig?.config.server?.directory;
-const serverDirectory = configServerDirectory ?? cwd;
+const directoryMap = loadedConfig?.config.server?.directoryMap;
+const mappedDirectory = directoryMap !== undefined ? mapServerDirectory(cwd, directoryMap) : undefined;
+const serverDirectory = configServerDirectory ?? mappedDirectory ?? cwd;
 if (configServerDirectory !== undefined) {
   console.log(`octmux: using server directory ${serverDirectory} (from ${loadedConfig!.path})`);
+} else if (mappedDirectory !== undefined) {
+  console.log(`octmux: using server directory ${serverDirectory} (${cwd} mapped by server.directoryMap in ${loadedConfig!.path})`);
+} else if (directoryMap !== undefined) {
+  console.log(`octmux: no server.directoryMap prefix matches ${cwd}; sending it unchanged`);
 }
 
 // Bootstrap client for session lookup (v1 only). The actual subscription directory is determined by
@@ -395,6 +409,25 @@ const bootstrapBackend: Backend = bootstrapClient !== undefined
   ? new V1Backend(bootstrapClient, baseUrl, serverDirectory)
   : new V2Backend(baseUrl, serverDirectory, undefined, loadedConfig?.path ?? DEFAULT_CONFIG_HINT);
 
+// Exits (code 1) unless the server can resolve `directory` as a location. Runs before octmux creates,
+// forks or attaches to a session there, so octmux never makes the server record a project at a path it
+// does not have. `what` says which directory is checked, e.g. "session ses_abc's directory".
+async function checkServerLocation(directory: string, what: string): Promise<void> {
+  try {
+    await bootstrapBackend.checkLocation(directory);
+  } catch (err) {
+    console.error(`octmux: cannot use ${what} on the server: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+}
+
+// Every startup mode except --resume <id> works in serverDirectory: create and fork write there, and
+// --resume-last lists the sessions there. --resume <id> only needs the resumed session's own directory,
+// which is checked once the session is fetched.
+if (!resumeArg) {
+  await checkServerLocation(serverDirectory, `the server directory ${serverDirectory}`);
+}
+
 // Determine which session to use: resume by ID, resume last, fork, or create new.
 // Capture both banner and sessionLabel: banner for startup confirmation, sessionLabel for chrome.
 let sessionID: string;
@@ -409,6 +442,7 @@ if (resumeArg) {
       console.error(`octmux: session not found: ${resumeArg}`);
       process.exit(1);
     }
+    await checkServerLocation(resumed.directory, `session ${resumeArg}'s directory ${resumed.directory}`);
     sessionID = resumeArg;
     const title = resumed.title ?? "";
     sessionLabel = title || sessionID.slice(0, 8);
@@ -428,6 +462,9 @@ if (resumeArg) {
     }
     // Sort by time.updated descending
     sessions.sort((a, b) => b.time.updated - a.time.updated);
+    if (sessions[0].directory !== serverDirectory) {
+      await checkServerLocation(sessions[0].directory, `session ${sessions[0].id}'s directory ${sessions[0].directory}`);
+    }
     sessionID = sessions[0].id;
     const title = sessions[0].title ?? "";
     sessionLabel = title || sessionID.slice(0, 8);
@@ -445,7 +482,11 @@ if (resumeArg) {
       console.error(`octmux: parent session not found: ${forkArg}`);
       process.exit(1);
     }
-    // On v2 the fork ignores `directory` (v2 session.fork has no directory input); the child keeps the parent's location.
+    // On v2 the fork ignores `directory` (v2 session.fork has no directory input); the child keeps the parent's
+    // location. So check the parent's directory too, before the fork creates a child there.
+    if (parent.directory !== serverDirectory) {
+      await checkServerLocation(parent.directory, `session ${forkArg}'s directory ${parent.directory}`);
+    }
     const child = await bootstrapBackend.session.fork(forkArg, { directory: serverDirectory });
     if (!child?.id) {
       console.error(`octmux: fork returned no child session for parent ${forkArg}`);

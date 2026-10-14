@@ -39,24 +39,39 @@ Any key not listed here is an error, so a typo such as `passwrod` fails at start
 | `server.url` | string | Server endpoint. Used when `--endpoint` is not given. |
 | `server.password` | string | Basic-auth password. The username is always `opencode`. |
 | `server.directory` | string | Directory path as the server sees it, used as the session location instead of octmux's working directory. Must be absolute. See "Server directory" below. |
+| `server.directoryMap` | object | Local path prefix → server path prefix, e.g. `{ "/mnt/nfs": "/Volumes/Disks" }`. octmux's working directory is translated with the longest matching prefix. Cannot be combined with `server.directory`. See "Server directory" below. |
 
 ### Server directory
 
-Set `server.directory` when the OpenCode server runs on another host, or in a container with different paths. octmux then sends that path to the server as the session location, in place of its own working directory.
+octmux sends the server a directory as the session location. It is a path as the server sees it, chosen in this order:
 
-- Unset: octmux uses its local working directory, as before.
-- Set: the value is the path on the server's side. octmux does not check that it exists on the server, and it is never compared with the local filesystem.
+1. `server.directory`: one fixed server path, for a server that runs on another host or in a container with different paths.
+2. `server.directoryMap`: octmux's working directory with its longest matching prefix rewritten. Use it when the server mounts the same storage at another place, for example NFS at `/mnt/nfs` on Linux and at `/Volumes/Disks` on a Mac:
+   ```jsonc
+   "server": { "url": "http://192.168.1.3:49374", "password": "{file:~/.config/octmux/oc-mbp.password}",
+               "directoryMap": { "/mnt/nfs": "/Volumes/Disks" } }
+   ```
+   A prefix matches whole path segments only (`/mnt/nfs` does not match `/mnt/nfs2`). Keys and values must be absolute. When no prefix matches, the working directory is sent unchanged and startup says so.
+3. Neither key: the local working directory, which is right when the server runs on the same machine.
+
+The two keys cannot both be set (exit 1, naming the config file).
+
+Before octmux creates, forks or attaches to a session, it asks a v2 server whether it has that directory (`location.get`). If not, octmux exits 1. The message names the directory, the config keys to fix, and the projects the server has. This matters because a v2 server otherwise accepts a session at a directory it does not have, and keeps a project record for it that the API cannot delete. `/new` checks the same way. v1 has no such route, so on v1 nothing is checked.
+
+`server.directory` details:
+
+- The value is the path on the server's side. It is never compared with the local filesystem.
 - Must be an absolute path: it starts with `/`, or with a Windows drive letter followed by `\` or `/`. A relative path exits 1 and names the config file and the key.
 - Supports the same `{env:NAME}` and `{file:PATH}` tokens as the other `server.*` keys. The value is not a secret, so a `{file:}` file does not need to be chmod 600.
 - Cannot be combined with `--worktree`. A worktree is created on the local machine, which the server cannot see, so octmux exits 2 and names the config file.
-- Cannot be combined with `--auto-spawn`. The spawned server is local, so octmux exits 2 and names the config file.
+- Cannot be combined with `--auto-spawn`. The spawned server is local, so octmux exits 2 and names the config file. The same applies to `server.directoryMap`. `--worktree` works with `server.directoryMap`: the worktree's local path is translated like any other working directory.
 - `--resume`, `--resume-last`, and `--fork` still use the resolved session's own directory, as they do without this key.
-- When set, octmux prints `octmux: using server directory <dir> (from <config path>)` at startup.
+- When set, octmux prints `octmux: using server directory <dir> (from <config path>)` at startup. With `server.directoryMap` it prints `octmux: using server directory <dir> (<cwd> mapped by server.directoryMap in <config path>)`.
 - Local-only things still use the local working directory: the git branch in the status line, and on v1 the orchestra session files. The project name in the status line is the basename of `server.directory`. Slash-completion names come from the server's command list.
 
 ### Substitution
 
-`server.url`, `server.password`, and `server.directory` accept these tokens. Tokens are expanded only in parsed values, so text inside comments is ignored.
+`server.url`, `server.password`, and `server.directory` accept these tokens. `server.directoryMap` does not. Tokens are expanded only in parsed values, so text inside comments is ignored.
 
 - `{env:NAME}` is replaced by the value of environment variable `NAME`. If the variable is unset or empty, octmux exits 1.
 - `{file:PATH}` is replaced by the file's contents, with surrounding whitespace trimmed.
@@ -74,6 +89,7 @@ Each of these exits 1 and names the config file:
 - an unset or empty `{env:NAME}` variable
 - a missing or unreadable `{file:PATH}` file
 - a `server.directory` that is not an absolute path after substitution
+- a `server.directoryMap` key or value that is not absolute, or `server.directoryMap` together with `server.directory`
 - a password that resolves to an empty string
 
 ### File permissions
@@ -94,7 +110,7 @@ chmod 600 ~/.config/octmux/octmux.json
 
 - Endpoint: `--endpoint <url>` beats `server.url`, which beats the default `http://127.0.0.1:4096`.
 - Password: only `server.password` supplies it. There is no flag for it.
-- Session directory: `server.directory` (when set) replaces the local working directory as the location sent to the server.
+- Session directory: `server.directory`, then `server.directoryMap` applied to the working directory, then the working directory itself.
 - `--auto-spawn` ignores `server.url` and skips protocol detection.
 
 ### Authentication
@@ -119,7 +135,7 @@ A 200 response with `text/html` is never taken as identification, because both s
 | v2, authorized | Prints a version-gate message if one applies. A different MAJOR version refuses (see Version gate). Prints `octmux: using server directory <dir> (from <path>)` when `server.directory` is set. Then runs the native v2 client. | continues; 1 on a MAJOR mismatch |
 | Unreachable | Prints the "no opencode server" hint. For `--endpoint` it prints the shorter `health: failed` form. | 1 |
 
-A v2 server is supported natively, with the same features as v1. The optional `server.directory` config key names the server-side directory that new sessions use. It must be absolute, and `--worktree` and `--auto-spawn` are refused with it (exit 2). octmux reads no OpenCode server files on v2: the orchestra badge comes from the harness session's `metadata.orchestra`, which oconona publishes, and works with a remote server. On v1 (legacy) the badge reads oconona's files and needs the server on the same host. `--auto-spawn` starts a local server and skips detection, so it always runs the v1 client. `--worktree` creates its worktree on the octmux host, so it suits a server on the same host.
+A v2 server is supported natively, with the same features as v1. The optional `server.directory` or `server.directoryMap` config key gives the server-side directory that new sessions use (see "Server directory"). octmux checks that the server has it before any session is created or attached. octmux reads no OpenCode server files on v2: the orchestra badge comes from the harness session's `metadata.orchestra`, which oconona publishes, and works with a remote server. On v1 (legacy) the badge reads oconona's files and needs the server on the same host. `--auto-spawn` starts a local server and skips detection, so it always runs the v1 client. `--worktree` creates its worktree on the octmux host, so it suits a server on the same host.
 
 ### Version gate
 

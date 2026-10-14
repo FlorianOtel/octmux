@@ -221,6 +221,11 @@ export class V1Backend implements Backend {
     return isSessionDescendant(candidateSessionID, ancestorSessionID, this.baseUrl, this.cwd);
   }
 
+  /** v1 has no location route, so there is nothing to check. Resolves without a request. */
+  checkLocation(_directory: string): Promise<void> {
+    return Promise.resolve();
+  }
+
   /** v1 `client.global.event({})`; the caller reads `.stream` from the result. */
   subscribeEvents(): ReturnType<V1Client["global"]["event"]> {
     return this.client.global.event({});

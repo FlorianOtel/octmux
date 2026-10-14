@@ -3,7 +3,7 @@ title: "OpenCode v2 support — decision record"
 created_at: 2026-10-13--23-26
 created_by: Claude Code (Claude Opus 5.5)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-14--00-25
+updated_at: 2026-10-14--13-13
 context: >
   The operator asked that every decision taken during octmux's OpenCode v2 work be recorded in the
   repository. The work covers the Stage 14 /brain run and the Stage C /brain runs, sessions C1 to C3,
@@ -813,6 +813,23 @@ badge on the parent. **Status:** Implemented in `fe6c7a5`.
 - v1 keeps the file-based, same-host badge (A8).
 
 **Status:** Recorded.
+
+## 5b. Stage 15.2.1: client and server directory trees differ (2026-10-14)
+
+**D15.2.1-1 — Check the location before any session is used.** Operator, after the MBP showed
+"Session location unavailable". A v2 `session.create` accepts a directory the server does not have
+and leaves a project record that cannot be deleted. octmux calls `location.get` first and exits 1,
+listing the server's resolvable projects. **Status:** Implemented in Stage 15.2.1.
+
+**D15.2.1-2 — `server.directoryMap` for shared storage.** Operator chose a per-server prefix map in
+`octmux.json` (`{ "/mnt/nfs": "/Volumes/Disks" }`). Longest whole-segment prefix wins; refused together
+with `server.directory`, which stays as the fixed override. **Status:** Implemented in Stage 15.2.1.
+
+**D15.2.1-3 — Multi-tenant use is out of octmux's scope.** One OpenCode server is one tenant (shared
+password, global event stream, tools run as the server's OS user). Isolation is one server per tenant;
+the general case is "choose a server project", not "send my cwd". Recorded in
+`docs/OpenCode-v2-notes.md` "Known Limitations". Choosing a project by repo identity or `--project` is
+not scheduled. **Status:** Recorded.
 
 ## 6. Rejected alternatives
 

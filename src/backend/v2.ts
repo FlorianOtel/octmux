@@ -117,7 +117,8 @@ function formatWriteError(err: unknown, cwd: string, configHint: string): Error 
           ? err.message.slice(LOCATION_NOT_FOUND_PREFIX.length)
           : cwd;
         return new Error(
-          `${tag}: the OpenCode server has no directory ${dir} — set server.directory in ${configHint} to the server-side path`,
+          `${tag}: the OpenCode server has no directory ${dir} — set server.directory or server.directoryMap ` +
+            `in ${configHint} to the server-side path`,
         );
       }
       return new Error(err.message ? `${tag}: ${err.message}` : tag);
@@ -699,6 +700,48 @@ export class V2Backend implements Backend {
     if (info.parentID !== undefined && info.parentID !== null) return null;
     const model = info.model ? { providerID: info.model.providerID, id: info.model.id } : undefined;
     return parseOrchestraMetadata(info.metadata, model);
+  }
+
+  /**
+   * `location.get` for `directory` (see `Backend.checkLocation`). A transport failure is rethrown
+   * unchanged. Any other failure is formatted by `formatWriteError`. A `LocationNotFoundError` also
+   * gets the list of projects the server knows, so the operator can see which paths are valid.
+   */
+  async checkLocation(directory: string): Promise<void> {
+    try {
+      await this.client.location.get({ location: { directory } });
+    } catch (err) {
+      if (err instanceof ClientError && err.reason === "Transport") throw err;
+      const formatted = formatWriteError(err, directory, this.configHint);
+      if ((err as { _tag?: unknown } | null)?._tag !== "LocationNotFoundError") throw formatted;
+      throw new Error(`${formatted.message}${await this.knownProjectsText()}`);
+    }
+  }
+
+  /**
+   * The server's usable project paths as text for the `checkLocation` message, one indented line each,
+   * sorted. Two kinds of project are left out:
+   * - the built-in `global` project: it is the fallback, not a place to work in;
+   * - placeholder projects at paths the server does not have. A session create at a missing directory
+   *   (before this check existed) left them behind, and the API cannot delete them. Each remaining path
+   *   is probed with `location.get`, and only the ones that resolve are listed.
+   * This is a best-effort hint on an error path, so any failure (transport included) yields "".
+   */
+  private async knownProjectsText(): Promise<string> {
+    try {
+      const projects = await this.client.project.list();
+      const candidates = projects.filter((project) => project.id !== "global").map((project) => project.canonical);
+      const resolves = await Promise.all(
+        candidates.map((directory) =>
+          this.client.location.get({ location: { directory } }).then(() => true, () => false),
+        ),
+      );
+      const paths = candidates.filter((_path, index) => resolves[index]).sort();
+      if (paths.length === 0) return "";
+      return `\nProjects the OpenCode server knows:\n${paths.map((path) => `  ${path}`).join("\n")}`;
+    } catch {
+      return "";
+    }
   }
 
   /**

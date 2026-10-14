@@ -19,14 +19,19 @@ export interface OctmuxConfig {
     // Directory path AS SEEN BY THE SERVER. Used as the session location instead of
     // octmux's local working directory. Must be absolute (checked after substitution).
     directory?: string;
+    // Local path prefix -> server path prefix, e.g. { "/mnt/nfs": "/Volumes/Disks" } when the
+    // server mounts the same storage at another place. octmux's local working directory is
+    // rewritten with the longest matching prefix (see mapServerDirectory). Keys and values must
+    // be absolute. Cannot be combined with server.directory.
+    directoryMap?: Record<string, string>;
   };
 }
 
 // Keys the config file may contain. Anything else is a hard error, so a typo
 // such as "passwrod" fails loudly instead of being silently ignored.
 const ALLOWED_TOP_LEVEL_KEYS: readonly string[] = ["$schema", "server"];
-const ALLOWED_SERVER_KEYS: readonly string[] = ["url", "password", "directory"];
-const ALLOWED_KEYS_TEXT = "$schema, server.url, server.password, server.directory";
+const ALLOWED_SERVER_KEYS: readonly string[] = ["url", "password", "directory", "directoryMap"];
+const ALLOWED_KEYS_TEXT = "$schema, server.url, server.password, server.directory, server.directoryMap";
 
 // Matches a single OpenCode-style token: {env:NAME} or {file:PATH}.
 // Group 1 is the token kind, group 2 is its argument.
@@ -125,6 +130,14 @@ export function parseAndValidate(raw: string): OctmuxConfig {
     }
     if (parsed.server.directory !== undefined) {
       requireString(parsed.server.directory, "server.directory");
+    }
+    if (parsed.server.directoryMap !== undefined) {
+      if (!isPlainObject(parsed.server.directoryMap)) {
+        throw new Error(`config key "server.directoryMap" must be an object of local path -> server path`);
+      }
+      for (const [local, remote] of Object.entries(parsed.server.directoryMap)) {
+        requireString(remote, `server.directoryMap["${local}"]`);
+      }
     }
   }
 
@@ -254,7 +267,7 @@ function checkPasswordPermissions(password: string, configPath: string, configDi
 }
 
 // Returns a copy of `config` with tokens expanded in server.url, server.password,
-// and server.directory.
+// and server.directory. server.directoryMap is copied unchanged.
 function substituteConfig(config: OctmuxConfig, configDir: string): OctmuxConfig {
   const substituted: OctmuxConfig = { ...config };
   if (config.server !== undefined) {
@@ -267,6 +280,10 @@ function substituteConfig(config: OctmuxConfig, configDir: string): OctmuxConfig
     }
     if (config.server.directory !== undefined) {
       substituted.server.directory = substituteTokens(config.server.directory, configDir);
+    }
+    // directoryMap is copied as written: its paths are plain config, not secrets, so no tokens are expanded.
+    if (config.server.directoryMap !== undefined) {
+      substituted.server.directoryMap = { ...config.server.directoryMap };
     }
   }
   return substituted;
@@ -350,5 +367,66 @@ export function loadOctmuxConfig(
     );
   }
 
+  // server.directoryMap: every key (local prefix) and value (server prefix) must be absolute.
+  // The values are server paths, so they are judged by spelling, like server.directory.
+  const directoryMap = config.server?.directoryMap;
+  if (directoryMap !== undefined) {
+    if (directory !== undefined) {
+      throw new Error(
+        `${configPath}: server.directory and server.directoryMap cannot both be set — ` +
+        "server.directory pins one server path, server.directoryMap translates the local directory. Keep one.",
+      );
+    }
+    for (const [local, remote] of Object.entries(directoryMap)) {
+      if (!local.startsWith("/")) {
+        throw new Error(`${configPath}: server.directoryMap key must be an absolute local path, got "${local}"`);
+      }
+      if (!isAbsoluteServerPath(remote)) {
+        throw new Error(
+          `${configPath}: server.directoryMap["${local}"] must be an absolute server path ` +
+          `(starting with "/" or a drive letter), got "${remote}"`,
+        );
+      }
+    }
+  }
+
   return { config, path: configPath };
+}
+
+// Removes trailing "/" characters, except from the root path "/" itself.
+function trimTrailingSlashes(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  return trimmed === "" ? "/" : trimmed;
+}
+
+/**
+ * Translates a local directory into the server's path for it, using server.directoryMap.
+ *
+ * The longest local prefix that matches on a whole path segment wins, so "/mnt/nfs" matches
+ * "/mnt/nfs/Florian" but not "/mnt/nfs2". The rest of the path is appended to the server prefix
+ * unchanged. Returns undefined when no prefix matches, so the caller decides the fallback.
+ *
+ * Example: mapServerDirectory("/mnt/nfs/Florian/x", { "/mnt/nfs": "/Volumes/Disks" })
+ *          → "/Volumes/Disks/Florian/x"
+ */
+export function mapServerDirectory(localDirectory: string, directoryMap: Record<string, string>): string | undefined {
+  let bestLocal: string | undefined;
+  for (const key of Object.keys(directoryMap)) {
+    const local = trimTrailingSlashes(key);
+    const matches =
+      localDirectory === local ||
+      local === "/" ||
+      localDirectory.startsWith(`${local}/`);
+    if (matches && (bestLocal === undefined || local.length > bestLocal.length)) {
+      bestLocal = key;
+    }
+  }
+  if (bestLocal === undefined) return undefined;
+
+  const local = trimTrailingSlashes(bestLocal);
+  const remote = trimTrailingSlashes(directoryMap[bestLocal]);
+  // The part of the local path below the matched prefix, starting with "/" (or empty for an exact match).
+  const rest = local === "/" ? localDirectory : localDirectory.slice(local.length);
+  if (rest === "" || rest === "/") return remote;
+  return remote === "/" ? rest : `${remote}${rest}`;
 }

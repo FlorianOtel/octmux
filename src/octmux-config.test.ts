@@ -7,6 +7,7 @@ import {
   substituteTokens,
   checkFilePermissions,
   loadOctmuxConfig,
+  mapServerDirectory,
 } from "./octmux-config.ts";
 
 // Every test works inside one fresh temp directory, removed in afterAll.
@@ -55,7 +56,7 @@ describe("parseAndValidate (A3)", () => {
 
   test("throws on an unknown nested server key, naming it as server.<key>", () => {
     expect(() => parseAndValidate(`{"server": {"passwrod": "x"}}`)).toThrow(
-      'unknown config key "server.passwrod" — allowed keys are $schema, server.url, server.password, server.directory',
+      'unknown config key "server.passwrod" — allowed keys are $schema, server.url, server.password, server.directory, server.directoryMap',
     );
   });
 
@@ -404,5 +405,91 @@ describe("loadOctmuxConfig server.directory (C8)", () => {
       0o644,
     );
     expect(loadOctmuxConfig(configPath)!.config.server?.directory).toBe("/srv/shared");
+  });
+});
+
+describe("loadOctmuxConfig server.directoryMap", () => {
+  test("a map of absolute local and server prefixes loads unchanged", () => {
+    const configPath = writeFixture(
+      "cfg-map-ok.json",
+      `{"server": {"directoryMap": {"/mnt/nfs": "/Volumes/Disks", "/home/me": "C:\\\\Users\\\\me"}}}`,
+    );
+    expect(loadOctmuxConfig(configPath)!.config.server?.directoryMap).toEqual({
+      "/mnt/nfs": "/Volumes/Disks",
+      "/home/me": "C:\\Users\\me",
+    });
+  });
+
+  test("throws when directoryMap is not an object", () => {
+    expect(() => parseAndValidate(`{"server": {"directoryMap": ["/mnt/nfs"]}}`)).toThrow(
+      'config key "server.directoryMap" must be an object',
+    );
+  });
+
+  test("throws when a directoryMap value is not a string", () => {
+    expect(() => parseAndValidate(`{"server": {"directoryMap": {"/mnt/nfs": 1}}}`)).toThrow(
+      'config key "server.directoryMap["/mnt/nfs"]" must be a string',
+    );
+  });
+
+  test("throws when a key is not an absolute local path", () => {
+    const configPath = writeFixture("cfg-map-relkey.json", `{"server": {"directoryMap": {"mnt/nfs": "/Volumes/Disks"}}}`);
+    expect(() => loadOctmuxConfig(configPath)).toThrow(
+      `${configPath}: server.directoryMap key must be an absolute local path, got "mnt/nfs"`,
+    );
+  });
+
+  test("throws when a value is not an absolute server path", () => {
+    const configPath = writeFixture("cfg-map-relval.json", `{"server": {"directoryMap": {"/mnt/nfs": "Volumes"}}}`);
+    expect(() => loadOctmuxConfig(configPath)).toThrow(
+      `${configPath}: server.directoryMap["/mnt/nfs"] must be an absolute server path`,
+    );
+  });
+
+  test("throws when server.directory is also set", () => {
+    const configPath = writeFixture(
+      "cfg-map-both.json",
+      `{"server": {"directory": "/srv/x", "directoryMap": {"/mnt/nfs": "/Volumes/Disks"}}}`,
+    );
+    expect(() => loadOctmuxConfig(configPath)).toThrow(
+      `${configPath}: server.directory and server.directoryMap cannot both be set`,
+    );
+  });
+});
+
+describe("mapServerDirectory", () => {
+  const map = { "/mnt/nfs": "/Volumes/Disks" };
+
+  test("rewrites the matching prefix and keeps the rest of the path", () => {
+    expect(mapServerDirectory("/mnt/nfs/Florian/Gin-AI/projects/octmux", map)).toBe(
+      "/Volumes/Disks/Florian/Gin-AI/projects/octmux",
+    );
+  });
+
+  test("an exact match maps to the server prefix itself", () => {
+    expect(mapServerDirectory("/mnt/nfs", map)).toBe("/Volumes/Disks");
+  });
+
+  test("matches whole path segments only", () => {
+    expect(mapServerDirectory("/mnt/nfs2/x", map)).toBeUndefined();
+  });
+
+  test("returns undefined when no prefix matches", () => {
+    expect(mapServerDirectory("/home/florian/x", map)).toBeUndefined();
+  });
+
+  test("the longest matching prefix wins", () => {
+    const nested = { "/mnt/nfs": "/Volumes/Disks", "/mnt/nfs/Florian/Gin-AI": "/Users/fotel/Gin-AI" };
+    expect(mapServerDirectory("/mnt/nfs/Florian/Gin-AI/projects/a", nested)).toBe("/Users/fotel/Gin-AI/projects/a");
+    expect(mapServerDirectory("/mnt/nfs/Eva", nested)).toBe("/Volumes/Disks/Eva");
+  });
+
+  test("trailing slashes on keys and values are ignored", () => {
+    expect(mapServerDirectory("/mnt/nfs/a", { "/mnt/nfs/": "/Volumes/Disks/" })).toBe("/Volumes/Disks/a");
+  });
+
+  test("a root key or value maps every path", () => {
+    expect(mapServerDirectory("/a/b", { "/": "/srv" })).toBe("/srv/a/b");
+    expect(mapServerDirectory("/srv/a", { "/srv": "/" })).toBe("/a");
   });
 });

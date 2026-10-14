@@ -3,7 +3,7 @@ title: "OpenCode v1/v2 adaptation layer"
 created_at: 2026-10-13--23-24
 created_by: Claude Code (Claude Opus 5.5)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-14--00-15
+updated_at: 2026-10-14--13-13
 context: >
   The operator asked for an extensive, authoritative description of the redesign that lets one
   octmux binary serve both the OpenCode v1 API (@opencode-ai/sdk, the local systemd server) and the
@@ -100,7 +100,7 @@ each backend fills the members the other protocol introduced with a documented n
  ~/.config/octmux/octmux.json  (or --config <path>)
  ┌──────────────────────────────────────────────────────────────────────────┐
  │ CONFIG + AUTH   src/octmux-config.ts  loadOctmuxConfig                     │
- │   keys: server.url, server.password, server.directory ($schema ignored)    │
+ │   keys: server.url, .password, .directory, .directoryMap ($schema ignored) │
  │   {env:NAME} / {file:PATH} substitution, 0600 checks, absolute directory   │
  │ src/auth-headers.ts  setAuthPassword → getAuthHeaders                      │
  │   Authorization: Basic base64("opencode:" + password), process-wide        │
@@ -118,9 +118,10 @@ each backend fills the members the other protocol introduced with a documented n
                                  ▼  backendProtocol = "v1" | "v2"
  ┌──────────────────────────────────────────────────────────────────────────┐
  │ CONSTRUCTION   src/index.tsx                                               │
- │   serverDirectory = config server.directory ?? process.cwd()               │
+ │   serverDirectory = server.directory ?? mapped cwd ?? process.cwd()        │
  │   bootstrapBackend(serverDirectory) → --resume / --resume-last / --fork /  │
  │                                       default create                        │
+ │   checkServerLocation(serverDirectory) → v2 location.get, exit 1 if absent │
  │   effectiveServerDirectory = resolved session's directory, if different    │
  │   backend(effectiveServerDirectory) → backend.subscribeEvents() → <App>    │
  └───────────────────────────────┬──────────────────────────────────────────┘
@@ -184,6 +185,9 @@ each backend fills the members the other protocol introduced with a documented n
   resolved password is an error.
 - `server.directory` must be absolute after substitution (`isAbsoluteServerPath`: `/…` or a drive
   letter). It is not stat-ed, because it names a path on the server's host.
+- `server.directoryMap` (local prefix → server prefix) needs absolute keys and values and cannot be
+  set together with `server.directory`. It is copied without token substitution.
+  `mapServerDirectory(cwd, map)` applies the longest whole-segment prefix, or returns `undefined`.
 - `setAuthPassword(password)` (`src/auth-headers.ts`) runs once in `src/index.tsx`, before any client
   is built. `getAuthHeaders()` returns `{ Authorization: "Basic …" }` or `{}`. Every request uses it:
   both SDK clients, the probes, `V1Backend`'s raw `fetch()` calls, `utils/session-ancestry.ts`, and
@@ -212,12 +216,13 @@ the probe body. A network error on the first probe ends detection immediately.
 ### 2.3 Backend construction: bootstrap and effective backends
 
 ```
-serverDirectory           = config.server.directory ?? process.cwd()
+serverDirectory           = config.server.directory ?? mapServerDirectory(cwd, directoryMap) ?? cwd
 bootstrapClient (v1 only) = createOpencodeClient({ baseUrl, directory: serverDirectory, headers })
 bootstrapBackend          = V1Backend(bootstrapClient, baseUrl, serverDirectory)
                           | V2Backend(baseUrl, serverDirectory, undefined, configHint)
 
-session = --resume <id>   → bootstrapBackend.session.get(id)
+checkServerLocation(serverDirectory)              (all modes except --resume <id>; exit 1 if absent)
+session = --resume <id>   → bootstrapBackend.session.get(id), then check its directory
         | --resume-last   → bootstrapBackend.session.list(), newest time.updated
         | --fork <id>     → bootstrapBackend.session.get(id), then .fork(id, { directory })
         | default         → bootstrapBackend.session.create({ directory: serverDirectory })
@@ -237,7 +242,11 @@ eventStream               = await backend.subscribeEvents()
   status line project label is `deriveProjectName(props.serverDirectory)`.
 - `--auto-spawn` spawns a local server (`spawnOpencodeServer`) and keeps `backendProtocol = "v1"`
   without detection.
-- `server.directory` is refused together with `--worktree` or `--auto-spawn` (exit 2).
+- `checkServerLocation` wraps `Backend.checkLocation`: v2 `location.get`, v1 no request. A failure
+  prints `octmux: cannot use <what> on the server: <message>` and exits 1. `--resume-last` and
+  `--fork` also check the session's own directory when it differs from `serverDirectory`.
+- `server.directory` is refused together with `--worktree` or `--auto-spawn`, and
+  `server.directoryMap` with `--auto-spawn` (exit 2).
 - A failed default `create` prints `octmux: could not create a session: <message>` and exits 1.
 
 ---
@@ -260,7 +269,7 @@ section summarises them and states what each implementation does.
 v2 error formatting (`formatWriteError` in `src/backend/v2.ts`):
 
 - A declared typed error (an `Error` with `_tag`) → `"<_tag>: <message>"`.
-- `LocationNotFoundError` → `"LocationNotFoundError: the OpenCode server has no directory <dir> — set server.directory in <configHint> to the server-side path"`.
+- `LocationNotFoundError` → `"LocationNotFoundError: the OpenCode server has no directory <dir> — set server.directory or server.directoryMap in <configHint> to the server-side path"`. From `checkLocation` the message also lists the server's projects whose path resolves.
 - `ClientError` with reason `UnexpectedStatus` → `"OpenCode server returned HTTP <status>"`.
 - Other SDK failures → `"OpenCode request failed (<reason>)"` or `"OpenCode request failed: <message>"`.
 - Only `_tag`, `message` and status reach the text. Headers and bodies never do.
@@ -835,8 +844,8 @@ behaves as stated.
 | Assumption | Code | With a remote server |
 |---|---|---|
 | v1 only (legacy): the orchestra badge reads `~/.config/opencode/orchestra/sessions/*/`: `.oc-session-id` must match the harness session; `.brain-inflight` / `.duo-inflight` content gives the badge; `telemetry.json` `parser_warnings` are shown; directories with mtime older than 24 h are skipped | `V1OrchestraFileReader` (`src/backend/v1-orchestra.ts`), behind `V1Backend.getOrchestraState` | The sidecars are written on the server's host, so octmux finds none and shows no badge. The harness session is matched by `realpath(process.cwd())` against `SessionRecord.directory`. v1 has no API channel for this state. On v2 the badge comes over the API (`V2Backend.getOrchestraState` reads the session's `metadata.orchestra`; contract in `src/backend/v2-orchestra.ts`) and works with a remote server |
-| `--auto-spawn` locates the `opencode` binary (`which`, then fallbacks) and starts a local server | `spawnOpencodeServer` (`src/server-lifecycle.ts`) | Always local and always v1 (no detection). Refused with `server.directory` (exit 2) |
-| `--worktree` creates a git worktree locally and chdirs into it | `src/utils/worktree.ts`, `src/index.tsx` | The server cannot see the path. Refused with `server.directory` (exit 2) |
+| `--auto-spawn` locates the `opencode` binary (`which`, then fallbacks) and starts a local server | `spawnOpencodeServer` (`src/server-lifecycle.ts`) | Always local and always v1 (no detection). Refused with `server.directory` or `server.directoryMap` (exit 2) |
+| `--worktree` creates a git worktree locally and chdirs into it | `src/utils/worktree.ts`, `src/index.tsx` | The server sees the path only through `server.directoryMap` or a shared host. Refused with `server.directory` (exit 2) |
 | Git branch in the status line | `fetchGitBranch` (`src/utils/formatters.ts`) | Shows the local checkout's branch |
 
 The project label in the status line is `deriveProjectName(serverDirectory)`, the basename of the

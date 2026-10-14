@@ -1417,6 +1417,9 @@ export function App(props: AppProps) {
       // Mobile-Companion Part B: local-only command — no SSE user message emitted; do NOT mint/record (no SSE user message emitted).
       renderer.commitUserInput(text);
       try {
+        // Startup skips this check for --resume <id>, so check here too: a v2 server would otherwise
+        // accept a session at a directory it does not have (see Backend.checkLocation).
+        await props.backend.checkLocation(props.serverDirectory);
         const created = await props.backend.session.create({ directory: props.serverDirectory });
         const newID = created!.id;
         await switchSession(newID, `new session started (${newID.slice(0, 8)})`);

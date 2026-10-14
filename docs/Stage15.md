@@ -3,7 +3,7 @@ title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
 updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-14--00-25
+updated_at: 2026-10-14--13-13
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -324,13 +324,20 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
 - One startup flow serves v1 and v2. Protocol detection selects the backend.
 - A v2 server starts and serves sessions. A major version mismatch refuses to start. Minor
   gate warnings are kept. No success line is printed.
-- `server.directory` in `octmux.json` is the server-side directory. It must be
-  absolute after substitution. It is the location for v2, and the `directory` for v1.
-  When set, startup prints a line naming it and the file. When unset, the launch
-  directory is used.
-- `server.directory` is refused with `--worktree` and with `--auto-spawn`, both with
-  exit 2. A local worktree or a locally spawned server cannot be the one that the
-  server directory names.
+- The server directory is `server.directory`, else `server.directoryMap` applied to the
+  launch directory (longest whole-segment prefix, `mapServerDirectory` in
+  `src/octmux-config.ts`), else the launch directory. Both keys must be absolute and
+  cannot be set together. It is the location for v2, and the `directory` for v1. Startup
+  prints a line naming it and the file whenever a key applies.
+- Before a session is created, forked or attached, `checkServerLocation` calls
+  `Backend.checkLocation` (v2: `location.get`; v1: no request). A missing directory exits 1
+  with a message naming it, the config keys, and the server's resolvable projects. The
+  server directory is checked for every mode except `--resume <id>`; the resumed, most recent
+  or fork-parent session's own directory is checked when it differs. `/new` checks too.
+- `server.directory` is refused with `--worktree` and with `--auto-spawn`, and
+  `server.directoryMap` with `--auto-spawn`, all with exit 2. A local worktree or a
+  locally spawned server cannot be the one that a fixed server directory names. A
+  worktree's path is translated by `server.directoryMap` like any launch directory.
 - The default session creation at startup, when it fails, prints
   `octmux: could not create a session: <message>` and exits 1.
 
@@ -379,8 +386,9 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
   with prefixed lines, and a divider after it. A live compaction renders differently.
 - Auto-compaction is out of scope. Only the reason `manual` has been observed.
 - `--auto-spawn` starts a local server and skips protocol detection, so it runs the v1 client. `--worktree`
-  creates its worktree on the octmux host, so it suits a server on the same host. Both are refused with
-  `server.directory` (exit 2).
+  creates its worktree on the octmux host, so it suits a server on the same host or one that sees it through
+  `server.directoryMap`. Both are refused with `server.directory`, and `--auto-spawn` with `server.directoryMap` (exit 2).
+- One OpenCode server cannot isolate tenants. See `docs/OpenCode-v2-notes.md` "Known Limitations".
 - Two `/model` switches made back to back, before the first `session.model.selected` event
   arrives, can briefly show the stale model. The event carries no client id. This is accepted.
 
@@ -390,12 +398,45 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
   backend (`V1Backend` or `V2Backend`) serves the session.
 - The Backend session API uses flat named arguments and `SessionRecord`.
 - v2 covers sessions, prompts, commands, compaction, model select, permissions,
-  forms, streaming events, replay, incremental resync, and `server.directory`.
+  forms, streaming events, replay, incremental resync, `server.directory` and
+  `server.directoryMap`, with a server-side location check before any session is used.
 - `ReplEvent` carries the v2-only kinds. v1 never emits them.
 - `/api/provider` is never called.
 - v2 is at feature parity with v1. The limits are listed under "Known limits".
 
 ---
+
+### 2026-10-14--13-13 — Stage 15.2.1 — server location check and `server.directoryMap`
+
+**Implemented by:** Claude Code (Claude Opus 5.5) — 2026-10-14--13-13
+**Commit(s):** `<pending>`
+
+Operator report: against the MBP v2 server, the OpenCode desktop app showed "Session location
+unavailable: /mnt/nfs/Florian/Gin-AI/projects/octmux". The MBP mounts the same NFS share at
+`/Volumes/Disks`.
+- **Cause:** octmux sent its local cwd. A v2 `session.create` accepts a directory the server does
+  not have and records a project for it. The project and session were created 1 ms apart; v2 has
+  no project delete. Every later location-scoped call failed. The `LocationNotFoundError`
+  formatting from 15.2 never fired, because create does not check.
+- **Location check:** `Backend.checkLocation(directory)` (`src/backend/types.ts`).
+  - `V2Backend` calls `location.get`. On `LocationNotFoundError` it appends the projects from
+    `project.list` whose path still resolves, without `global`.
+  - `V1Backend` resolves without a request.
+  - `src/index.tsx` checks before create, fork and `--resume-last`, and the session's own directory
+    for `--resume <id>` and when a resolved directory differs; `/new` (`src/app.tsx`) checks too.
+  - The `LocationNotFoundError` hint names `server.directory or server.directoryMap`.
+- **`server.directoryMap`:** local prefix → server prefix in `octmux.json`, applied with the longest
+  whole-segment match (`mapServerDirectory`). Validated absolute; refused with `server.directory`
+  (exit 1) and with `--auto-spawn` (exit 2). `substituteConfig` copies it unchanged.
+- **Docs:** new `docs/OpenCode-v2-notes.md` with "Known Limitations" (one server is one tenant).
+- **Environment:** `node_modules/@opencode-ai/sdk` was a tree of symlinks into the removed
+  `/mnt/nfs/Florian/Gin-AI/opencode--dot.config/`, so the build failed. The 78 links were
+  repointed to `~/.config/opencode/`, which `bun.lock` names. Not committed (`node_modules`).
+- **Verification:** `bun test` passes 801 tests, 0 fail; the tsc error set is unchanged. Live on the
+  MBP (2.0.28): without a map the binary exits 1 with the message and creates no session; with the
+  map, `/Volumes/Disks/Florian/Gin-AI/projects/octmux` passes `checkLocation`. A session created by
+  the old binary in a mis-sequenced test run (`ses_ec5e4255…`) was deleted by id. The two earlier
+  placeholder sessions are the operator's and were left alone.
 
 ### 2026-10-14--00-15 — Stage 15.4.1 — orchestra contract amendments from oconona
 

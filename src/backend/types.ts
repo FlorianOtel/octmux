@@ -362,6 +362,18 @@ export interface Backend {
   subscribeEvents(): Promise<{ stream: AsyncIterable<{ payload: unknown }> }>;
 
   /**
+   * Startup check that the server can resolve `directory` (a path as the SERVER sees it) before
+   * octmux creates, forks or attaches to a session there. Rejects with a readable `Error` when it
+   * cannot. Without this check a v2 server accepts a session at a directory it does not have and
+   * records a project for it that the API cannot delete.
+   *
+   * `V1Backend` resolves without a request: v1 has no location route.
+   * `V2Backend` calls `location.get`. On a `LocationNotFoundError` the message names the directory,
+   * the config keys to fix, and the projects the server knows (from `project.list`).
+   */
+  checkLocation(directory: string): Promise<void>;
+
+  /**
    * Pending forms for a session (v2 only). v1 has no forms, so `V1Backend` returns `[]`.
    * `undefined` on an error status, as with the other read-style session operations.
    */
