@@ -3,7 +3,6 @@ import { render } from "ink";
 // Package exports field doesn't expose this, so use a relative path to the file directly.
 import inkInstancesMap from "../node_modules/ink/build/instances.js";
 import { execFileSync } from "node:child_process";
-import { readlinkSync } from "node:fs";
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { findFreePort, spawnOpencodeServer, type ServerHandle } from "./server-lifecycle.ts";
 import { getAuthHeaders, setAuthPassword } from "./auth-headers.ts";
@@ -205,7 +204,8 @@ if (multiWindow) {
     process.exit(1);
   }
   try {
-    const myTty   = readlinkSync("/proc/self/fd/0");
+    // `tty` prints stdin's device path and works on Linux and macOS (/proc is Linux-only).
+    const myTty   = execFileSync("tty", { encoding: "utf8", stdio: ["inherit", "pipe", "ignore"] }).trim();
     const paneTty = execFileSync("tmux", [
       "display-message", "-p", "-t", process.env.TMUX_PANE, "#{pane_tty}",
     ], { encoding: "utf8" }).trim();

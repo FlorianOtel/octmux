@@ -3,7 +3,7 @@ title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
 updated_by: Claude Code (Claude Sonnet 5.5)
-updated_at: 2026-10-14--14-00
+updated_at: 2026-10-14--15-00
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -727,3 +727,10 @@ both sides; octmux has no open work on it. The octmux changes:
 - Cause: `ModelPickerModal`/`SessionPickerModal` rendered every item. When the live area reached terminal height, Ink 5 (`ink.js:121`) emitted `clearTerminal` (`ESC[2J ESC[3J ESC[H`) on every render; iTerm2 flags `ESC[3J` ("attempted to clear scrollback history") and the repeated clear flickers.
 - Fix: new `src/components/picker-window.ts` (`pickerWindow`) limits both pickers to `rows - 8` visible items with ↑/↓ "N more" indicators. Test: `picker-window.test.ts`.
 - Not done: stdout `3J` filter safety net; binary not rebuilt (`scripts/build.sh` targets the Linux bun path).
+
+### 2026-10-14--15-00 — Fix `--multi-window` pane check on macOS
+**Implemented by:** Claude Code (Claude Sonnet 5.5) — 2026-10-14--15-00
+**Commit(s):** `PENDING`
+
+- Cause: the stale-`TMUX_PANE` check read `/proc/self/fd/0`, which does not exist on macOS. `readlinkSync` threw and the catch printed "could not verify tmux pane context" even inside a real pane.
+- Fix: `src/index.tsx` gets stdin's tty path from the portable `tty` command (`execFileSync`, stdin inherited) and compares it to `#{pane_tty}`. The unused `readlinkSync` import is removed.
