@@ -1,5 +1,6 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
+import { pickerWindow } from "./picker-window.ts";
 
 export type SessionPickerItem = {
   id: string;
@@ -26,16 +27,19 @@ export function SessionPickerModal({ items, initialIdx, onSelect, onCancel }: Pr
     const n = parseInt(input, 10);
     if (!isNaN(n) && n >= 1 && n <= Math.min(items.length, 9)) onSelect(items[n - 1]);
   });
+  const { start, end } = pickerWindow(items.length, idx);
   return (
     <Box flexDirection="column">
       <Text dimColor>Session picker  (↑↓=navigate  Enter=select  Esc=cancel)</Text>
-      {items.map((item, i) => (
+      {start > 0 && <Text dimColor>  ↑ {start} more</Text>}
+      {items.slice(start, end).map((item, j) => { const i = start + j; return (
         <Text key={item.id} bold={i === idx}>
           {i === idx ? ">" : " "} {i + 1}. {item.id.slice(0, 8)}  {item.title || "(untitled)"}
           {item.parentID ? `  ← fork of ${item.parentID.slice(0, 8)}` : ""}
           {item.isCurrent ? "  ←current" : ""}
         </Text>
-      ))}
+      ); })}
+      {end < items.length && <Text dimColor>  ↓ {items.length - end} more</Text>}
     </Box>
   );
 }

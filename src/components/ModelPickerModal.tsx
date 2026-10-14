@@ -1,5 +1,6 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
+import { pickerWindow } from "./picker-window.ts";
 
 export type ModelPickerItem = {
   providerID: string;
@@ -29,14 +30,17 @@ export function ModelPickerModal({ items, initialIdx, onSelect, onCancel }: Prop
     if (!isNaN(n) && n >= 1 && n <= items.length) { onSelect(items[n - 1]); return; }
   });
 
+  const { start, end } = pickerWindow(items.length, idx);
   return (
     <Box flexDirection="column">
       <Text dimColor>Model picker  (↑↓=navigate  Enter=select  Esc=cancel)</Text>
-      {items.map((item, i) => (
+      {start > 0 && <Text dimColor>  ↑ {start} more</Text>}
+      {items.slice(start, end).map((item, j) => { const i = start + j; return (
         <Text key={i} bold={i === idx}>
           {i === idx ? ">" : " "} {i + 1}. {item.providerID}/{item.modelID}{"  "}{item.name}{"  ctx:"}{item.ctxLabel}{item.isCurrent ? "  ←current" : ""}
         </Text>
-      ))}
+      ); })}
+      {end < items.length && <Text dimColor>  ↓ {items.length - end} more</Text>}
     </Box>
   );
 }
