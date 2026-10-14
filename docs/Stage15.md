@@ -2,8 +2,8 @@
 title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
-updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-14--13-13
+updated_by: Claude Code (Claude Sonnet 5.5)
+updated_at: 2026-10-14--14-00
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -719,3 +719,11 @@ both sides; octmux has no open work on it. The octmux changes:
 - Live v1 smoke test against the local v1 server: startup with the fallback warning, a prompt round trip, Ctrl-C interrupt during generation, and clean `/exit`.
 - A/B run against the pre-refactor build (`fd8dee5`): the same smoke steps produce identical behaviour.
 - Known pre-existing issue, found during the smoke test and present before Stage 15.1: Escape does not dismiss the `/sessions` picker. Tracked separately.
+
+### 2026-10-14--14-00 — Picker windowing (iTerm2 scrollback-clear warning)
+**Implemented by:** Claude Code (Claude Sonnet 5.5) — 2026-10-14--14-00
+**Commit(s):** `27af7a7`
+
+- Cause: `ModelPickerModal`/`SessionPickerModal` rendered every item. When the live area reached terminal height, Ink 5 (`ink.js:121`) emitted `clearTerminal` (`ESC[2J ESC[3J ESC[H`) on every render; iTerm2 flags `ESC[3J` ("attempted to clear scrollback history") and the repeated clear flickers.
+- Fix: new `src/components/picker-window.ts` (`pickerWindow`) limits both pickers to `rows - 8` visible items with ↑/↓ "N more" indicators. Test: `picker-window.test.ts`.
+- Not done: stdout `3J` filter safety net; binary not rebuilt (`scripts/build.sh` targets the Linux bun path).
