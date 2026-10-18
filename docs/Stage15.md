@@ -32,7 +32,7 @@ The seam is the `Backend` interface in `src/backend/types.ts`. Sub-stages:
 | 15.2 | `V2Backend` and the v2 core: sessions, prompts, commands, compaction, model select, permissions, forms, streaming events, replay, resync, startup | shipped |
 | 15.3 | v2 parity with v1 features | shipped |
 | 15.4 | Client-only boundary: orchestra state, model names and command names over the API | shipped |
-| 15.5 | Remove OpenCode v1 support: `V1Backend` and the v1 modules deleted; a v1 server is a hard startup error | shipped (commit pending) |
+| 15.5 | Remove OpenCode v1 support: `V1Backend` and the v1 modules deleted; a v1 server is a hard startup error | shipped |
 
 `V2Backend` (see "Native v2 backend" below) is the only backend. The limits are listed under
 "Known limits" below.
@@ -731,7 +731,7 @@ both sides; octmux has no open work on it. The octmux changes:
 
 ### 2026-10-18--18-27 — Stage 15.5 — Remove OpenCode v1 support
 **Implemented by:** Claude Code (Claude Haiku 5.5) — 2026-10-18--18-27
-**Commit(s):** `<pending>`
+**Commit(s):** `f68ab76`
 
 - octmux is now a v2-only OpenCode client. `V1Backend`, `src/backend/v1.ts`, `src/backend/v1-queries.ts`,
   `src/backend/v1-orchestra.ts`, `src/utils/session-ancestry.ts`, `src/server-lifecycle.ts` and

@@ -94,7 +94,7 @@ Two naming clashes to watch:
 | session C3 | 15.4 | `4962c17` | code: client-only boundary | 23:59 |
 | session C3 | 15.4 | `d73213c` | docs: hash backfill | 00:02 |
 | session C3 | 15.4.1 | `fe6c7a5` | code: oconona amendments A3, A5, A6 | 00:15 |
-| session `20261018T151945Z-2329778` | 15.5 | `<pending>` | code: remove OpenCode v1 support | — |
+| session `20261018T151945Z-2329778` | 15.5 | `f68ab76` | code: remove OpenCode v1 support | — |
 
 ## 2. Standing rules
 
@@ -919,4 +919,4 @@ others). No capture 4 is scheduled (PLAN-C2C3 "Out of scope").
 Session `20261018T151945Z-2329778`. No live capture was needed: the change removes code and does not depend on new protocol facts.
 
 **15.5-1 — Remove OpenCode v1 support entirely.** The operator confirmed that no install base still needs v1: the local systemd server and the mobile/P4OC setups are now v2 or retired. This supersedes C2. octmux becomes a v2-only client. `V1Backend`, the v1 modules, `--auto-spawn`, `src/server-lifecycle.ts` and the `@opencode-ai/sdk` dependency are removed. A detected v1 server is a hard startup error that names the reason and exits 1. The `/global/health` probe in `src/protocol-detect.ts` is kept only to produce that message. A 401 from the health probe is also treated as v1, so the separate "v1 unauthorized" outcome is removed.
-Rejected: keeping `--auto-spawn` and making it spawn a v2 server (new code, and the operator chose a clean break); reporting a v1 server as "unreachable" (a vaguer error); keeping `@opencode-ai/sdk` as a type-only dependency (it would leave a v1 package in the tree). **Status:** Implemented in `<pending>`.
+Rejected: keeping `--auto-spawn` and making it spawn a v2 server (new code, and the operator chose a clean break); reporting a v1 server as "unreachable" (a vaguer error); keeping `@opencode-ai/sdk` as a type-only dependency (it would leave a v1 package in the tree). **Status:** Implemented in `f68ab76`.
