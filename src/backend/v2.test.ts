@@ -1108,7 +1108,7 @@ describe("V2Backend.getDefaultModelConfig (SECURITY: only the two IDs survive)",
 });
 
 describe("V2Backend.listCommands (capture §4.12 and §5 /api/command GET)", () => {
-  test("calls command.list with the location and maps entries to the v1 Command shape", async () => {
+  test("calls command.list with the location and maps entries to the CommandInfo shape", async () => {
     const { client, calls } = makeFake({
       "command.list": {
         location: { directory: CWD },
@@ -1119,8 +1119,8 @@ describe("V2Backend.listCommands (capture §4.12 and §5 /api/command GET)", () 
     const resp = await backend.listCommands();
     expect(calls).toEqual([{ method: "command.list", input: { location: { directory: CWD } } }]);
     expect(resp.data).toEqual([
-      { name: "review", description: "Review changes", template: "" },
-      { name: "init", template: "" },
+      { name: "review", description: "Review changes" },
+      { name: "init" },
     ]);
   });
 });

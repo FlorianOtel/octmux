@@ -11,8 +11,6 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { OpenCodeClient, SessionMessageInfo } from "@opencode/client";
-import type { SessionMessagesResponses } from "@opencode-ai/sdk/client";
-import { translateHistory } from "../replay.ts";
 import { V2Backend } from "./v2.ts";
 import {
   addAssistantCostV2,
@@ -393,28 +391,12 @@ describe("translateHistoryV2", () => {
     expect(ops).toEqual([]);
   });
 
-  // Parity: for the same conversation, the v2 translation gives the same HistoryOp kinds, in the same order,
-  // that the v1 translator gives. Only the partIDs differ.
-  test("for equivalent content, the operation kinds and block roles match the v1 translator", () => {
+  test("a user turn and an assistant turn produce the expected operation kinds and block roles", () => {
     const v2Ops = translateHistoryV2([
       user("usr_1", "hello"),
       assistant("ast_1", [reasoning("plan"), text("done"), tool("call_1", "bash", completedState(["ok\n"]))]),
     ]);
-    const v1Messages = [
-      { info: { id: "m1", role: "user" }, parts: [{ id: "p0", type: "text", text: "hello" }] },
-      {
-        info: { id: "m2", role: "assistant" },
-        parts: [
-          { id: "p1", type: "reasoning", text: "plan" },
-          { id: "p2", type: "text", text: "done" },
-          { id: "call_1", type: "tool", tool: "bash", state: { status: "completed", output: "ok\n" } },
-        ],
-      },
-    ] as unknown as SessionMessagesResponses[200];
-    const v1Ops = translateHistory(v1Messages);
-
-    const kinds = (ops: typeof v1Ops) => ops.map((op) => (op.op === "block" ? `block:${op.role}` : op.op));
-    expect(kinds(v2Ops)).toEqual(kinds(v1Ops));
+    const kinds = (ops: typeof v2Ops) => ops.map((op) => (op.op === "block" ? `block:${op.role}` : op.op));
     expect(kinds(v2Ops)).toEqual([
       "user-input",
       "block:thinking",
@@ -424,10 +406,8 @@ describe("translateHistoryV2", () => {
       "turn-end",
       "seed-history",
     ]);
-    // The tool-result block is identical, partID included, so the joined v2 content equals v1's output string.
     const v2Result = v2Ops.find((op) => op.op === "block" && op.role === "tool-result");
-    const v1Result = v1Ops.find((op) => op.op === "block" && op.role === "tool-result");
-    expect(v2Result).toEqual(v1Result);
+    expect(v2Result).toEqual({ op: "block", partID: "call_1-result", role: "tool-result", text: "ok\n", status: "ok" });
   });
 });
 

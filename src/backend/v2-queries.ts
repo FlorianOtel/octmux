@@ -2,9 +2,8 @@
  * v2 session reads: pure translators and scans over a v2 message list, plus the thin async wrappers
  * `V2Backend.events` uses to fetch the messages first.
  *
- * Stage 15.2 (C2.3b). This is the v2 counterpart of `src/backend/v1-queries.ts` and of the v1 history
- * translator `translateHistory` in `src/replay.ts`. Each function mirrors the v1 behaviour named in its
- * comment, and says where v2 differs and why.
+ * Stage 15.2 (C2.3b). Each function mirrors the v1 behaviour named in its comment, and says where v2
+ * differs and why.
  *
  * Message shapes come from the SDK types in `@opencode/client` (`SessionMessageInfo`) and from
  * `docs/OpenCode-v2-protocol-capture.md` §5a. Nothing in this file touches React, the renderer or the editor.
@@ -13,7 +12,42 @@
 
 import type { SessionMessageInfo } from "@opencode/client";
 import type { HistoryOp, LatestAssistantActivity, TokenUsageSummary } from "./types.ts";
-import { CHILD_STALL_THRESHOLD_MS, isTurnStale } from "./v1-queries.ts";
+
+// ─── Stall watchdog helpers ───
+
+/** Minimal part shape the stall check reads: the activity timestamps and the completion state. */
+type PartForStallCheck = {
+  type?: string;
+  tool?: string;
+  state?: { status?: string; metadata?: { sessionId?: string } };
+  time?: { start?: number; end?: number };
+};
+
+/**
+ * True if a turn shows no forward progress within `thresholdMs`: either it
+ * has no parts at all, or the newest timestamp across all parts (`time.start`
+ * / `time.end`, whichever is latest) is older than `now - thresholdMs`. A
+ * `completed` turn is never stale.
+ */
+export function isTurnStale(
+  parts: PartForStallCheck[],
+  completedAt: number | null | undefined,
+  now: number,
+  thresholdMs: number,
+): boolean {
+  if (completedAt != null) return false;
+  if (parts.length === 0) return true;
+  let newest = 0;
+  for (const p of parts) {
+    if (p.time?.start) newest = Math.max(newest, p.time.start);
+    if (p.time?.end) newest = Math.max(newest, p.time.end);
+  }
+  if (newest === 0) return true;
+  return now - newest >= thresholdMs;
+}
+
+/** Threshold for judging a paired subagent's own turn stale (the watchdog's 3-minute window). */
+export const CHILD_STALL_THRESHOLD_MS = 180_000;
 
 // ─── Fetcher shapes ───
 
@@ -96,9 +130,8 @@ function toolOutputText(content: ReadonlyArray<ToolContentLike> | undefined): st
 // ─── History translation ───
 
 /**
- * Pure translation of a v2 message list into renderer/editor operations. This is the v2 counterpart of
- * `translateHistory` in `src/replay.ts`. The output has the same `HistoryOp` kinds that v1 produces for
- * the same kinds of content, and `applyHistory` consumes it unchanged.
+ * Pure translation of a v2 message list into renderer/editor operations. The output has the same
+ * `HistoryOp` kinds that v1 produces for the same kinds of content, and `applyHistory` consumes it unchanged.
  *
  * Item-by-item mapping (capture §5a, §4.4, §4.8, §4.12). Each rule notes the v1 branch it mirrors.
  *
@@ -125,15 +158,14 @@ function toolOutputText(content: ReadonlyArray<ToolContentLike> | undefined): st
  *   - `running` and `failed` compactions give nothing. v1 has no equivalent in the message list.
  * - `idle`: only `outcome` `interrupted` renders, as one `system-message` "Interrupted" after the turn's `turn-end`.
  *   The turn end is already marked by the assistant message, so the marker follows it. v1 writes the same marker in
- *   the normal-rendering branch of `translateHistory` (`src/replay.ts`) when the assistant message's error is
- *   `MessageAbortedError`. `succeeded` and `failed` give nothing. An idle item is never selected by
+ *   the normal-rendering branch of v1 when the assistant message's error is `MessageAbortedError`.
+ *   `succeeded` and `failed` give nothing. An idle item is never selected by
  *   `translateMissedHistoryV2` (`isCompleteRenderable` is false for it), so the marker appears only on a full replay,
  *   not on a resync. That is a documented limit.
  * - `shell`, `model-switched`, `agent-switched`, `location-switched`, `system`, `skill`, `synthetic`: nothing.
  *   None of these has a v1 message-list equivalent, and v1's translator never renders them.
  *
- * Error behaviour: as in `translateHistory`, an error mid-translation keeps the operations produced so
- * far and skips `seed-history`.
+ * Error behaviour: an error mid-translation keeps the operations produced so far and skips `seed-history`.
  *
  * ASSUMPTION (live check in C2): the block ids for text and reasoning use the content index as the ordinal,
  * `${assistantMessageID}:${index}`. The live translator (C2.4) must key its parts the same way, or a resync
@@ -231,12 +263,12 @@ export function translateHistoryV2(
       // no operation. See the rules in the doc comment above.
     }
 
-    // Seed the editor history from the collected user texts, as in `translateHistory`.
+    // Seed the editor history from the collected user texts.
     if (userTexts.length > 0) {
       ops.push({ op: "seed-history", texts: userTexts });
     }
   } catch {
-    // Swallow translation errors, as `translateHistory` does. The operations produced so far are kept.
+    // Swallow translation errors. The operations produced so far are kept.
   }
 
   return ops;
@@ -297,7 +329,7 @@ function appendToolOps(ops: HistoryOp[], item: ToolItem): void {
 }
 
 /**
- * Fetches a session's message list and translates it. The v2 counterpart of `fetchHistory` in `src/replay.ts`.
+ * Fetches a session's message list and translates it.
  * Errors are swallowed and yield `[]`, because replay is best-effort.
  *
  * @param fetchMessages Fetches the session's message list.
@@ -424,7 +456,7 @@ export async function fetchMissedHistoryV2(
  * True if the latest assistant message has a `tool` content item that is neither `completed` nor `error`,
  * so it is `streaming` or `running` (capture §4.4).
  *
- * DIVERGENCE from v1: `hasPendingToolCalls` in `v1-queries.ts` scans every message. This scans only the latest
+ * DIVERGENCE from v1: v1's pending-tool-call check scans every message. This scans only the latest
  * assistant message, as the brief for this step required. A v2 tool that never resolves in an earlier message
  * would hold v1's guard closed for ever, so v2 does not count it.
  *
@@ -490,8 +522,8 @@ function isChildTurnStale(child: AssistantMessage, now: number): boolean {
 }
 
 /**
- * Describes the newest assistant message for the stall watchdog. The v2 counterpart of
- * `scanLatestAssistantActivity` in `src/backend/v1-queries.ts`, with the same branch order:
+ * Describes the newest assistant message for the stall watchdog. The v2 counterpart of v1's
+ * `scanLatestAssistantActivity`, with the same branch order:
  *
  * - No assistant message gives `null`.
  * - A completed message, or one with no content, returns at once. No child lookup is made.
@@ -548,7 +580,7 @@ function usedTokensOf(tokens: { input: number; cache: { read: number; write: num
 
 /**
  * The context size of the newest assistant message after the summary boundary, with its model.
- * The v2 counterpart of `pickPostSummaryAssistantTokenUsage` in `src/backend/v1-queries.ts`.
+ * The v2 counterpart of v1's `pickPostSummaryAssistantTokenUsage`.
  *
  * The boundary is the LAST completed compaction (capture §4.12), as v1's last summary is. With no boundary,
  * the whole list counts. The newest assistant after the boundary is used. If its usage is zero, the most recent
@@ -611,7 +643,7 @@ export function addAssistantCostV2(total: number, messages: SessionMessageInfo[]
 
 /**
  * Token usage plus the running cost of the session and its direct children. The v2 counterpart of
- * `queryTokenUsage` in `src/backend/v1-queries.ts`, with the same rules:
+ * v1's `queryTokenUsage`, with the same rules:
  *
  * - No post-boundary usage gives `null`, and the cost roll-up is skipped.
  * - The parent's assistant costs come first, then each direct child's, one level deep (P3, capture §4.9).

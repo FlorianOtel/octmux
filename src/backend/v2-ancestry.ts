@@ -1,7 +1,7 @@
 /**
  * Session ancestry for the v2 protocol (Stage 15.2 C2.3a).
  *
- * Mirrors `src/utils/session-ancestry.ts` (the v1 walk) in shape: a TTL cache, a depth limit of 5,
+ * Mirrors the v1 walk in shape: a TTL cache, a depth limit of 5,
  * and "not found is not cached". It differs in one respect. The v1 walk caches the whole session
  * list and needs a one-shot revalidation when a candidate is missing. The v2 walk asks the server
  * for one session at a time (`session.get`) and caches each answer for the TTL. A session that is

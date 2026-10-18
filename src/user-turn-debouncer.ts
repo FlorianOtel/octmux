@@ -1,12 +1,13 @@
 /**
  * Per-messageID debouncer for foreign user turns (Stage 13.x).
  *
- * Lives here (not in events.ts) because the eight existing synchronous
- * contract tests in events.test.ts (lines 798–917) must remain synchronous
- * and timer-free. Moving timers into events.ts would risk their interference
- * with those contract tests. The debouncer calls back into events-originated
- * functions (classifyUserTurn) from app.tsx, not from events.ts itself, so
- * event classification itself remains pure.
+ * Holds the timers for debounced user-turn classification, so that event
+ * translation stays pure and synchronous and never owns a timer. When a timer
+ * fires, the `onFire` callback wired in app.tsx calls
+ * `props.backend.events.classifyUserTurn` (src/backend/v2.ts), which reaches
+ * `classifyUserTurn` on the V2 translator in src/backend/v2-events.ts. That
+ * method currently returns `[]`, because v2 delivers the whole user text in
+ * one `session.inbox.*` frame and needs no debounce.
  */
 
 export const USER_TURN_DEBOUNCE_MS = 250; // ~47x margin over measured 5.3ms intra-message

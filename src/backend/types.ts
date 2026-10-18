@@ -1,21 +1,16 @@
 /**
- * Backend — the protocol-neutral seam between octmux's UI/orchestration code
- * (app.tsx, index.tsx, orchestra-watch.ts, utils/formatters.ts) and whichever
- * OpenCode wire protocol is in use.
+ * Backend — the seam between octmux's UI/orchestration code (app.tsx, index.tsx,
+ * orchestra-watch.ts, utils/formatters.ts) and the OpenCode v2 wire protocol.
  *
- * Two implementations: `V1Backend` (src/backend/v1.ts, the v1 SDK client) and
- * `V2Backend` (src/backend/v2.ts, @opencode/client). src/index.tsx picks one after
- * protocol detection; nothing else in octmux knows which protocol is in use.
+ * `V2Backend` (src/backend/v2.ts, @opencode/client) is the only implementation.
+ * src/index.tsx constructs it once protocol detection confirms a v2 server; a v1
+ * server is a hard startup error (Stage 15.5). Nothing else in octmux talks to the
+ * wire protocol directly.
  *
- * Session operations take flat named arguments; each backend builds its own wire
- * requests. The neutral output shapes (`ReplEvent`, `HistoryOp`, `SessionRecord`)
- * descend from v1, so `V2Backend` adapts v2 data onto them, and `V1Backend` fills
- * the members v2 introduced (forms, missed history, session activity) with no-ops.
- * See docs/OpenCode-v1-v2-adaptation-layer.md.
+ * Session operations take flat named arguments; `V2Backend` builds its own wire
+ * requests from them.
  */
 
-import type { Command, createOpencodeClient, SessionMessagesResponses } from "@opencode-ai/sdk/client";
-import type { Event } from "@opencode-ai/sdk";
 import type { FormField, ReplEvent } from "../events.ts";
 import type { HistoryOp } from "../replay.ts";
 
@@ -24,17 +19,17 @@ export type { ReplEvent } from "../events.ts";
 export type { HistoryOp } from "../replay.ts";
 
 /**
- * The v1 SDK client exactly as octmux constructs it today (`createOpencodeClient`).
- * Used only to derive v1 request/response types; the interface itself never
- * exposes the client object.
- */
-export type V1Client = ReturnType<typeof createOpencodeClient>;
-
-/**
- * Permission reply vocabulary. These are the v1 `body.response` strings, and the
- * same values `handlePermission` in app.tsx already passes.
+ * Permission reply vocabulary. These are the values `handlePermission` in app.tsx passes,
+ * and the `decision` that `V2Backend.replyPermission` sends.
  */
 export type PermissionDecision = "once" | "always" | "reject";
+
+/**
+ * One slash command the server offers (built-in or custom). Only the two fields octmux reads:
+ * `app.tsx`'s opencodeCommands map and `/help` (`src/commands.ts`). The v2 `/api/command` route
+ * also returns `template` (the raw command body), which octmux never reads.
+ */
+export type CommandInfo = { name: string; description?: string };
 
 /**
  * A model binding passed with prompt, command and compact calls: `{ providerID, modelID }`,
@@ -47,21 +42,21 @@ export type ModelRef = { providerID: string; modelID: string };
 
 /**
  * One model entry in a `ProviderCatalog`. Only the fields that `utils/formatters.ts` and the
- * `/model` picker read are listed. `tool_call` is optional because not every backend reports it.
+ * `/model` picker read are listed. `tool_call` is optional because not every model reports it.
  */
 export type ProviderModelEntry = {
   /** The model's key in its `models` dict. On v2 this is `ModelInfo.id`, and `ModelRef.modelID` takes the same value. */
   id: string;
-  /** Display name. The `/model` picker reads it (`src/app.tsx`). Always present on v1 and v2 models. */
+  /** Display name. The `/model` picker reads it (`src/app.tsx`). Always present. */
   name: string;
   limit?: { context?: number };
   tool_call?: boolean;
 };
 
 /**
- * Provider catalog in the v1 `provider.list()` shape: `all` holds each provider with its `models`
- * dict, and `connected` holds the provider IDs that may be used. `utils/formatters.ts` and the
- * `/model` picker read this shape. `V2Backend.listProviders()` builds it from `model.list()`.
+ * Provider catalog: `all` holds each provider with its `models` dict, and `connected` holds the
+ * provider IDs that may be used. `utils/formatters.ts` and the `/model` picker read this shape.
+ * `V2Backend.listProviders()` builds it from `model.list()`.
  */
 export type ProviderCatalog = {
   all: Array<{ id: string; models: Record<string, ProviderModelEntry> }>;
@@ -82,9 +77,6 @@ export type FormAnswer = Record<string, string | number | boolean | string[]>;
  * `id`, `parentID`, `directory`, `title`, `time.updated`, and the bound `model`.
  * Fields such as `projectID`, `version`, `summary` and `time.created` are not listed
  * because no call site reads them.
- *
- * The SDK `Session` type (v1) satisfies this record. `model` is read at runtime but is
- * absent from the SDK `Session` type, so declaring it here is what lets those reads type-check.
  */
 export type SessionRecord = {
   id: string;
@@ -103,60 +95,49 @@ export type SessionRecord = {
  *
  * Resolution convention, applied uniformly to every method below:
  * - A method whose call sites read the response resolves with the SDK response's
- *   `data` field. That is `undefined` when the server answered with an error status,
- *   which is exactly what the old `resp.data` checks saw. Call sites keep their
- *   `?? []`, `!` and `?.` handling unchanged.
+ *   `data` field. That is `undefined` when the server answered with an error status.
+ *   Call sites keep their `?? []`, `!` and `?.` handling unchanged.
  * - Write methods (`create`, `fork`, `update`, `compact`, `sendPrompt`, `sendCommand`,
  *   `setModel`, and the permission and form replies in `Backend`) resolve `void` or the
- *   new record. On an error status the two backends differ:
- *   - `V1Backend` swallows the status, as the v1 call sites were written.
- *   - `V2Backend` rejects with an `Error` whose message is short and human-readable:
- *     `<_tag>: <message>` for a declared typed error, and `OpenCode server returned HTTP <status>`
- *     for a bare status. A `LocationNotFoundError` gets a hint that names `server.directory`.
- *     Headers and credentials never reach the message.
+ *   new record. On an error status `V2Backend` rejects with an `Error` whose message is
+ *   short and human-readable: `<_tag>: <message>` for a declared typed error, and
+ *   `OpenCode server returned HTTP <status>` for a bare status. A `LocationNotFoundError`
+ *   gets a hint that names `server.directory`. Headers and credentials never reach the message.
  *   Every call site that performs a write must therefore handle a rejection. Either it shows the
  *   message, or it ignores the failure with an explicit `.catch`.
  * - `abort` is not a write method in this sense. It always resolves `{ interrupted }`, which is
- *   `false` on an error status in both backends.
- * - A transport-level failure (the underlying fetch rejects) rejects the promise in
- *   every case, in both backends.
- *
- * Method names mirror the v1 `client.session.*` calls they replace. The renames are
- * `summarize` → `compact` (the user-facing `/compact` meaning), and
- * `command`/`promptAsync` → `sendCommand`/`sendPrompt`.
+ *   `false` on an error status.
+ * - A transport-level failure (the underlying fetch rejects) rejects the promise.
  */
 export interface BackendSession {
-  /** v1 `client.session.get({ path: { id } })`. Single session record, including the bound model. */
+  /** Single session record, including the bound model. */
   get(sessionID: string): Promise<SessionRecord | undefined>;
 
-  /** v1 `client.session.abort({ path: { id } })`. Resolves `interrupted: true` when the server reports the abort took effect. */
+  /** Aborts the session's running turn. Resolves `interrupted: true` when the server reports the abort took effect. */
   abort(sessionID: string): Promise<{ interrupted: boolean }>;
 
-  /** v1 `client.session.create({ query: { directory } })`. Creates a new session. */
+  /** Creates a new session in `directory`. */
   create(options: { directory: string }): Promise<SessionRecord | undefined>;
 
   /**
-   * v1 `client.session.summarize({ path: { id }, body: { providerID, modelID } })`.
-   * Named `compact` here because it is what `/compact` triggers.
+   * Compacts the session's context using `model`. Named `compact` here because it is what `/compact` triggers.
    */
   compact(sessionID: string, model: ModelRef): Promise<void>;
 
-  /** v1 `client.session.list()`. All sessions visible to the server for the current directory. */
+  /** All sessions visible to the server for the current directory. */
   list(): Promise<SessionRecord[] | undefined>;
 
   /**
-   * v1 `client.session.fork({ path: { id }, query? })`. Forks a session into a child.
-   * `directory` is sent as the `query.directory` only when given, as before.
+   * Forks a session into a child. `directory` is sent only when given.
    */
   fork(sessionID: string, options?: { directory?: string }): Promise<SessionRecord | undefined>;
 
-  /** v1 `client.session.update({ path: { id }, body: { title } })`. Renames a session. */
+  /** Renames a session. */
   update(sessionID: string, options: { title: string }): Promise<void>;
 
   /**
-   * v1 `client.session.command({ path: { id }, body })`. Runs a slash command inside a session.
-   * `name` is sent as `body.command`, `args` as `body.arguments`, `promptID` as `body.messageID`,
-   * and `model` as the `"provider/model"` string in `body.model`.
+   * Runs a slash command inside a session. `name` is the command, `args` its arguments,
+   * `promptID` the message ID octmux minted for the echo, and `model` the model override when given.
    */
   sendCommand(options: {
     sessionID: string;
@@ -167,31 +148,16 @@ export interface BackendSession {
   }): Promise<void>;
 
   /**
-   * v1 `client.session.promptAsync({ path: { id }, body })`. Sends a prompt without awaiting the turn.
-   * The body is `parts: [{ type: "text", text }]`, `messageID: promptID`, and `model` when given.
+   * Sends a prompt without awaiting the turn. `promptID` is the message ID octmux minted for the prompt,
+   * and `model` is the per-prompt model override when given.
    */
   sendPrompt(options: { sessionID: string; text: string; promptID?: string; model?: ModelRef }): Promise<void>;
 
   /**
-   * Sets the session-level model. v1 has no session-level model-set operation: the
-   * `/model` command only updates octmux's local `activeModel` and relies on the per-prompt
-   * model override. So the v1 implementation is a no-op.
+   * Sets the session-level model. `V2Backend` sends it through `ensureModel`, which skips a model
+   * the session already has.
    */
   setModel(sessionID: string, model: ModelRef): Promise<void>;
-}
-
-/**
- * The v1-only session operations. `getMessages` and `getChildren` are not on the shared
- * `BackendSession`: their only consumer is `src/backend/v1-queries.ts`, which reads the v1 element
- * types. `V1Backend.session` is typed with this interface, so v1-queries keeps its v1 types.
- * `V2Backend` keeps equivalent internal methods (`fetchMessages`, `fetchChildren`) outside the seam.
- */
-export interface V1BackendSession extends BackendSession {
-  /** v1 `client.session.messages({ path: { id } })`. Message list in the v1 `{ info, parts }[]` shape. */
-  getMessages(sessionID: string): Promise<SessionMessagesResponses[200] | undefined>;
-
-  /** v1 `client.session.children({ path: { id } })`. Direct child (subagent) sessions. */
-  getChildren(sessionID: string): Promise<SessionRecord[] | undefined>;
 }
 
 /**
@@ -227,14 +193,12 @@ export type TokenUsageSummary = {
 /**
  * The event pipeline and the session-read queries.
  *
- * `V1Backend` forwards each member to the same-named export of `src/events.ts`, whose
- * module-level state (ID sets, open-part maps) lives there. `V2Backend` forwards to its own
- * `V2EventTranslator` instance (src/backend/v2-events.ts) and to src/backend/v2-queries.ts.
- * Members that only one protocol needs are no-ops on the other.
+ * `V2Backend` forwards the event members to its own `V2EventTranslator` instance (src/backend/v2-events.ts),
+ * and the session-read members to src/backend/v2-queries.ts.
  */
 export interface BackendEvents {
-  /** v1 `filterEvent()`. Turns one raw SDK event into zero, one or several ReplEvents. */
-  translateEvent(event: Event, sessionID: string): ReplEvent | ReplEvent[] | null;
+  /** Turns one raw SSE frame into zero, one or several ReplEvents. V2Backend forwards to V2EventTranslator.translate (src/backend/v2-events.ts). */
+  translateEvent(event: unknown, sessionID: string): ReplEvent | ReplEvent[] | null;
 
   /**
    * True if any tool part of the session is still `pending` or `running`. Reconciler guard
@@ -252,8 +216,8 @@ export interface BackendEvents {
    * Replay operations for a session's history, in order. Pass them to `applyHistory` (src/replay.ts).
    * Fetch errors yield `[]`. Replay is best-effort.
    *
-   * Stage 15.2 (C2.6b, D-A fix): every message the fetch returns is recorded as rendered, so a later
-   * `getMissedHistory` does not render it a second time. The v2 backend does this. v1 does not track it.
+   * Stage 15.2 (C2.6b, D-A fix): `V2Backend` records every message the fetch returns as rendered,
+   * so a later `getMissedHistory` does not render it a second time.
    */
   getHistory(sessionID: string): Promise<HistoryOp[]>;
 
@@ -262,8 +226,6 @@ export interface BackendEvents {
    * the translator has not rendered, and that are complete. Pass them to `applyHistory`. Used by the v2
    * `resync-needed` handler (src/app.tsx) after a durable seq gap. A gap then renders only what was missed,
    * and clears nothing. Fetch errors yield `[]`.
-   *
-   * V1Backend resolves `[]`, because v1 never emits `resync-needed`.
    */
   getMissedHistory(sessionID: string): Promise<HistoryOp[]>;
 
@@ -299,26 +261,23 @@ export interface Backend {
   /** The event pipeline and session-read queries (see `BackendEvents`). */
   events: BackendEvents;
 
-  /** v1 `client.command.list()`. Slash commands offered by the server (built-in + custom). */
-  // C2.3a: return type widened from ReturnType<V1Client["command"]["list"]> to a data-only shape. v2 has
-  // no SDK response envelope to return. Call sites read only `.data`. `Command` is the v1 SDK type that
-  // app.tsx's opencodeCommands Map is typed with, so it is kept as the element type.
-  listCommands(): Promise<{ data?: Command[] }>;
+  /** Slash commands offered by the server (built-in + custom). */
+  // Call sites read only `.data`. CommandInfo is the shared shape app.tsx's opencodeCommands Map is typed with.
+  listCommands(): Promise<{ data?: CommandInfo[] }>;
 
-  /** v1 `client.config.get()`. Server config; `data.model` is the default "provider/model" string. */
-  // C2.3a: return type widened to the data-only shape that formatters.getDefaultModel reads (`data.model`).
+  /** Server config; `data.model` is the default "provider/model" string. */
+  // The data-only shape that formatters.getDefaultModel reads (`data.model`).
   // v2 builds `{ model: "providerID/modelID" }` from `model.default()` and keeps nothing else.
   getDefaultModelConfig(): Promise<{ data?: { model?: string } }>;
 
   /**
-   * v1 `client.provider.list()`. Providers and their models (used for context-window and validation).
+   * Providers and their models (used for context-window and validation).
    *
    * WARNING — this is NOT the v2 route `/api/provider`. That v2 route returns plaintext API keys
    * and must never be called from octmux. Any future v2 implementation of this method must
    * target a provider-metadata route that does not expose credentials.
    */
-  // C2.3a: return type widened to the data-only ProviderCatalog. v2 builds it from `model.list()`
-  // (see V2Backend.listProviders for the "connected" decision).
+  // v2 builds the data-only ProviderCatalog from `model.list()` (see V2Backend.listProviders for the "connected" decision).
   listProviders(): Promise<{ data?: ProviderCatalog }>;
 
   /** Raw `GET {baseUrl}/question`. Pending MCP/tool questions. Caller checks `ok` and parses JSON. */
@@ -334,9 +293,8 @@ export interface Backend {
   replyQuestion(reqID: string, answers: string[][]): Promise<Response>;
 
   /**
-   * Answers a pending permission request. v1 maps `decision` to `body.response`.
-   * `message` is accepted for the protocol-neutral shape. The v1 body has no such field,
-   * so the v1 implementation ignores it.
+   * Answers a pending permission request. `decision` is sent as the reply body's `decision`.
+   * `message` is sent only when given.
    */
   replyPermission(options: {
     sessionID: string;
@@ -347,17 +305,14 @@ export interface Backend {
 
   /**
    * True if `candidateSessionID` is a descendant of `ancestorSessionID`.
-   * Forwards to `isSessionDescendant()` in `src/utils/session-ancestry.ts` (cached session list).
+   * Walks the parent chain through `src/backend/v2-ancestry.ts`, with a TTL cache.
    */
   isSessionDescendant(candidateSessionID: string, ancestorSessionID: string): Promise<boolean>;
 
   /**
-   * Opens the global SSE event stream. v1 `client.global.event({})`; the caller reads `.stream`.
-   * Used for the initial subscription and for reconnects.
-   *
-   * C2.3a: return type widened from `ReturnType<V1Client["global"]["event"]>` to the shape the
-   * consumers read: `.stream`, iterated with `for await`, whose items carry a `payload`
-   * (`src/app.tsx` `eventStream` prop). v1 satisfies it unchanged. v2 wraps each frame as `{ payload: frame }`.
+   * Opens the global SSE event stream. The caller reads `.stream`, iterated with `for await`, whose items
+   * carry a `payload` (`src/app.tsx` `eventStream` prop). Used for the initial subscription and for reconnects.
+   * `V2Backend` wraps each frame as `{ payload: frame }`.
    */
   subscribeEvents(): Promise<{ stream: AsyncIterable<{ payload: unknown }> }>;
 
@@ -367,49 +322,40 @@ export interface Backend {
    * cannot. Without this check a v2 server accepts a session at a directory it does not have and
    * records a project for it that the API cannot delete.
    *
-   * `V1Backend` resolves without a request: v1 has no location route.
    * `V2Backend` calls `location.get`. On a `LocationNotFoundError` the message names the directory,
    * the config keys to fix, and the projects the server knows (from `project.list`).
    */
   checkLocation(directory: string): Promise<void>;
 
   /**
-   * Pending forms for a session (v2 only). v1 has no forms, so `V1Backend` returns `[]`.
-   * `undefined` on an error status, as with the other read-style session operations.
+   * Pending forms for a session. `undefined` on an error status, as with the other read-style session operations.
    */
   listForms(sessionID: string): Promise<BackendForm[] | undefined>;
 
   /**
-   * Answers a pending form (v2 only). v1 has no forms, so `V1Backend` does nothing.
-   * A write: `V2Backend` rejects on an error status (see `BackendSession`).
+   * Answers a pending form. A write: `V2Backend` rejects on an error status (see `BackendSession`).
    */
   replyForm(sessionID: string, formID: string, answer: FormAnswer): Promise<void>;
 
   /**
-   * Cancels a pending form without answering it (v2 only, Stage 15.2 C2.6b). Used when the operator
-   * dismisses a form with Esc or Ctrl-C. `V1Backend` resolves without sending a request, because v1
-   * has no forms. A write: `V2Backend` rejects on an error status, as with `replyForm`.
+   * Cancels a pending form without answering it (Stage 15.2 C2.6b). Used when the operator
+   * dismisses a form with Esc or Ctrl-C. A write: `V2Backend` rejects on an error status, as with `replyForm`.
    */
   cancelForm(sessionID: string, formID: string): Promise<void>;
 
   /**
    * True while the session is running, false when it is not, and `undefined` when the answer is unknown.
    * The v2 `resync-needed` handler (C2.6b) uses it to reconcile the generating state after a replay.
-   * `V2Backend` reads `GET /api/session/active` and resolves `undefined` on an error status. `V1Backend`
-   * resolves `undefined` and sends no request, because v1 never emits `resync-needed`, so the question
-   * never arises there.
+   * `V2Backend` reads `GET /api/session/active` and resolves `undefined` on an error status.
    */
   isSessionActive(sessionID: string): Promise<boolean | undefined>;
 
   /**
    * The orchestra (/brain or /duo) run state of the REPL's session, for the status-line badge and the
    * end-of-run notice. `null` when there is no run state, or when it cannot be read. `active: false`
-   * is the final state of a finished run (v2 only).
+   * is the final state of a finished run.
    * - `V2Backend` reads it over the API: the session's `metadata.orchestra`, which oconona publishes
    *   (contract: `ORCHESTRA_METADATA_KEY` in src/backend/v2-orchestra.ts). No filesystem access.
-   * - `V1Backend` (legacy) reads oconona's sidecar files under ~/.config/opencode/orchestra/sessions/
-   *   on octmux's own disk (src/backend/v1-orchestra.ts). That works only with a server on the same
-   *   host; v1 has no API channel for this state.
    */
   getOrchestraState(sessionID: string): Promise<OrchestraState | null>;
 }

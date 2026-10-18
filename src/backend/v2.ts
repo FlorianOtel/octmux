@@ -4,7 +4,7 @@
  * This file covers the REST surface, the four read-only `events.*` queries added in C2.3b
  * (history, pending tools, latest assistant activity, token usage; see src/backend/v2-queries.ts), and
  * the live translator members, which forward to `V2EventTranslator` (C2.4a; see src/backend/v2-events.ts).
- * `src/index.tsx` selects V2Backend when protocol detection (`src/protocol-detect.ts`) reports v2, and V1Backend otherwise.
+ * `src/index.tsx` constructs V2Backend once protocol detection (`src/protocol-detect.ts`) confirms a v2 server.
  *
  * Endpoint and body shapes come from `docs/OpenCode-v2-protocol-capture.md` §4 and §5. Each method's
  * comment names the row it follows.
@@ -25,7 +25,6 @@ import {
   type SessionMessageInfo,
   type V2Event,
 } from "@opencode/client";
-import type { Command } from "@opencode-ai/sdk/client";
 import { getAuthHeaders } from "../auth-headers.ts";
 import type { FormField, ReplEvent } from "../events.ts";
 import { V2EventTranslator } from "./v2-events.ts";
@@ -34,6 +33,7 @@ import type {
   BackendEvents,
   BackendForm,
   BackendSession,
+  CommandInfo,
   FormAnswer,
   ModelRef,
   OrchestraState,
@@ -451,8 +451,7 @@ export class V2Backend implements Backend {
    * because the cursor encodes its own order and direction. `order` plus `cursor` is an
    * InvalidCursorError (capture §4.11).
    *
-   * NOT part of the `Backend` seam. `V1BackendSession.getMessages` has the v1 element type, and
-   * the only consumer of the list is v1-queries. The C2.3b v2 queries and history (src/backend/v2-queries.ts) call this method through the fetchers in `events`.
+   * NOT part of the `Backend` seam. The C2.3b v2 queries and history (src/backend/v2-queries.ts) call this method through the fetchers in `events`.
    * Resolves `undefined` on an error status.
    */
   async fetchMessages(sessionID: string): Promise<SessionMessageInfo[] | undefined> {
@@ -543,21 +542,16 @@ export class V2Backend implements Backend {
   }
 
   /**
-   * v1 `client.command.list()` equivalent. capture §5 `/api/command` GET, scoped by the `location`
-   * parameter. The v2 entries carry only `name` and `description`. Each one is mapped to the
-   * v1 `Command` type, which app.tsx's opencodeCommands Map is typed with.
-   *
-   * `template: ""` is a placeholder. A v2 command is expanded by the server (capture §4.12), and
-   * octmux never reads `template` on the v2 path. Nothing in app.tsx reads `template` either.
+   * capture §5 `/api/command` GET, scoped by the `location` parameter. Each entry is mapped to the
+   * `CommandInfo` shape (`name` and `description` only), which app.tsx's opencodeCommands Map is typed with.
    */
-  async listCommands(): Promise<{ data?: Command[] }> {
+  async listCommands(): Promise<{ data?: CommandInfo[] }> {
     const outcome = await attempt(() => this.client.command.list({ location: { directory: this.cwd } }));
     if (!outcome.ok) return {};
     return {
       data: outcome.value.data.map((entry) => ({
         name: entry.name,
         ...(entry.description !== undefined ? { description: entry.description } : {}),
-        template: "",
       })),
     };
   }

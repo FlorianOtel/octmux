@@ -2,8 +2,8 @@
 title: "OpenCode v2 support — decision record"
 created_at: 2026-10-13--23-26
 created_by: Claude Code (Claude Opus 5.5)
-updated_by: Claude Code (Claude Opus 5.5)
-updated_at: 2026-10-14--13-13
+updated_by: Claude Code (Claude Haiku 5.5)
+updated_at: 2026-10-18--18-27
 context: >
   The operator asked that every decision taken during octmux's OpenCode v2 work be recorded in the
   repository. The work covers the Stage 14 /brain run and the Stage C /brain runs, sessions C1 to C3,
@@ -49,6 +49,7 @@ wire protocol is in `docs/OpenCode-v2-protocol-capture.md`.
 | 15.2-D1… | Stage 15.2 defects found live or in review, and their fixes | `DECISIONS-draft.md` (C9 block), `review-comments.md`, `docs/Stage15.md` 15.2 entry |
 | C3-1–C3-27 | Session C3 (Stage 15.3 and the follow-up fixes) | session `20261013T190810Z-2568784`; `docs/Stage15.md` 15.3 entry |
 | C4-1–C4-11 | Stage 15.4 and 15.4.1: client-only boundary (orchestra state, model and command names over the API) and oconona's contract amendments A1–A8 | session C3 conversation; `docs/Stage15.md` 15.4 entry |
+| 15.5-1 | Stage 15.5 decision: remove OpenCode v1 support entirely | session `20261018T151945Z-2329778`; `docs/Stage15.md` 15.5 entry |
 | R1–R14 | Standing rules (security, live-test hygiene, doc/commit discipline) | collected from all three sessions; see §2 of this record |
 
 Two naming clashes to watch:
@@ -93,6 +94,7 @@ Two naming clashes to watch:
 | session C3 | 15.4 | `4962c17` | code: client-only boundary | 23:59 |
 | session C3 | 15.4 | `d73213c` | docs: hash backfill | 00:02 |
 | session C3 | 15.4.1 | `fe6c7a5` | code: oconona amendments A3, A5, A6 | 00:15 |
+| session `20261018T151945Z-2329778` | 15.5 | `<pending>` | code: remove OpenCode v1 support | — |
 
 ## 2. Standing rules
 
@@ -340,8 +342,8 @@ fence (C3-2).
 
 **C2 — v1 stays fully working.** Adapted to the new internal model, behaviour unchanged, v1 tests keep
 passing. Rejected: deprecating v1 (the local systemd server and the mobile/P4OC setups are v1).
-**Status:** In force. Deliberate v1 output changes were made only in 15.3 (C3-16) and 5.6.1 / 3E.2.1
-(C3-20).
+**Status:** Superseded by 15.5-1 (Stage 15.5): v1 support removed entirely. Previously in force; deliberate
+v1 output changes were made only in 15.3 (C3-16) and 5.6.1 / 3E.2.1 (C3-20).
 
 **C3 — A third live capture inside Stage C** (failing tool allowed once, deliberate interrupt, forced
 `/api/event` disconnect and reconnect), run outside plan mode as an early step gating design.
@@ -911,3 +913,10 @@ others). No capture 4 is scheduled (PLAN-C2C3 "Out of scope").
 
 - A failing `{file:}` token in `server.url` does not name the key `server.url` (S14-5).
 - `docs/Implementation-plan.md` index gaps for Stages 5–13 (Stage 14 Review 1 minor, pre-existing).
+
+## 8. Session `20261018T151945Z-2329778` (Stage 15.5): remove OpenCode v1 support
+
+Session `20261018T151945Z-2329778`. No live capture was needed: the change removes code and does not depend on new protocol facts.
+
+**15.5-1 — Remove OpenCode v1 support entirely.** The operator confirmed that no install base still needs v1: the local systemd server and the mobile/P4OC setups are now v2 or retired. This supersedes C2. octmux becomes a v2-only client. `V1Backend`, the v1 modules, `--auto-spawn`, `src/server-lifecycle.ts` and the `@opencode-ai/sdk` dependency are removed. A detected v1 server is a hard startup error that names the reason and exits 1. The `/global/health` probe in `src/protocol-detect.ts` is kept only to produce that message. A 401 from the health probe is also treated as v1, so the separate "v1 unauthorized" outcome is removed.
+Rejected: keeping `--auto-spawn` and making it spawn a v2 server (new code, and the operator chose a clean break); reporting a v1 server as "unreachable" (a vaguer error); keeping `@opencode-ai/sdk` as a type-only dependency (it would leave a v1 package in the tree). **Status:** Implemented in `<pending>`.

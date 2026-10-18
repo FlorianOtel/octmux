@@ -5,7 +5,7 @@ Text-only TUI REPL for [opencode](https://opencode.ai), built to mimic the Claud
 ## Usage
 
 ```
-octmux                    auto-spawn opencode server, enter REPL
+octmux                    connect to the running opencode server, enter REPL
 octmux --attach <port>    attach to a running server on <port>
 octmux --multi-window     split into tmux windows (thinking + tools; recommended)
 octmux --multi-pane       split into tmux panes (thinking + tools; wide-terminal mode)
@@ -56,7 +56,7 @@ octmux sends the server a directory as the session location. It is a path as the
 
 The two keys cannot both be set (exit 1, naming the config file).
 
-Before octmux creates, forks or attaches to a session, it asks a v2 server whether it has that directory (`location.get`). If not, octmux exits 1. The message names the directory, the config keys to fix, and the projects the server has. This matters because a v2 server otherwise accepts a session at a directory it does not have, and keeps a project record for it that the API cannot delete. `/new` checks the same way. v1 has no such route, so on v1 nothing is checked.
+Before octmux creates, forks or attaches to a session, it asks a v2 server whether it has that directory (`location.get`). If not, octmux exits 1. The message names the directory, the config keys to fix, and the projects the server has. This matters because a v2 server otherwise accepts a session at a directory it does not have, and keeps a project record for it that the API cannot delete. `/new` checks the same way.
 
 `server.directory` details:
 
@@ -64,10 +64,10 @@ Before octmux creates, forks or attaches to a session, it asks a v2 server wheth
 - Must be an absolute path: it starts with `/`, or with a Windows drive letter followed by `\` or `/`. A relative path exits 1 and names the config file and the key.
 - Supports the same `{env:NAME}` and `{file:PATH}` tokens as the other `server.*` keys. The value is not a secret, so a `{file:}` file does not need to be chmod 600.
 - Cannot be combined with `--worktree`. A worktree is created on the local machine, which the server cannot see, so octmux exits 2 and names the config file.
-- Cannot be combined with `--auto-spawn`. The spawned server is local, so octmux exits 2 and names the config file. The same applies to `server.directoryMap`. `--worktree` works with `server.directoryMap`: the worktree's local path is translated like any other working directory.
+- `--worktree` works with `server.directoryMap`: the worktree's local path is translated like any other working directory.
 - `--resume`, `--resume-last`, and `--fork` still use the resolved session's own directory, as they do without this key.
 - When set, octmux prints `octmux: using server directory <dir> (from <config path>)` at startup. With `server.directoryMap` it prints `octmux: using server directory <dir> (<cwd> mapped by server.directoryMap in <config path>)`.
-- Local-only things still use the local working directory: the git branch in the status line, and on v1 the orchestra session files. The project name in the status line is the basename of `server.directory`. Slash-completion names come from the server's command list.
+- Local-only things still use the local working directory: the git branch in the status line. The project name in the status line is the basename of `server.directory`. Slash-completion names come from the server's command list.
 
 ### Substitution
 
@@ -111,7 +111,6 @@ chmod 600 ~/.config/octmux/octmux.json
 - Endpoint: `--endpoint <url>` beats `server.url`, which beats the default `http://127.0.0.1:4096`.
 - Password: only `server.password` supplies it. There is no flag for it.
 - Session directory: `server.directory`, then `server.directoryMap` applied to the working directory, then the working directory itself.
-- `--auto-spawn` ignores `server.url` and skips protocol detection.
 
 ### Authentication
 
@@ -119,23 +118,23 @@ Every request to the server carries an HTTP Basic `Authorization` header built f
 
 ### Protocol detection
 
-Unless `--auto-spawn` is given, octmux probes the endpoint at startup. Each probe times out after 3 seconds.
+octmux probes the endpoint at startup. Each probe times out after 3 seconds.
 
 1. `GET /api/info` identifies a v2 server. A JSON 200 response with a `version` field means v2 and authorized. A JSON 401 response with `_tag: UnauthorizedError` means v2 and a password is required.
-2. If step 1 is inconclusive, `GET /global/health` identifies a v1 server. A JSON 200 response means v1. Any 401 response means v1 and a password is required.
+2. If step 1 is inconclusive, `GET /global/health` identifies a v1 server. A JSON 200 response or any 401 response means v1, which octmux refuses.
 3. If neither probe identifies a server, the endpoint is unreachable.
 
 A 200 response with `text/html` is never taken as identification, because both server versions serve a web page for unknown paths. A network error on step 1 ends detection at once.
 
 | Detected | Behaviour | Exit |
 |---|---|---|
-| v1 | Prints a `⚠ octmux: OpenCode v1 server detected …` warning, then runs the v1 client. | continues |
-| v1 or v2, 401, no password configured | Names `server.password` and the config path. | 1 |
-| v1 or v2, 401, password rejected | Names the config path and `server.password`. Does not print the password. | 1 |
+| v1 | Prints `octmux: OpenCode v1 server detected at <url> — v1 is no longer supported.` and refuses. | 1 |
+| v2, 401, no password configured | Names `server.password` and the config path. | 1 |
+| v2, 401, password rejected | Names the config path and `server.password`. Does not print the password. | 1 |
 | v2, authorized | Prints a version-gate message if one applies. A different MAJOR version refuses (see Version gate). Prints `octmux: using server directory <dir> (from <path>)` when `server.directory` is set. Then runs the native v2 client. | continues; 1 on a MAJOR mismatch |
 | Unreachable | Prints the "no opencode server" hint. For `--endpoint` it prints the shorter `health: failed` form. | 1 |
 
-A v2 server is supported natively, with the same features as v1. The optional `server.directory` or `server.directoryMap` config key gives the server-side directory that new sessions use (see "Server directory"). octmux checks that the server has it before any session is created or attached. octmux reads no OpenCode server files on v2: the orchestra badge comes from the harness session's `metadata.orchestra`, which oconona publishes, and works with a remote server. On v1 (legacy) the badge reads oconona's files and needs the server on the same host. `--auto-spawn` starts a local server and skips detection, so it always runs the v1 client. `--worktree` creates its worktree on the octmux host, so it suits a server on the same host.
+A v2 server is supported natively. The optional `server.directory` or `server.directoryMap` config key gives the server-side directory that new sessions use (see "Server directory"). octmux checks that the server has it before any session is created or attached. octmux reads no OpenCode server files on v2: the orchestra badge comes from the harness session's `metadata.orchestra`, which oconona publishes, and works with a remote server. `--worktree` creates its worktree on the octmux host, so it suits a server on the same host.
 
 ### Version gate
 
@@ -316,4 +315,4 @@ Mouse wheel scroll maps to Up/Down arrow keys via `DECSET 1007` (alternate scrol
 
 - [Bun](https://bun.sh) runtime
 - tmux (required at runtime; bypass with `--no-tmux-guard`)
-- opencode server (auto-spawned or via `--attach`)
+- opencode server (running; reached via `--endpoint` or the default port)

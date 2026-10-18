@@ -1,7 +1,6 @@
 import { Box, Static, Text, useStdout, useInput, measureElement } from "ink";
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore } from "react";
-import type { Command as OcCommand } from "@opencode-ai/sdk/client";
-import type { Backend } from "./backend/types.ts";
+import type { Backend, CommandInfo } from "./backend/types.ts";
 import { LineEditor } from "./editor.ts";
 import { UserTurnDebouncer } from "./user-turn-debouncer.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
@@ -174,7 +173,7 @@ export function App(props: AppProps) {
     candidates: string[];
     selectedIdx: number;
   } | null>(null);
-  const [opencodeCommands, setOpencodeCommands] = useState<Map<string, OcCommand>>(new Map());
+  const [opencodeCommands, setOpencodeCommands] = useState<Map<string, CommandInfo>>(new Map());
   const [isCompacting, setIsCompacting] = useState(false);
   const [sessionPicker, setSessionPicker] = useState<{ items: SessionPickerItem[]; idx: number } | null>(null);
   // The form is "active" (visible, takes keys, disables the prompt) only while no other modal owns the keys:
@@ -439,8 +438,7 @@ export function App(props: AppProps) {
         }
       } catch {}
 
-      // 3. Missed form discovery (Stage 15.2, C2.6a, P1). Forms are v2-only: V1Backend.listForms
-      // returns [], so v1 takes no action here. Oldest-first, one at a time, like the arms above.
+      // 3. Missed form discovery (Stage 15.2, C2.6a, P1). Oldest-first, one at a time, like the arms above.
       // Skipped while a form is already open; once it closes, a later tick offers the next one.
       try {
         const forms = await props.backend.listForms(sessionIDRef.current);
@@ -589,7 +587,7 @@ export function App(props: AppProps) {
       try {
         const resp = await props.backend.listCommands();
         const cmds = resp.data ?? [];
-        const map = new Map<string, OcCommand>();
+        const map = new Map<string, CommandInfo>();
         for (const cmd of cmds) map.set(cmd.name, cmd);
         // The same names feed PromptInput highlighting and the completion overlay.
         setServerCommands(cmds.map(cmd => cmd.name));

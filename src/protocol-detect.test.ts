@@ -82,13 +82,13 @@ describe("classifyHealthResponse (v1 /global/health probe)", () => {
     expect(classifyHealthResponse(200, JSON_CT)).toBe("v1");
   });
 
-  test("v1-unauthorized: 401 with JSON content-type", () => {
-    expect(classifyHealthResponse(401, JSON_CT)).toBe("v1-unauthorized");
+  test("v1: 401 with JSON content-type", () => {
+    expect(classifyHealthResponse(401, JSON_CT)).toBe("v1");
   });
 
-  test("v1-unauthorized: 401 with any other content-type (e.g. text/plain)", () => {
-    expect(classifyHealthResponse(401, "text/plain")).toBe("v1-unauthorized");
-    expect(classifyHealthResponse(401, null)).toBe("v1-unauthorized");
+  test("v1: 401 with any other content-type (e.g. text/plain)", () => {
+    expect(classifyHealthResponse(401, "text/plain")).toBe("v1");
+    expect(classifyHealthResponse(401, null)).toBe("v1");
   });
 
   // A v1 server's /health path returns the SPA catch-all HTML, so a 200 text/html

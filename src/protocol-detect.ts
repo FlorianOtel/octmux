@@ -1,6 +1,6 @@
 // Protocol detection: decides whether the server at a given endpoint speaks
-// the v2 OpenCode protocol (the one @opencode/client talks), the legacy v1
-// protocol (@opencode-ai/sdk), or neither.
+// the v2 OpenCode protocol (the one @opencode/client talks), a v1 server
+// (refused with a hard error, Stage 15.5), or neither.
 //
 // The module has two layers:
 //   1. Pure classifiers (classifyInfoResponse, classifyHealthResponse,
@@ -34,14 +34,13 @@ export type ProtocolResult =
   | { kind: "v2-authorized"; version: string }
   | { kind: "v2-unauthorized" }
   | { kind: "v1" }
-  | { kind: "v1-unauthorized" }
   | { kind: "unreachable"; detail: string };
 
 /** Result of classifying a /api/info response (v2 probe). */
 export type InfoClassification = "v2-authorized" | "v2-unauthorized" | "inconclusive";
 
 /** Result of classifying a /global/health response (v1 probe). */
-export type HealthClassification = "v1" | "v1-unauthorized" | "inconclusive";
+export type HealthClassification = "v1" | "inconclusive";
 
 /** Outcome of comparing the server's version against the bundled client's. */
 export type VersionGate =
@@ -128,25 +127,18 @@ export function classifyInfoResponse(
 /**
  * Classifies the response to GET /global/health (the v1 probe).
  *
- * - "v1":              200 with JSON content-type.
- * - "v1-unauthorized": 401 with ANY content-type. A v1 server with
- *                      `server.password` set answers 401 to unauthenticated
- *                      requests; the content-type of that rejection is not
- *                      relied on. Detection reports this distinctly so the
- *                      operator gets a password hint instead of "unreachable".
- * - "inconclusive":    everything else, including 200 text/html (the SPA
- *                      catch-all served at /health on a v1 server).
+ * - "v1":           200 with JSON content-type, or 401 with ANY content-type. A v1 server with
+ *                   `server.password` set answers 401 to unauthenticated requests, and the
+ *                   content-type of that rejection is not relied on. Both are v1 identifications.
+ * - "inconclusive": everything else, including 200 text/html (the SPA catch-all served at /health
+ *                   on a v1 server).
  */
 export function classifyHealthResponse(
   status: number,
   contentType: string | null,
 ): HealthClassification {
-  if (status === 200 && isJsonContentType(contentType)) {
+  if (status === 401 || (status === 200 && isJsonContentType(contentType))) {
     return "v1";
-  }
-
-  if (status === 401) {
-    return "v1-unauthorized";
   }
 
   return "inconclusive";
@@ -325,6 +317,7 @@ export async function detectProtocol(
   }
 
   // Step 2: the v1 probe. Reached only when /api/info was inconclusive.
+  // A v1 server answers JSON here (200) or not (401) — either way it is refused.
   let healthResponse: ProbeResponse;
   try {
     healthResponse = await probe(baseUrl, V1_HEALTH_PATH, timeoutMs);
@@ -336,10 +329,6 @@ export async function detectProtocol(
 
   if (healthClass === "v1") {
     return { kind: "v1" };
-  }
-
-  if (healthClass === "v1-unauthorized") {
-    return { kind: "v1-unauthorized" };
   }
 
   // Step 3: neither probe identified a server. Describe both responses so the
