@@ -527,17 +527,6 @@ export class V2EventTranslator {
     return false;
   }
 
-  /**
-   * v1 classifies a user turn by message id after its text parts arrive, and debounces it. v2 delivers the
-   * whole user text in one `session.inbox.*` frame (capture §4.5), so there is nothing to debounce. The
-   * classification happens in `translate`. This method returns `[]` so the seam stays the same.
-   *
-   * @param _messageID Ignored. Kept for the `BackendEvents` signature.
-   */
-  classifyUserTurn(_messageID: string): ReplEvent[] {
-    return [];
-  }
-
   // ─── Dispatch ───
 
   /**

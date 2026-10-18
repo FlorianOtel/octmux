@@ -2,8 +2,8 @@
 title: "Stage 15 — OpenCode v2 native session support, Backend seam"
 created_at: 2026-10-13--16-41
 created_by: Claude Code (Claude Haiku 5.5)
-updated_by: Claude Code (Claude Haiku 5.5)
-updated_at: 2026-10-18--18-27
+updated_by: Claude Code (Claude Opus 5.5)
+updated_at: 2026-10-18--19-18
 context: >
   Operator request: octmux must support the OpenCode v2 API natively, not only
   detect it. Stage 15 is the session-level stage that Stage 14 anticipated. Stage 14
@@ -33,6 +33,7 @@ The seam is the `Backend` interface in `src/backend/types.ts`. Sub-stages:
 | 15.3 | v2 parity with v1 features | shipped |
 | 15.4 | Client-only boundary: orchestra state, model names and command names over the API | shipped |
 | 15.5 | Remove OpenCode v1 support: `V1Backend` and the v1 modules deleted; a v1 server is a hard startup error | shipped |
+| 15.5.1 | Remove the inert user-turn debouncer and `classifyUserTurn` | shipped |
 
 `V2Backend` (see "Native v2 backend" below) is the only backend. The limits are listed under
 "Known limits" below.
@@ -55,7 +56,7 @@ The seam is the `Backend` interface in `src/backend/types.ts`. Sub-stages:
   `translateEvent`, `hasPendingToolCalls`, `getLatestAssistantActivity`,
   `getTokenUsage`, `getHistory`, `resetEventState`, `synthesizeSessionIdleEvents`,
   `hasOpenStreamingPart`, `recordOwnMessageID`, `recordOwnCommandPrefix`,
-  `classifyUserTurn`, `getMissedHistory`. `getMissedHistory` is the incremental
+  `getMissedHistory`. `getMissedHistory` is the incremental
   resync read (see "Native v2 backend").
 - Flat operations: `listCommands`, `getDefaultModelConfig`, `listProviders`,
   `listQuestions`, `listPermissions`, `rejectQuestion`, `replyQuestion`,
@@ -236,7 +237,7 @@ frame to one or more `ReplEvent`s, and returns `null` for frames octmux does not
   inbox echo that carries it is suppressed as an own turn. Own commands are matched
   by the echo slot and, as a backstop, the prefix of their expanded text
   (`recordOwnCommandPrefix`). A foreign user turn is emitted as `foreign-user-turn`
-  directly from `userInboxItem`; v2 `classifyUserTurn` returns `[]`.
+  directly from `userInboxItem`, carrying the whole user text.
 - Command echo slot: a command's POST returns no id, and one `user` item comes back per
   command. `recordOwnCommandPrefix` also arms one pending echo slot. The next user item that is
   not an own prompt and not already shown takes the slot and is suppressed, whatever its text.
@@ -745,3 +746,18 @@ both sides; octmux has no open work on it. The octmux changes:
 - Docs: `docs/OpenCode-v1-v2-adaptation-layer.md` is retired to a pointer stub;
   `docs/OpenCode-v2-decision-record.md` marks C2 superseded by 15.5-1; `README.md` and `CLAUDE.md`
   v1 and `--auto-spawn` mentions are removed.
+
+### 2026-10-18--19-18 — Stage 15.5.1 — Remove the inert user-turn debouncer
+**Implemented by:** Claude Code (Claude Opus 5.5) — 2026-10-18--19-18
+**Commit(s):** `<pending>`
+
+- The per-message debouncer for foreign user turns (Stage 13.x) existed for v1, which streamed a user
+  turn's text in parts. v2 delivers the whole user text in one `session.inbox.*` frame, and
+  `V2EventTranslator.classifyUserTurn` always returned `[]`, so after Stage 15.5 the debouncer never
+  did anything.
+- Deleted `src/user-turn-debouncer.ts` and its test, the `foreign-user-part` `ReplEvent` kind (nothing
+  emitted it), `BackendEvents.classifyUserTurn` and its `V2Backend`/`V2EventTranslator` implementations,
+  and the debouncer wiring in `src/app.tsx` (ref, `foreign-user-part` handler, callback and flush effects,
+  reset on session switch). Foreign user turns still render through `foreign-user-turn`.
+- `bun test src/`: 668 pass, 0 fail (from 677; the 9 debouncer tests are gone). `tsc --noEmit`: 47
+  pre-existing errors, none new.

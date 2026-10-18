@@ -51,7 +51,6 @@ export type ReplEvent =
   | { kind: "subagent-activity"; sessionID: string; ts: number }
   | { kind: "parent-turn-end"; reason: "idle" | "aborted" | "error" }
   | { kind: "foreign-user-turn"; messageID: string; text: string }
-  | { kind: "foreign-user-part"; messageID: string }
   | { kind: "model-switched"; sessionID: string; providerID: string; modelID: string }
   // ─── Kinds emitted by the v2 translator (`src/backend/v2-events.ts`); `app.tsx` handles them.
   // app.tsx also builds `form-asked`

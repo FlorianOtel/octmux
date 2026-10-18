@@ -1203,7 +1203,6 @@ describe("V2Backend.events translator wiring (C2.4a)", () => {
     expect(backend.events.hasOpenStreamingPart()).toBe(false);
     backend.events.recordOwnMessageID("msg_own");
     backend.events.recordOwnCommandPrefix("/brain");
-    expect(backend.events.classifyUserTurn("msg_1")).toEqual([]);
     expect(calls).toEqual([]);
   });
 

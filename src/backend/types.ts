@@ -246,9 +246,6 @@ export interface BackendEvents {
    * pending echo slot. The slot takes the next user turn whatever its text, because the POST returns no id.
    */
   recordOwnCommandPrefix(prefix: string): void;
-
-  /** Classifies one user turn by message ID (debounced foreign-turn path). Idempotent. */
-  classifyUserTurn(messageID: string): ReplEvent[];
 }
 
 /**

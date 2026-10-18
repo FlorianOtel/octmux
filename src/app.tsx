@@ -2,7 +2,6 @@ import { Box, Static, Text, useStdout, useInput, measureElement } from "ink";
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import type { Backend, CommandInfo } from "./backend/types.ts";
 import { LineEditor } from "./editor.ts";
-import { UserTurnDebouncer } from "./user-turn-debouncer.ts";
 import { OrchestraWatcher, type OrchestraBadge } from "./orchestra-watch.ts";
 import type { ReplEvent } from "./events.ts";
 import { mintUserMessageID } from "./message-id.ts";
@@ -707,10 +706,6 @@ export function App(props: AppProps) {
     }
   }, [props.backend, renderer, editor]);
 
-  // Per-messageID debouncer for foreign user turns (Stage 13.x).
-  const userTurnDebouncerRef = useRef<UserTurnDebouncer | null>(null);
-  if (!userTurnDebouncerRef.current) userTurnDebouncerRef.current = new UserTurnDebouncer();
-
   // Stage 15.2 (C2.6b): v2 status-line state. `lastRetryAttemptRef` is the highest `turn-retry` attempt already
   // shown in the current turn; it resets on `generating` and on session switch (see turn-status.ts).
   const lastRetryAttemptRef = useRef<number>(0);
@@ -719,7 +714,7 @@ export function App(props: AppProps) {
   const compactionAutoRef = useRef<boolean>(false);
   // Stage 15.2 (C2.6b): counter for the part IDs of rendered compaction summaries. Each summary block needs its own ID.
   const compactionSummaryCountRef = useRef<number>(0);
-  // Stage 15.2 (C2.6b): the v2 resync runner (see the effect after applyReplEvents). Created once, like userTurnDebouncerRef.
+  // Stage 15.2 (C2.6b): the v2 resync runner (see the effect after applyReplEvents). Created once.
   const resyncGateRef = useRef<ResyncGate | null>(null);
   if (!resyncGateRef.current) resyncGateRef.current = new ResyncGate();
   const runResyncRef = useRef<(() => Promise<void>) | null>(null);
@@ -931,9 +926,6 @@ export function App(props: AppProps) {
           // own generating event in normal order.
           renderer.commitUserInput(ev.text);
         }
-        else if (ev.kind === "foreign-user-part") {
-          userTurnDebouncerRef.current?.arm(ev.messageID);
-        }
         else if (ev.kind === "form-asked") {
           // Open the form unless this process already finished with it or a form is already open.
           // A second form that arrives while one is open is dropped here; discovery offers it again
@@ -1078,26 +1070,6 @@ export function App(props: AppProps) {
       } while (gate.finish());
     };
   });
-
-  // Reassign every render — same pattern as runReconcilerPassRef (~:411-455) —
-  // so onFire always calls the CURRENT applyReplEvents/isGeneratingRef closures.
-  useEffect(() => {
-    userTurnDebouncerRef.current?.setCallbacks({
-      isHeld: () => isGeneratingRef.current,
-      onFire: (messageID) => {
-        const events = props.backend.events.classifyUserTurn(messageID);
-        if (events.length > 0) applyReplEvents(events);
-      },
-    });
-  });
-
-  // Release anything that elapsed while isGenerating was true — keyed on STATE,
-  // not on a single event kind, so it fires uniformly whichever path ended the
-  // turn (session-idle, parent-turn-end/abort/error, Ctrl-C, switchSession,
-  // session-compacted — all flip isGenerating false).
-  useEffect(() => {
-    if (!isGenerating) userTurnDebouncerRef.current?.flushHeld();
-  }, [isGenerating]);
 
   // One-shot: fetch initial model from server and seed token-usage from the
   // latest assistant message. Fires on mount and on session switch (sessionID
@@ -1336,7 +1308,6 @@ export function App(props: AppProps) {
     }
     props.backend.events.resetEventState();
     lastRetryAttemptRef.current = 0; // Stage 15.2 (C2.6b): retry numbering is per turn, per session.
-    userTurnDebouncerRef.current?.reset();
     renderer.clearAll();
     setProcTimes({ thinking: null, tools: null, generating: null });
     setLastSubmitted("");

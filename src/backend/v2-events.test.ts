@@ -394,8 +394,6 @@ describe("v2 translator: own echoes and foreign user turns (§4.5, §4.12)", () 
       .durable("session.inbox.enqueued", { inboxID: "msg_cmp_1", item: { type: "compaction", payload: {} } });
 
     expect(run(t, f.frames)).toEqual([{ kind: "foreign-user-turn", messageID: "msg_for_1", text: "from mobile" }]);
-    // v2 delivers the whole user text in one frame, so the v1 debounce classification has nothing to do (§4.5).
-    expect(t.classifyUserTurn("msg_for_1")).toEqual([]);
   });
 
   test("suppresses a command's expanded text by prefix (v1 backstop; §4.12 expanded template)", () => {

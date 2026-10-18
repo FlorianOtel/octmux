@@ -441,7 +441,6 @@ export class V2Backend implements Backend {
       hasOpenStreamingPart: () => this.translator.hasOpenStreamingPart(),
       recordOwnMessageID: (id) => this.translator.recordOwnMessageID(id),
       recordOwnCommandPrefix: (prefix) => this.translator.recordOwnCommandPrefix(prefix),
-      classifyUserTurn: (messageID) => this.translator.classifyUserTurn(messageID),
     };
   }
 
