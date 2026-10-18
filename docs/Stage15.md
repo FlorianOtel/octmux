@@ -749,7 +749,7 @@ both sides; octmux has no open work on it. The octmux changes:
 
 ### 2026-10-18--19-18 — Stage 15.5.1 — Remove the inert user-turn debouncer
 **Implemented by:** Claude Code (Claude Opus 5.5) — 2026-10-18--19-18
-**Commit(s):** `<pending>`
+**Commit(s):** `94af5c2`
 
 - The per-message debouncer for foreign user turns (Stage 13.x) existed for v1, which streamed a user
   turn's text in parts. v2 delivers the whole user text in one `session.inbox.*` frame, and
